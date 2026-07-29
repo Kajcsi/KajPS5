@@ -77,8 +77,21 @@ struct ElfLoadResult {
   }
 };
 
+struct ElfLoadRangeResult {
+  ElfError error = ElfError::kNone;
+  std::uint64_t base_address = 0;
+  std::uint64_t size = 0;
+  std::uint64_t load_segment_count = 0;
+
+  [[nodiscard]] explicit operator bool() const noexcept {
+    return error == ElfError::kNone;
+  }
+};
+
 [[nodiscard]] ElfParseResult ParseElf64(
     std::span<const std::byte> image);
+[[nodiscard]] ElfLoadRangeResult CalculateElfLoadRange(
+    const ElfMetadata& metadata) noexcept;
 [[nodiscard]] ElfLoadResult LoadElf64(std::span<const std::byte> image,
                                       memory::GuestMemory& memory);
 [[nodiscard]] std::string_view ElfErrorName(ElfError error) noexcept;

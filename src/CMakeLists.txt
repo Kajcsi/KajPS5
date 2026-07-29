@@ -2,6 +2,7 @@ add_library(kajps5_core STATIC
   core/memory/guest_memory.cpp
   core/project_info.cpp
   loader/elf.cpp
+  loader/elf_trace.cpp
 )
 
 target_include_directories(kajps5_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

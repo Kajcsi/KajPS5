@@ -10,6 +10,7 @@
 
 #include "core/memory/guest_memory.h"
 #include "loader/elf.h"
+#include "loader/elf_trace.h"
 
 namespace {
 
@@ -119,6 +120,29 @@ int main() {
         "load segment file size is incorrect");
   Check(parsed.metadata.program_headers[0].memory_size == 8,
         "load segment memory size is incorrect");
+  const auto load_range =
+      kajps5::loader::CalculateElfLoadRange(parsed.metadata);
+  Check(static_cast<bool>(load_range), "load range calculation failed");
+  Check(load_range.base_address == 0x1000, "load range base is incorrect");
+  Check(load_range.size == 8, "load range size is incorrect");
+  Check(load_range.load_segment_count == 1,
+        "load range segment count is incorrect");
+
+  const std::string expected_trace =
+      "elf.class=ELF64\n"
+      "elf.endian=little\n"
+      "elf.os_abi=freebsd\n"
+      "elf.abi_version=2\n"
+      "elf.type=0xfe10\n"
+      "elf.machine=62\n"
+      "elf.entry=0x0000000000001002\n"
+      "elf.program_headers=2\n"
+      "elf.load_segments=1\n"
+      "elf.load[0].flags=r-x offset=0x0000000000000100 "
+      "virtual_address=0x0000000000001000 file_size=0x0000000000000004 "
+      "memory_size=0x0000000000000008 alignment=0x0000000000000100\n";
+  Check(kajps5::loader::FormatElfTrace(parsed.metadata) == expected_trace,
+        "stable ELF trace changed");
 
   auto generic_image = image;
   generic_image[7] = std::byte{0};
@@ -181,6 +205,15 @@ int main() {
   CheckError(std::move(overflowing_segment),
              ElfError::kSegmentAddressRangeOverflow,
              "overflowing guest range returned the wrong error");
+
+  auto constructed_metadata = parsed.metadata;
+  constructed_metadata.program_headers[0].virtual_address =
+      std::numeric_limits<std::uint64_t>::max() - 3;
+  constructed_metadata.program_headers[0].memory_size = 8;
+  const auto rejected_range =
+      kajps5::loader::CalculateElfLoadRange(constructed_metadata);
+  Check(rejected_range.error == ElfError::kSegmentAddressRangeOverflow,
+        "load range accepted an overflowing constructed segment");
 
   auto bad_alignment = image;
   Write64(bad_alignment, kLoadHeaderOffset + 48, 3);

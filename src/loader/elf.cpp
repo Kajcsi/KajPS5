@@ -3,6 +3,7 @@
 
 #include "loader/elf.h"
 
+#include <algorithm>
 #include <bit>
 #include <limits>
 #include <utility>
@@ -184,6 +185,38 @@ ElfParseResult ParseElf64(std::span<const std::byte> image) {
 
   ElfParseResult result;
   result.metadata = std::move(metadata);
+  return result;
+}
+
+ElfLoadRangeResult CalculateElfLoadRange(
+    const ElfMetadata& metadata) noexcept {
+  ElfLoadRangeResult result;
+  auto minimum_address = std::numeric_limits<std::uint64_t>::max();
+  std::uint64_t maximum_address = 0;
+
+  for (const auto& header : metadata.program_headers) {
+    if (header.type != kProgramTypeLoad || header.memory_size == 0) {
+      continue;
+    }
+    if (header.memory_size >
+        std::numeric_limits<std::uint64_t>::max() -
+            header.virtual_address) {
+      result.error = ElfError::kSegmentAddressRangeOverflow;
+      return result;
+    }
+
+    const auto end_address = header.virtual_address + header.memory_size;
+    minimum_address = std::min(minimum_address, header.virtual_address);
+    maximum_address = std::max(maximum_address, end_address);
+    ++result.load_segment_count;
+  }
+
+  if (result.load_segment_count == 0) {
+    return result;
+  }
+
+  result.base_address = minimum_address;
+  result.size = maximum_address - minimum_address;
   return result;
 }
 
