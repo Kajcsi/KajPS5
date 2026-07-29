@@ -10,6 +10,7 @@
 #include "hle/kernel_clock_exports.h"
 #include "hle/kernel_event_flag_exports.h"
 #include "hle/kernel_file_exports.h"
+#include "hle/kernel_memory_exports.h"
 #include "hle/kernel_semaphore_exports.h"
 #include "kernel/runtime.h"
 
@@ -21,16 +22,21 @@ ExportRegistryStatus RegisterKernelExports(ExportRegistry& registry,
   auto event_flag_exports =
       detail::MakeKernelEventFlagExports(runtime.event_flags());
   auto file_exports = detail::MakeKernelFileExports(runtime.files());
+  auto memory_exports = detail::MakeKernelMemoryExports();
   auto semaphore_exports =
       detail::MakeKernelSemaphoreExports(runtime.semaphores());
   clock_exports.reserve(clock_exports.size() + event_flag_exports.size() +
-                        file_exports.size() + semaphore_exports.size());
+                        file_exports.size() + memory_exports.size() +
+                        semaphore_exports.size());
   clock_exports.insert(clock_exports.end(),
                        std::make_move_iterator(event_flag_exports.begin()),
                        std::make_move_iterator(event_flag_exports.end()));
   clock_exports.insert(clock_exports.end(),
                        std::make_move_iterator(file_exports.begin()),
                        std::make_move_iterator(file_exports.end()));
+  clock_exports.insert(clock_exports.end(),
+                       std::make_move_iterator(memory_exports.begin()),
+                       std::make_move_iterator(memory_exports.end()));
   clock_exports.insert(clock_exports.end(),
                        std::make_move_iterator(semaphore_exports.begin()),
                        std::make_move_iterator(semaphore_exports.end()));

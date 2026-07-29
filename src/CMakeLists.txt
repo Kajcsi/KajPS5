@@ -9,6 +9,7 @@ add_library(kajps5_core STATIC
   hle/kernel_event_flag_exports.cpp
   hle/kernel_exports.cpp
   hle/kernel_file_exports.cpp
+  hle/kernel_memory_exports.cpp
   hle/kernel_semaphore_exports.cpp
   kernel/clock.cpp
   kernel/event_flag.cpp

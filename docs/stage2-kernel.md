@@ -97,6 +97,9 @@ The focused tests record these shared behaviors:
   mode. A checked result-pointer fault cannot change the event bits. Wait and
   cancel export dispatch remain deferred until blocked guest continuations can
   resume.
+- Checked memory HLE handlers expose `sceKernelMprotect`, `sceKernelMunmap`,
+  and their POSIX aliases. Protection uses 16 KiB guest-page normalization.
+  Invalid or partly unmapped ranges do not change the shared region table.
 
 KajPS5 implements these behaviors in its own C++ interfaces. It does not copy
 the upstream host-thread executor, continuation system, object ownership

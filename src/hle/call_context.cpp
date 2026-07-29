@@ -149,6 +149,17 @@ bool HleCallContext::CanWriteMemory(std::uint64_t address,
                             memory::GuestMemoryProtection::kWrite));
 }
 
+bool HleCallContext::ProtectMemory(
+    std::uint64_t address, std::uint64_t length,
+    memory::GuestMemoryProtection protection) {
+  return memory_.Protect(address, length, protection);
+}
+
+bool HleCallContext::UnmapMemory(std::uint64_t address,
+                                 std::uint64_t length) {
+  return memory_.Unmap(address, length);
+}
+
 HleStringResult HleCallContext::ReadNullTerminatedString(
     std::uint64_t address, std::size_t maximum_bytes) const {
   if (address == 0 || maximum_bytes == 0 ||

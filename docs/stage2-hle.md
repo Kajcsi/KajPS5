@@ -55,3 +55,10 @@ contract. SharpEmu's corresponding Gen5 values are documented as synthetic,
 so KajPS5 does not use them as the kernel ABI.
 `sceKernelGettimeofday` uses the same whole-range write for its seconds and
 microseconds fields.
+
+The checked `sceKernelMprotect` and `sceKernelMunmap` handlers, plus their
+POSIX aliases, change the memory owned by the active HLE call context. Protect
+ranges use the guest's 16 KiB page granularity. Unknown protection bits and
+overflowing ranges fail before any region changes. GPU-only flags do not grant
+guest CPU access. Unmap requires a fully mapped range and clears released
+backing bytes. `getpagesize` reports the same 16 KiB granularity.

@@ -37,6 +37,14 @@ focused observations from KytyPS5 `src/common/virtualMemory.h` and
 `src/SharpEmu.Core/Memory/PhysicalVirtualMemory.cs` at the pinned commits.
 No upstream virtual-memory source code was copied.
 
+The checked memory HLE handlers in `src/hle/kernel_memory_exports.cpp` and
+`tests/hle_kernel_memory_exports_test.cpp` use focused behavior observations
+from KytyPS5 `src/kernel/memory.cpp` and `src/libs/libKernel.cpp`, and SharpEmu
+`src/SharpEmu.Libs/Kernel/KernelMemoryCompatExports.cs` at the pinned commits.
+They use the 16 KiB guest page size and the `mprotect`, `munmap`, and
+`getpagesize` names and NIDs confirmed by both references. No memory-export
+source code was copied.
+
 The W^X native leaf-execution behavior in
 `src/cpu/native_leaf_executor.cpp` and
 `tests/native_leaf_executor_test.cpp` was implemented from focused

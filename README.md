@@ -63,11 +63,15 @@ files. Checked open, close, read, positioned-read, seek, stat, fstat, and path
 reachability handlers expose that same service by export name and NID.
 Metadata uses the 120-byte kernel stat layout and deterministic values for
 registered regular files. The service does not expose the host file system.
-One atomic default registration binds all current clock, event-flag, file, and
-semaphore handlers to the same kernel runtime. The non-blocking event-flag set
+One atomic default registration binds all current clock, event-flag, file,
+memory, and semaphore handlers to the same kernel runtime and guest call
+context. Checked `mprotect` and `munmap` handlers use the same guest-memory
+region table and support their POSIX aliases. `getpagesize` reports the same
+16 KiB granularity. The non-blocking event-flag set
 supports create, delete, set, clear, and poll. The non-blocking semaphore set
-supports create, delete, poll, and signal. Event-flag and semaphore waits remain
-in the kernel services until guest continuation resumption is available.
+supports create, delete, poll, and signal. Event-flag and semaphore waits
+remain in the kernel services until guest continuation resumption is
+available.
 
 The tests build small ELF images in memory, including a six-byte leaf program
 that returns 42. The repository does not contain a game, firmware, system
