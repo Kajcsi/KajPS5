@@ -16,7 +16,8 @@ reference files state:
 Both references are GPL-2.0-or-later. No upstream host executor, continuation
 system, ownership model, or source code was copied.
 
-The checked dynamic-table behavior in `src/loader/elf.cpp` and
+The checked dynamic-table and standard dynamic-string behavior in
+`src/loader/elf.cpp` and
 `tests/elf_dynamic_test.cpp` was implemented from focused observations of the
 pinned KytyPS5 and SharpEmu loader files. The SharpEmu reference file states:
 

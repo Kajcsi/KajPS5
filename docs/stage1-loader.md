@@ -30,9 +30,12 @@ The public test fixture is generated from constants in
 `tests/elf_loader_test.cpp`. It has no external or proprietary bytes. The tests
 check metadata, file copies, zero fill, truncated input, integer overflow,
 alignment, permissions, gaps, overlap, guest-memory rejection, and terminated
-16-byte dynamic entries. A rejected load does not change guest memory.
+16-byte dynamic entries. They also check file-backed standard ELF string
+tables, needed-library names, shared-object names, string offsets, and string
+termination. A rejected load does not change guest memory.
 
 This milestone does not map host pages, relocate a dynamic image, resolve its
-symbols, parse SELF containers, or run guest code.
+symbols, interpret PS5-specific dynamic tags, parse SELF containers, or run
+guest code.
 
 See `public-elf-validation.md` for the external PS5 homebrew ELF check.

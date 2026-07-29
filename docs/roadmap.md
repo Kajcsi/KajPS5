@@ -14,6 +14,7 @@
 - [x] Load one small public test program.
 - [x] Produce a stable loader trace.
 - [x] Validate and record raw ELF64 dynamic-table entries.
+- [x] Resolve checked standard ELF dynamic strings.
 
 ## Stage 2: CPU and kernel
 

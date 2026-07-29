@@ -28,6 +28,10 @@ constexpr std::uint32_t kProgramTypeLoad = 1;
 constexpr std::uint32_t kProgramTypeDynamic = 2;
 constexpr std::size_t kDynamicEntrySize = 16;
 constexpr std::int64_t kDynamicTagNull = 0;
+constexpr std::int64_t kDynamicTagNeeded = 1;
+constexpr std::int64_t kDynamicTagStringTable = 5;
+constexpr std::int64_t kDynamicTagStringTableSize = 10;
+constexpr std::int64_t kDynamicTagSharedObjectName = 14;
 
 std::uint8_t Read8(std::span<const std::byte> image,
                    std::size_t offset) noexcept {
@@ -99,6 +103,109 @@ ElfParseResult ParseFailure(ElfError error) noexcept {
   ElfParseResult result;
   result.error = error;
   return result;
+}
+
+const ElfDynamicEntry* FindDynamicEntry(
+    const ElfMetadata& metadata, std::int64_t tag) noexcept {
+  const auto entry = std::find_if(
+      metadata.dynamic_entries.begin(), metadata.dynamic_entries.end(),
+      [tag](const ElfDynamicEntry& candidate) { return candidate.tag == tag; });
+  return entry == metadata.dynamic_entries.end() ? nullptr : &*entry;
+}
+
+std::optional<std::size_t> ResolveFileOffset(
+    const ElfMetadata& metadata, std::uint64_t virtual_address,
+    std::uint64_t size) noexcept {
+  for (const auto& header : metadata.program_headers) {
+    if (header.type != kProgramTypeLoad ||
+        virtual_address < header.virtual_address) {
+      continue;
+    }
+    const auto relative_address = virtual_address - header.virtual_address;
+    if (relative_address <= header.file_size &&
+        size <= header.file_size - relative_address) {
+      return static_cast<std::size_t>(header.offset + relative_address);
+    }
+  }
+  return std::nullopt;
+}
+
+std::optional<std::string> ReadDynamicString(
+    std::span<const std::byte> string_table, std::uint64_t offset) {
+  if (offset >= string_table.size()) {
+    return std::nullopt;
+  }
+
+  std::string value;
+  for (auto index = static_cast<std::size_t>(offset);
+       index < string_table.size(); ++index) {
+    const auto byte = std::to_integer<unsigned char>(string_table[index]);
+    if (byte == 0) {
+      return value;
+    }
+    value.push_back(static_cast<char>(byte));
+  }
+  return std::nullopt;
+}
+
+ElfError ParseDynamicStrings(std::span<const std::byte> image,
+                             ElfMetadata& metadata) {
+  const auto* string_table =
+      FindDynamicEntry(metadata, kDynamicTagStringTable);
+  const auto* string_table_size =
+      FindDynamicEntry(metadata, kDynamicTagStringTableSize);
+  const auto* shared_object_name =
+      FindDynamicEntry(metadata, kDynamicTagSharedObjectName);
+
+  const auto has_needed = std::any_of(
+      metadata.dynamic_entries.begin(), metadata.dynamic_entries.end(),
+      [](const ElfDynamicEntry& entry) {
+        return entry.tag == kDynamicTagNeeded;
+      });
+  if ((string_table == nullptr) != (string_table_size == nullptr) ||
+      ((has_needed || shared_object_name != nullptr) &&
+       string_table == nullptr)) {
+    return ElfError::kIncompleteDynamicStringTable;
+  }
+  if (string_table == nullptr) {
+    return ElfError::kNone;
+  }
+
+  const auto file_offset = ResolveFileOffset(
+      metadata, string_table->value, string_table_size->value);
+  if (!file_offset.has_value()) {
+    return ElfError::kDynamicStringTableNotFileBacked;
+  }
+  const auto bytes = image.subspan(
+      *file_offset, static_cast<std::size_t>(string_table_size->value));
+  metadata.dynamic_info.string_table_address = string_table->value;
+  metadata.dynamic_info.string_table_size = string_table_size->value;
+
+  for (const auto& entry : metadata.dynamic_entries) {
+    if (entry.tag != kDynamicTagNeeded) {
+      continue;
+    }
+    if (entry.value >= bytes.size()) {
+      return ElfError::kDynamicStringOffsetOutOfRange;
+    }
+    auto value = ReadDynamicString(bytes, entry.value);
+    if (!value.has_value()) {
+      return ElfError::kUnterminatedDynamicString;
+    }
+    metadata.dynamic_info.needed_libraries.push_back(std::move(*value));
+  }
+
+  if (shared_object_name != nullptr) {
+    if (shared_object_name->value >= bytes.size()) {
+      return ElfError::kDynamicStringOffsetOutOfRange;
+    }
+    auto value = ReadDynamicString(bytes, shared_object_name->value);
+    if (!value.has_value()) {
+      return ElfError::kUnterminatedDynamicString;
+    }
+    metadata.dynamic_info.shared_object_name = std::move(*value);
+  }
+  return ElfError::kNone;
 }
 
 }  // namespace
@@ -256,6 +363,10 @@ ElfParseResult ParseElf64(std::span<const std::byte> image) {
     if (!terminated) {
       return ParseFailure(ElfError::kUnterminatedDynamicTable);
     }
+    if (const auto error = ParseDynamicStrings(image, metadata);
+        error != ElfError::kNone) {
+      return ParseFailure(error);
+    }
   }
 
   ElfParseResult result;
@@ -395,6 +506,14 @@ std::string_view ElfErrorName(ElfError error) noexcept {
       return "invalid-dynamic-segment-size";
     case ElfError::kUnterminatedDynamicTable:
       return "unterminated-dynamic-table";
+    case ElfError::kIncompleteDynamicStringTable:
+      return "incomplete-dynamic-string-table";
+    case ElfError::kDynamicStringTableNotFileBacked:
+      return "dynamic-string-table-not-file-backed";
+    case ElfError::kDynamicStringOffsetOutOfRange:
+      return "dynamic-string-offset-out-of-range";
+    case ElfError::kUnterminatedDynamicString:
+      return "unterminated-dynamic-string";
     case ElfError::kSegmentFileSizeExceedsMemorySize:
       return "segment-file-size-exceeds-memory-size";
     case ElfError::kSegmentFileRangeOutOfRange:

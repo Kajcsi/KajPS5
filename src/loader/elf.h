@@ -5,7 +5,9 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -31,6 +33,10 @@ enum class ElfError {
   kDynamicSegmentFileRangeOutOfRange,
   kInvalidDynamicSegmentSize,
   kUnterminatedDynamicTable,
+  kIncompleteDynamicStringTable,
+  kDynamicStringTableNotFileBacked,
+  kDynamicStringOffsetOutOfRange,
+  kUnterminatedDynamicString,
   kSegmentFileSizeExceedsMemorySize,
   kSegmentFileRangeOutOfRange,
   kSegmentAddressRangeOverflow,
@@ -57,6 +63,13 @@ struct ElfDynamicEntry {
   std::uint64_t value = 0;
 };
 
+struct ElfDynamicInfo {
+  std::optional<std::uint64_t> string_table_address;
+  std::optional<std::uint64_t> string_table_size;
+  std::vector<std::string> needed_libraries;
+  std::optional<std::string> shared_object_name;
+};
+
 struct ElfMetadata {
   std::uint8_t os_abi = 0;
   std::uint8_t abi_version = 0;
@@ -66,6 +79,7 @@ struct ElfMetadata {
   std::uint64_t entry_point = 0;
   std::vector<ElfProgramHeader> program_headers;
   std::vector<ElfDynamicEntry> dynamic_entries;
+  ElfDynamicInfo dynamic_info;
 };
 
 struct ElfParseResult {

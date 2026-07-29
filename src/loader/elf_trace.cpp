@@ -58,6 +58,13 @@ std::string FormatElfTrace(const ElfMetadata& metadata) {
   }
   trace << "elf.load_segments=" << load_segment_count << '\n';
   trace << "elf.dynamic_entries=" << metadata.dynamic_entries.size() << '\n';
+  trace << "elf.dynamic_string_table_size="
+        << metadata.dynamic_info.string_table_size.value_or(0) << '\n';
+  trace << "elf.needed_libraries="
+        << metadata.dynamic_info.needed_libraries.size() << '\n';
+  trace << "elf.has_soname="
+        << (metadata.dynamic_info.shared_object_name.has_value() ? 1 : 0)
+        << '\n';
 
   std::size_t load_index = 0;
   for (const auto& header : metadata.program_headers) {
