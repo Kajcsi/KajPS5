@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -63,6 +64,17 @@ std::string ReadText(kajps5::memory::GuestMemory& memory,
   return text;
 }
 
+std::uint64_t ReadLittleEndian(std::span<const std::byte> bytes,
+                               std::size_t offset, std::size_t size) {
+  std::uint64_t value = 0;
+  for (std::size_t index = 0; index < size; ++index) {
+    value |= static_cast<std::uint64_t>(
+                 std::to_integer<unsigned char>(bytes[offset + index]))
+             << (index * 8U);
+  }
+  return value;
+}
+
 }  // namespace
 
 int main() {
@@ -91,7 +103,7 @@ int main() {
   ExportRegistry registry;
   Check(kajps5::hle::RegisterKernelFileExports(registry, runtime.files()) ==
             ExportRegistryStatus::kOk &&
-            registry.size() == 10,
+            registry.size() == 14,
         "file export registration failed");
 
   auto path = Bytes("/app0/data/test.bin");
@@ -107,6 +119,72 @@ int main() {
                                open_context);
   Check(handle != 0 && runtime.handles().size() == 1,
         "NID open did not return a file descriptor");
+
+  HleCallContext stat_context(memory);
+  Check(stat_context.SetRegister(HleRegister::kRdi, 0x1100) &&
+            stat_context.SetRegister(HleRegister::kRsi, 0x2200),
+        "stat argument setup failed");
+  std::array<std::byte, kajps5::hle::kKernelStatSize> stat_bytes{};
+  Check(Dispatch(registry, kajps5::hle::kKernelStatNid, stat_context) == 0 &&
+            memory.Read(0x2200, stat_bytes) &&
+            ReadLittleEndian(stat_bytes, 4, 4) != 0 &&
+            ReadLittleEndian(stat_bytes, 8, 2) == 0x81ff &&
+            ReadLittleEndian(stat_bytes, 10, 2) == 1 &&
+            ReadLittleEndian(stat_bytes, 72, 8) == 6 &&
+            ReadLittleEndian(stat_bytes, 80, 8) == 1 &&
+            ReadLittleEndian(stat_bytes, 88, 4) == 512,
+        "NID stat returned the wrong regular-file metadata");
+
+  HleCallContext fstat_context(memory);
+  Check(fstat_context.SetRegister(HleRegister::kRdi, handle) &&
+            fstat_context.SetRegister(HleRegister::kRsi, 0x2300),
+        "fstat argument setup failed");
+  std::array<std::byte, kajps5::hle::kKernelStatSize> fstat_bytes{};
+  Check(Dispatch(registry, kajps5::hle::kKernelFstatName, fstat_context) == 0 &&
+            memory.Read(0x2300, fstat_bytes) && fstat_bytes == stat_bytes,
+        "named fstat did not match path metadata");
+
+  HleCallContext null_stat_context(memory);
+  Check(null_stat_context.SetRegister(HleRegister::kRdi, 0x1100) &&
+            null_stat_context.SetRegister(HleRegister::kRsi, 0),
+        "null stat output setup failed");
+  Check(Dispatch(registry, kajps5::hle::kKernelStatName,
+                 null_stat_context) ==
+            KernelResult(kajps5::hle::kKernelHleErrorInvalidArgument),
+        "null stat output returned the wrong kernel result");
+
+  HleCallContext null_fstat_context(memory);
+  Check(null_fstat_context.SetRegister(HleRegister::kRdi, handle) &&
+            null_fstat_context.SetRegister(HleRegister::kRsi, 0),
+        "null fstat output setup failed");
+  Check(Dispatch(registry, kajps5::hle::kKernelFstatName,
+                 null_fstat_context) ==
+            KernelResult(kajps5::hle::kKernelHleErrorFault),
+        "null fstat output returned the wrong kernel result");
+
+  kajps5::memory::GuestMemory partial_memory(
+      0x30000, kajps5::hle::kKernelStatSize,
+      kajps5::memory::GuestMemoryProtection::kNone);
+  Check(partial_memory.Map(
+            0x30000, kajps5::hle::kKernelStatSize - 1,
+            kajps5::memory::GuestMemoryProtection::kRead |
+                kajps5::memory::GuestMemoryProtection::kWrite),
+        "partial stat mapping failed");
+  std::array<std::byte, kajps5::hle::kKernelStatSize - 1> stat_sentinel{};
+  stat_sentinel.fill(std::byte{0xcc});
+  Check(partial_memory.Initialize(0x30000, stat_sentinel),
+        "partial stat sentinel setup failed");
+  HleCallContext partial_stat_context(partial_memory);
+  Check(partial_stat_context.SetRegister(HleRegister::kRdi, handle) &&
+            partial_stat_context.SetRegister(HleRegister::kRsi, 0x30000),
+        "partial fstat argument setup failed");
+  std::array<std::byte, kajps5::hle::kKernelStatSize - 1> stat_preserved{};
+  Check(Dispatch(registry, kajps5::hle::kKernelFstatNid,
+                 partial_stat_context) ==
+                KernelResult(kajps5::hle::kKernelHleErrorFault) &&
+            partial_memory.Read(0x30000, stat_preserved) &&
+            stat_preserved == stat_sentinel,
+        "failed fstat write changed guest memory");
 
   HleCallContext read_context(memory);
   Check(read_context.SetRegister(HleRegister::kRdi, handle) &&
@@ -177,6 +255,15 @@ int main() {
             KernelResult(kajps5::hle::kKernelHleErrorBadFileDescriptor),
         "stale read returned the wrong kernel result");
 
+  HleCallContext stale_fstat_context(memory);
+  Check(stale_fstat_context.SetRegister(HleRegister::kRdi, handle) &&
+            stale_fstat_context.SetRegister(HleRegister::kRsi, 0x2300),
+        "stale fstat setup failed");
+  Check(Dispatch(registry, kajps5::hle::kKernelFstatName,
+                 stale_fstat_context) ==
+            KernelResult(kajps5::hle::kKernelHleErrorBadFileDescriptor),
+        "stale fstat returned the wrong kernel result");
+
   HleCallContext missing_context(memory);
   auto missing = Bytes("/app0/missing.bin");
   missing.push_back(std::byte{0});
@@ -186,6 +273,22 @@ int main() {
   Check(Dispatch(registry, kajps5::hle::kKernelOpenName, missing_context) ==
             KernelResult(kajps5::hle::kKernelHleErrorNotFound),
         "missing open returned the wrong kernel result");
+
+  std::array<std::byte, kajps5::hle::kKernelStatSize> missing_sentinel{};
+  missing_sentinel.fill(std::byte{0xa5});
+  Check(memory.Initialize(0x2400, missing_sentinel),
+        "missing stat sentinel setup failed");
+  HleCallContext missing_stat_context(memory);
+  Check(missing_stat_context.SetRegister(HleRegister::kRdi, 0x1200) &&
+            missing_stat_context.SetRegister(HleRegister::kRsi, 0x2400),
+        "missing stat setup failed");
+  std::array<std::byte, kajps5::hle::kKernelStatSize> missing_preserved{};
+  Check(Dispatch(registry, kajps5::hle::kKernelStatName,
+                 missing_stat_context) ==
+                KernelResult(kajps5::hle::kKernelHleErrorNotFound) &&
+            memory.Read(0x2400, missing_preserved) &&
+            missing_preserved == missing_sentinel,
+        "missing stat changed guest memory");
 
   HleCallContext write_context(memory);
   Check(write_context.SetRegister(HleRegister::kRdi, 0x1100) &&
@@ -313,7 +416,7 @@ int main() {
 
   Check(kajps5::hle::RegisterKernelFileExports(registry, runtime.files()) ==
             ExportRegistryStatus::kAlreadyExists &&
-            registry.size() == 10,
+            registry.size() == 14,
         "duplicate file export batch changed the registry");
   return failures == 0 ? 0 : 1;
 }

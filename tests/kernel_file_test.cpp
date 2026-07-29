@@ -134,7 +134,8 @@ int main() {
 
   const auto stat = files.Stat("/app0/data/test.bin");
   const auto fstat = files.Fstat(opened.handle);
-  Check(stat && stat.size == 6 && fstat && fstat.size == 6,
+  Check(stat && stat.size == 6 && stat.inode != 0 && fstat &&
+            fstat.size == 6 && fstat.inode == stat.inode,
         "file size metadata is incorrect");
 
   Check(files.Close(opened.handle) == KernelStatus::kOk, "file close failed");

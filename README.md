@@ -57,9 +57,10 @@ and recheck contract.
 The kernel clock uses portable host clocks and keeps its process counter and
 frequency consistent.
 The file foundation normalizes guest paths and reads registered memory-backed
-files. Checked open, close, read, positioned-read, and seek handlers expose
-that same service by export name and NID. They do not expose the host file
-system.
+files. Checked open, close, read, positioned-read, seek, stat, and fstat
+handlers expose that same service by export name and NID. Metadata uses the
+120-byte kernel stat layout and deterministic values for registered regular
+files. The service does not expose the host file system.
 
 The tests build small ELF images in memory, including a six-byte leaf program
 that returns 42. The repository does not contain a game, firmware, system

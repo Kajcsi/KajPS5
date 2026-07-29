@@ -79,6 +79,7 @@ struct FileIoResult {
 struct FileStatResult {
   KernelStatus status = KernelStatus::kOk;
   std::uint64_t size = 0;
+  std::uint32_t inode = 0;
 
   [[nodiscard]] explicit operator bool() const noexcept {
     return status == KernelStatus::kOk;

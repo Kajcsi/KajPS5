@@ -9,6 +9,20 @@
 #include <utility>
 
 namespace kajps5::kernel {
+namespace {
+
+std::uint32_t StablePathHash(std::string_view path) noexcept {
+  constexpr std::uint32_t kOffsetBasis = 2'166'136'261U;
+  constexpr std::uint32_t kPrime = 16'777'619U;
+  auto hash = kOffsetBasis;
+  for (const auto character : path) {
+    hash ^= static_cast<unsigned char>(character);
+    hash *= kPrime;
+  }
+  return hash;
+}
+
+}  // namespace
 
 File::File(std::string path,
            std::shared_ptr<const std::vector<std::byte>> contents)
@@ -186,20 +200,22 @@ FileIoResult FileService::Seek(KernelHandle handle, std::int64_t offset,
 FileStatResult FileService::Stat(std::string_view path) const {
   const auto normalized = NormalizeGuestPath(path);
   if (!normalized) {
-    return {KernelStatus::kInvalidArgument, 0};
+    return {KernelStatus::kInvalidArgument, 0, 0};
   }
 
   std::lock_guard lock(files_mutex_);
   const auto found = files_.find(*normalized);
   return found != files_.end()
-             ? FileStatResult{KernelStatus::kOk, found->second->size()}
-             : FileStatResult{KernelStatus::kNotFound, 0};
+             ? FileStatResult{KernelStatus::kOk, found->second->size(),
+                              StablePathHash(*normalized)}
+             : FileStatResult{KernelStatus::kNotFound, 0, 0};
 }
 
 FileStatResult FileService::Fstat(KernelHandle handle) const {
   const auto file = Find(handle);
-  return file ? FileStatResult{KernelStatus::kOk, file->size()}
-              : FileStatResult{KernelStatus::kNotFound, 0};
+  return file ? FileStatResult{KernelStatus::kOk, file->size(),
+                               StablePathHash(file->path())}
+              : FileStatResult{KernelStatus::kNotFound, 0, 0};
 }
 
 std::optional<std::string>

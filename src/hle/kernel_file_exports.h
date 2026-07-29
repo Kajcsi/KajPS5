@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <cstddef>
+
 #include "hle/export_registry.h"
 #include "hle/kernel_exports.h"
 #include "kernel/file.h"
@@ -20,6 +22,11 @@ inline constexpr auto kKernelPreadName = "sceKernelPread";
 inline constexpr auto kKernelPreadNid = "+r3rMFwItV4";
 inline constexpr auto kKernelLseekName = "sceKernelLseek";
 inline constexpr auto kKernelLseekNid = "oib76F-12fk";
+inline constexpr auto kKernelStatName = "sceKernelStat";
+inline constexpr auto kKernelStatNid = "eV9wAD2riIA";
+inline constexpr auto kKernelFstatName = "sceKernelFstat";
+inline constexpr auto kKernelFstatNid = "kBwCPsYX-m4";
+inline constexpr std::size_t kKernelStatSize = 120;
 
 // The file service must outlive all dispatches through the registry.
 [[nodiscard]] ExportRegistryStatus RegisterKernelFileExports(

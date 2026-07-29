@@ -78,6 +78,9 @@ The focused tests record these shared behaviors:
 - Checked read and positioned-read handlers preflight the full guest output
   range and use bounded temporary chunks. Seek validates signed offsets and
   origins before it changes the descriptor position.
+- Stat and fstat write the shared 120-byte regular-file layout atomically.
+  Registered memory files report a stable path-based inode, their size,
+  512-byte block accounting, and deterministic zero timestamps.
 
 KajPS5 implements these behaviors in its own C++ interfaces. It does not copy
 the upstream host-thread executor, continuation system, object ownership
