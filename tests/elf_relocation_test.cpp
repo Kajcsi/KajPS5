@@ -140,7 +140,10 @@ int main() {
             relocation.type() == 8 && relocation.addend == -4,
         "RELA entry fields are incorrect");
   Check(kajps5::loader::FormatElfTrace(parsed.metadata)
-                .find("elf.relocations=1\nelf.plt_relocations=0\n") !=
+                .find("elf.relocations=1\n"
+                      "elf.plt_relocations=0\n"
+                      "elf.symbols=0\n"
+                      "elf.undefined_symbols=0\n") !=
             std::string::npos,
         "RELA counts are missing from the stable trace");
 

@@ -30,16 +30,20 @@ constexpr std::size_t kDynamicEntrySize = 16;
 constexpr std::int64_t kDynamicTagNull = 0;
 constexpr std::int64_t kDynamicTagNeeded = 1;
 constexpr std::int64_t kDynamicTagPltRelocationSize = 2;
+constexpr std::int64_t kDynamicTagHash = 4;
 constexpr std::int64_t kDynamicTagStringTable = 5;
+constexpr std::int64_t kDynamicTagSymbolTable = 6;
 constexpr std::int64_t kDynamicTagRela = 7;
 constexpr std::int64_t kDynamicTagRelaSize = 8;
 constexpr std::int64_t kDynamicTagRelaEntrySize = 9;
 constexpr std::int64_t kDynamicTagStringTableSize = 10;
+constexpr std::int64_t kDynamicTagSymbolEntrySize = 11;
 constexpr std::int64_t kDynamicTagSharedObjectName = 14;
 constexpr std::int64_t kDynamicTagPltRelocationFormat = 20;
 constexpr std::int64_t kDynamicTagJumpRelocation = 23;
 constexpr std::uint64_t kDynamicFormatRela = 7;
 constexpr std::size_t kRelaEntrySize = 24;
+constexpr std::size_t kSymbolEntrySize = 24;
 
 std::uint8_t Read8(std::span<const std::byte> image,
                    std::size_t offset) noexcept {
@@ -311,6 +315,80 @@ ElfError ParseDynamicRelocations(std::span<const std::byte> image,
   return ElfError::kNone;
 }
 
+ElfError ParseDynamicSymbols(std::span<const std::byte> image,
+                             ElfMetadata& metadata) {
+  const auto* hash = FindDynamicEntry(metadata, kDynamicTagHash);
+  if (hash == nullptr) {
+    return ElfError::kNone;
+  }
+  const auto* symbol_table =
+      FindDynamicEntry(metadata, kDynamicTagSymbolTable);
+  const auto* symbol_entry_size =
+      FindDynamicEntry(metadata, kDynamicTagSymbolEntrySize);
+  if (symbol_table == nullptr || symbol_entry_size == nullptr ||
+      !metadata.dynamic_info.string_table_address.has_value() ||
+      !metadata.dynamic_info.string_table_size.has_value()) {
+    return ElfError::kIncompleteDynamicSymbolMetadata;
+  }
+  if (symbol_entry_size->value != kSymbolEntrySize) {
+    return ElfError::kInvalidSymbolEntrySize;
+  }
+
+  const auto hash_header_offset = ResolveFileOffset(metadata, hash->value, 8);
+  if (!hash_header_offset.has_value()) {
+    return ElfError::kHashTableNotFileBacked;
+  }
+  const auto bucket_count = Read32(image, *hash_header_offset);
+  const auto symbol_count = Read32(image, *hash_header_offset + 4);
+  const auto hash_size =
+      std::uint64_t{8} + std::uint64_t{4} *
+                             (static_cast<std::uint64_t>(bucket_count) +
+                              static_cast<std::uint64_t>(symbol_count));
+  if (!ResolveFileOffset(metadata, hash->value, hash_size).has_value()) {
+    return ElfError::kHashTableNotFileBacked;
+  }
+
+  const auto symbol_table_size =
+      static_cast<std::uint64_t>(symbol_count) * kSymbolEntrySize;
+  const auto symbol_file_offset =
+      ResolveFileOffset(metadata, symbol_table->value, symbol_table_size);
+  if (!symbol_file_offset.has_value()) {
+    return ElfError::kSymbolTableNotFileBacked;
+  }
+  const auto string_file_offset = ResolveFileOffset(
+      metadata, *metadata.dynamic_info.string_table_address,
+      *metadata.dynamic_info.string_table_size);
+  if (!string_file_offset.has_value()) {
+    return ElfError::kDynamicStringTableNotFileBacked;
+  }
+  const auto strings = image.subspan(
+      *string_file_offset, static_cast<std::size_t>(
+                               *metadata.dynamic_info.string_table_size));
+
+  metadata.dynamic_info.symbols.reserve(symbol_count);
+  for (std::uint32_t index = 0; index < symbol_count; ++index) {
+    const auto offset =
+        *symbol_file_offset + static_cast<std::size_t>(index) * kSymbolEntrySize;
+    ElfSymbol symbol;
+    symbol.name_offset = Read32(image, offset);
+    symbol.info = Read8(image, offset + 4);
+    symbol.other = Read8(image, offset + 5);
+    symbol.section_index = Read16(image, offset + 6);
+    symbol.value = Read64(image, offset + 8);
+    symbol.size = Read64(image, offset + 16);
+    if (symbol.name_offset >= strings.size()) {
+      return ElfError::kSymbolNameOffsetOutOfRange;
+    }
+    auto name = ReadDynamicString(strings, symbol.name_offset);
+    if (!name.has_value()) {
+      return ElfError::kUnterminatedSymbolName;
+    }
+    symbol.name = std::move(*name);
+    metadata.dynamic_info.symbols.push_back(std::move(symbol));
+  }
+  return ElfError::kNone;
+}
+
 }  // namespace
 
 ElfParseResult ParseElf64(std::span<const std::byte> image) {
@@ -474,6 +552,10 @@ ElfParseResult ParseElf64(std::span<const std::byte> image) {
         error != ElfError::kNone) {
       return ParseFailure(error);
     }
+    if (const auto error = ParseDynamicSymbols(image, metadata);
+        error != ElfError::kNone) {
+      return ParseFailure(error);
+    }
   }
 
   ElfParseResult result;
@@ -631,6 +713,18 @@ std::string_view ElfErrorName(ElfError error) noexcept {
       return "relocation-target-out-of-range";
     case ElfError::kUnsupportedPltRelocationFormat:
       return "unsupported-plt-relocation-format";
+    case ElfError::kIncompleteDynamicSymbolMetadata:
+      return "incomplete-dynamic-symbol-metadata";
+    case ElfError::kInvalidSymbolEntrySize:
+      return "invalid-symbol-entry-size";
+    case ElfError::kHashTableNotFileBacked:
+      return "hash-table-not-file-backed";
+    case ElfError::kSymbolTableNotFileBacked:
+      return "symbol-table-not-file-backed";
+    case ElfError::kSymbolNameOffsetOutOfRange:
+      return "symbol-name-offset-out-of-range";
+    case ElfError::kUnterminatedSymbolName:
+      return "unterminated-symbol-name";
     case ElfError::kSegmentFileSizeExceedsMemorySize:
       return "segment-file-size-exceeds-memory-size";
     case ElfError::kSegmentFileRangeOutOfRange:

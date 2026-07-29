@@ -41,6 +41,12 @@ The relocation pass validates every entry before it changes memory. It applies
 `R_X86_64_GLOB_DAT` and `R_X86_64_JUMP_SLOT` imports. Other relocation types,
 invalid relative symbols, target overflow, and unmapped writes fail.
 
+The standard System V hash header supplies the dynamic symbol count. The
+loader checks the complete hash and symbol-table ranges, requires 24-byte
+x86-64 symbols, and resolves each name inside the checked dynamic string table.
+ELFs that use only another hash format remain loadable, but their symbols are
+not indexed yet.
+
 This milestone does not resolve symbols or imports, interpret PS5-specific
 dynamic tags, or parse SELF containers. The separate controlled leaf test is
 documented in `stage2-cpu.md`.

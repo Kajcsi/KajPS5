@@ -3,6 +3,7 @@
 
 #include "loader/elf_trace.h"
 
+#include <algorithm>
 #include <iomanip>
 #include <sstream>
 #include <string_view>
@@ -69,6 +70,13 @@ std::string FormatElfTrace(const ElfMetadata& metadata) {
         << '\n';
   trace << "elf.plt_relocations="
         << metadata.dynamic_info.plt_relocations.size() << '\n';
+  trace << "elf.symbols=" << metadata.dynamic_info.symbols.size() << '\n';
+  const auto undefined_symbols = std::count_if(
+      metadata.dynamic_info.symbols.begin(), metadata.dynamic_info.symbols.end(),
+      [](const ElfSymbol& symbol) {
+        return symbol.section_index == 0 && !symbol.name.empty();
+      });
+  trace << "elf.undefined_symbols=" << undefined_symbols << '\n';
 
   std::size_t load_index = 0;
   for (const auto& header : metadata.program_headers) {

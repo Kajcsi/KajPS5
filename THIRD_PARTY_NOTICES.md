@@ -20,8 +20,8 @@ system, ownership model, or source code was copied.
 The checked dynamic-table, standard dynamic-string, and standard `RELA`
 behavior in
 `src/loader/elf.cpp`, `src/loader/relocator.cpp`,
-`tests/elf_dynamic_test.cpp`, and `tests/elf_relocation_test.cpp` was
-implemented
+`tests/elf_dynamic_test.cpp`, `tests/elf_relocation_test.cpp`, and
+`tests/elf_symbol_test.cpp` was implemented
 from focused observations of the pinned KytyPS5 and SharpEmu loader files. The
 SharpEmu reference file states:
 

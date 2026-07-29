@@ -30,6 +30,8 @@ checked standard ELF string-table references for `DT_NEEDED` and `DT_SONAME`.
 It also validates and records standard x86-64 `RELA` and PLT relocation
 metadata. A checked relocation pass applies `R_X86_64_RELATIVE` entries and
 reports unresolved import relocations without changing them.
+The loader also reads standard `DT_HASH` symbol counts and validates dynamic
+symbol names.
 The kernel foundation has typed handles and deterministic event-flag polling.
 One cooperative scheduler owns guest thread state and
 deterministic ready, block, wake, yield, and exit transitions. A test-only

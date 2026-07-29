@@ -19,9 +19,10 @@ The result is a little-endian x86-64 ELF shared object with FreeBSD ABI, four
 program headers, and three `PT_LOAD` segments. KajPS5 parsed all metadata and
 24 non-null dynamic entries. It resolved a 107-byte dynamic string table and
 three `DT_NEEDED` names. It also validated 142 standard `RELA` entries and one
-PLT `RELA` entry. It loaded 53,860 file bytes, cleared 2,324 additional bytes,
-and applied each segment's `R/W/X` flags. The required guest range was 84,264
-bytes.
+PLT `RELA` entry. The standard `DT_HASH` table identified four dynamic symbols,
+including three undefined imports. KajPS5 loaded 53,860 file bytes, cleared
+2,324 additional bytes, and applied each segment's `R/W/X` flags. The required
+guest range was 84,264 bytes.
 
 No PS5 console, game, firmware, key, SELF file, or proprietary system module
 was used.

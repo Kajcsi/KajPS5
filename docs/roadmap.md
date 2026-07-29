@@ -17,6 +17,7 @@
 - [x] Resolve checked standard ELF dynamic strings.
 - [x] Validate standard x86-64 `RELA` metadata and targets.
 - [x] Apply checked relative relocations without resolving imports.
+- [x] Validate standard dynamic symbol names through `DT_HASH`.
 
 ## Stage 2: CPU and kernel
 

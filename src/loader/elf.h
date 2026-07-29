@@ -42,6 +42,12 @@ enum class ElfError {
   kRelaTableNotFileBacked,
   kRelocationTargetOutOfRange,
   kUnsupportedPltRelocationFormat,
+  kIncompleteDynamicSymbolMetadata,
+  kInvalidSymbolEntrySize,
+  kHashTableNotFileBacked,
+  kSymbolTableNotFileBacked,
+  kSymbolNameOffsetOutOfRange,
+  kUnterminatedSymbolName,
   kSegmentFileSizeExceedsMemorySize,
   kSegmentFileRangeOutOfRange,
   kSegmentAddressRangeOverflow,
@@ -81,6 +87,19 @@ struct ElfRelaEntry {
   }
 };
 
+struct ElfSymbol {
+  std::uint32_t name_offset = 0;
+  std::uint8_t info = 0;
+  std::uint8_t other = 0;
+  std::uint16_t section_index = 0;
+  std::uint64_t value = 0;
+  std::uint64_t size = 0;
+  std::string name;
+
+  [[nodiscard]] std::uint8_t binding() const noexcept { return info >> 4U; }
+  [[nodiscard]] std::uint8_t type() const noexcept { return info & 0x0fU; }
+};
+
 struct ElfDynamicInfo {
   std::optional<std::uint64_t> string_table_address;
   std::optional<std::uint64_t> string_table_size;
@@ -88,6 +107,7 @@ struct ElfDynamicInfo {
   std::optional<std::string> shared_object_name;
   std::vector<ElfRelaEntry> relocations;
   std::vector<ElfRelaEntry> plt_relocations;
+  std::vector<ElfSymbol> symbols;
 };
 
 struct ElfMetadata {
