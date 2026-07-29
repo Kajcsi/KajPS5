@@ -30,6 +30,8 @@ inline constexpr auto kKernelFstatNid = "kBwCPsYX-m4";
 inline constexpr auto kKernelCheckReachabilityName =
     "sceKernelCheckReachability";
 inline constexpr auto kKernelCheckReachabilityNid = "uWyW3v98sU4";
+inline constexpr auto kKernelGetdirentriesName = "sceKernelGetdirentries";
+inline constexpr auto kKernelGetdirentriesNid = "taRWhTJFTgE";
 inline constexpr auto kKernelGetdentsName = "sceKernelGetdents";
 inline constexpr auto kKernelGetdentsNid = "j2AIqSqJP0w";
 inline constexpr std::size_t kKernelStatSize = 120;

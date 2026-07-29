@@ -65,12 +65,23 @@ struct DirectoryEntry {
   std::uint32_t inode = 0;
 };
 
+struct DirectoryReadResult {
+  KernelStatus status = KernelStatus::kOk;
+  bool end_of_directory = false;
+  std::uint64_t position = 0;
+  DirectoryEntry entry;
+
+  [[nodiscard]] explicit operator bool() const noexcept {
+    return status == KernelStatus::kOk;
+  }
+};
+
 class Directory final : public KernelObject {
 public:
   Directory(std::string path, std::vector<DirectoryEntry> entries);
 
   [[nodiscard]] const std::string &path() const noexcept;
-  [[nodiscard]] std::optional<DirectoryEntry> ReadNext();
+  [[nodiscard]] DirectoryReadResult ReadNext();
 
 private:
   std::string path_;
@@ -101,16 +112,6 @@ struct FileStatResult {
   KernelStatus status = KernelStatus::kOk;
   std::uint64_t size = 0;
   std::uint32_t inode = 0;
-
-  [[nodiscard]] explicit operator bool() const noexcept {
-    return status == KernelStatus::kOk;
-  }
-};
-
-struct DirectoryReadResult {
-  KernelStatus status = KernelStatus::kOk;
-  bool end_of_directory = false;
-  DirectoryEntry entry;
 
   [[nodiscard]] explicit operator bool() const noexcept {
     return status == KernelStatus::kOk;

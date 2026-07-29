@@ -88,8 +88,10 @@ The focused tests record these shared behaviors:
   case-insensitive name order. They do not query the host file system.
 - `sceKernelGetdents` writes one zero-filled 512-byte record per call. It uses
   deterministic FNV-1a name hashes and distinguishes a regular-file handle,
-  a stale handle, a short request, and a bad guest output range. A failed
-  output preflight does not advance the directory cursor.
+  a stale handle, a short request, and a bad guest output range.
+- `sceKernelGetdirentries` uses the same record path and can write the captured
+  entry position to an optional base pointer. All output ranges are checked
+  before the cursor advances.
 - One atomic export batch binds all current clock, event-flag, file, and
   semaphore handlers to the same kernel runtime. A registration conflict
   leaves the destination registry unchanged.

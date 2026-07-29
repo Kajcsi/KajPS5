@@ -122,7 +122,7 @@ int main() {
   ExportRegistry registry;
   Check(kajps5::hle::RegisterKernelFileExports(registry, runtime.files()) ==
             ExportRegistryStatus::kOk &&
-            registry.size() == 18,
+            registry.size() == 20,
         "file export registration failed");
 
   auto path = Bytes("/app0/data/test.bin");
@@ -276,6 +276,71 @@ int main() {
                  stale_getdents_context) ==
             KernelResult(kajps5::hle::kKernelHleErrorBadFileDescriptor),
         "stale getdents returned the wrong kernel result");
+
+  HleCallContext base_directory_open_context(memory);
+  Check(base_directory_open_context.SetRegister(HleRegister::kRdi, 0x1400) &&
+            base_directory_open_context.SetRegister(
+                HleRegister::kRsi,
+                kajps5::kernel::kFileOpenDirectory),
+        "base-position directory open setup failed");
+  const auto base_directory_handle = Dispatch(
+      registry, kajps5::hle::kKernelOpenName, base_directory_open_context);
+  Check(base_directory_handle != 0 && runtime.handles().size() == 2,
+        "base-position directory did not open");
+
+  HleCallContext fault_base_context(memory);
+  Check(fault_base_context.SetRegister(HleRegister::kRdi,
+                                       base_directory_handle) &&
+            fault_base_context.SetRegister(HleRegister::kRsi, 0x4000) &&
+            fault_base_context.SetRegister(
+                HleRegister::kRdx,
+                kajps5::hle::kKernelDirectoryEntrySize) &&
+            fault_base_context.SetRegister(HleRegister::kRcx, 0x20000),
+        "fault base-position argument setup failed");
+  Check(Dispatch(registry, kajps5::hle::kKernelGetdirentriesName,
+                 fault_base_context) ==
+            KernelResult(kajps5::hle::kKernelHleErrorFault),
+        "unmapped base-position output returned the wrong kernel result");
+
+  HleCallContext base_context(memory);
+  Check(base_context.SetRegister(HleRegister::kRdi, base_directory_handle) &&
+            base_context.SetRegister(HleRegister::kRsi, 0x4000) &&
+            base_context.SetRegister(
+                HleRegister::kRdx,
+                kajps5::hle::kKernelDirectoryEntrySize) &&
+            base_context.SetRegister(HleRegister::kRcx, 0x5000),
+        "base-position argument setup failed");
+  std::array<std::byte, sizeof(std::uint64_t)> base_position{};
+  Check(Dispatch(registry, kajps5::hle::kKernelGetdirentriesNid,
+                 base_context) ==
+                kajps5::hle::kKernelDirectoryEntrySize &&
+            memory.Read(0x5000, base_position) &&
+            ReadLittleEndian(base_position, 0, base_position.size()) == 0 &&
+            ReadText(memory, 0x4008, 1) == ".",
+        "getdirentries did not report the first base position");
+
+  HleCallContext null_base_context(memory);
+  Check(null_base_context.SetRegister(HleRegister::kRdi,
+                                      base_directory_handle) &&
+            null_base_context.SetRegister(HleRegister::kRsi, 0x4000) &&
+            null_base_context.SetRegister(
+                HleRegister::kRdx,
+                kajps5::hle::kKernelDirectoryEntrySize) &&
+            null_base_context.SetRegister(HleRegister::kRcx, 0),
+        "null base-position argument setup failed");
+  Check(Dispatch(registry, kajps5::hle::kKernelGetdirentriesName,
+                 null_base_context) ==
+                kajps5::hle::kKernelDirectoryEntrySize &&
+            ReadText(memory, 0x4008, 2) == "..",
+        "getdirentries rejected an optional null base position");
+
+  HleCallContext base_directory_close_context(memory);
+  Check(base_directory_close_context.SetRegister(HleRegister::kRdi,
+                                                 base_directory_handle) &&
+            Dispatch(registry, kajps5::hle::kKernelCloseName,
+                     base_directory_close_context) == 0 &&
+            runtime.handles().size() == 1,
+        "base-position directory close failed");
 
   HleCallContext reachable_context(memory);
   Check(reachable_context.SetRegister(HleRegister::kRdi, 0x1100),
@@ -613,7 +678,7 @@ int main() {
 
   Check(kajps5::hle::RegisterKernelFileExports(registry, runtime.files()) ==
             ExportRegistryStatus::kAlreadyExists &&
-            registry.size() == 18,
+            registry.size() == 20,
         "duplicate file export batch changed the registry");
   return failures == 0 ? 0 : 1;
 }

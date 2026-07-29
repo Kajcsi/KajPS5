@@ -332,16 +332,24 @@ HleContextStatus KernelCheckReachability(HleCallContext& context,
   return HleContextStatus::kOk;
 }
 
-HleContextStatus KernelGetdents(HleCallContext& context,
-                                kernel::FileService& files) {
+HleContextStatus KernelReadDirectory(HleCallContext& context,
+                                     kernel::FileService& files,
+                                     bool write_base_position) {
   const auto handle = context.Argument(0).value_or(0);
   const auto destination = context.Argument(1).value_or(0);
   const auto requested = context.Argument(2).value_or(0);
+  const auto base_position_address =
+      write_base_position ? context.Argument(3).value_or(0) : 0;
   if (destination == 0 || requested < kKernelDirectoryEntrySize) {
     SetKernelResult(context, kKernelHleErrorInvalidArgument);
     return HleContextStatus::kOk;
   }
   if (!context.CanWriteMemory(destination, kKernelDirectoryEntrySize)) {
+    SetKernelResult(context, kKernelHleErrorFault);
+    return HleContextStatus::kOk;
+  }
+  if (base_position_address != 0 &&
+      !context.CanWriteMemory(base_position_address, sizeof(std::uint64_t))) {
     SetKernelResult(context, kKernelHleErrorFault);
     return HleContextStatus::kOk;
   }
@@ -352,6 +360,12 @@ HleContextStatus KernelGetdents(HleCallContext& context,
                     result.status == kernel::KernelStatus::kNotFound
                         ? kKernelHleErrorBadFileDescriptor
                         : FileStatusResult(result.status));
+    return HleContextStatus::kOk;
+  }
+  if (base_position_address != 0 &&
+      context.WriteUInt64(base_position_address, result.position) !=
+          HleContextStatus::kOk) {
+    SetKernelResult(context, kKernelHleErrorFault);
     return HleContextStatus::kOk;
   }
   if (result.end_of_directory) {
@@ -376,13 +390,23 @@ HleContextStatus KernelGetdents(HleCallContext& context,
   return HleContextStatus::kOk;
 }
 
+HleContextStatus KernelGetdirentries(HleCallContext& context,
+                                     kernel::FileService& files) {
+  return KernelReadDirectory(context, files, true);
+}
+
+HleContextStatus KernelGetdents(HleCallContext& context,
+                                kernel::FileService& files) {
+  return KernelReadDirectory(context, files, false);
+}
+
 }  // namespace
 
 std::vector<HleExportDefinition> detail::MakeKernelFileExports(
     kernel::FileService& files) {
   auto* const file_view = &files;
   std::vector<HleExportDefinition> exports;
-  exports.reserve(18);
+  exports.reserve(20);
   exports.push_back({kLibKernelName, kKernelOpenName,
                      [file_view](HleCallContext& context) {
                        return KernelOpen(context, *file_view);
@@ -446,6 +470,14 @@ std::vector<HleExportDefinition> detail::MakeKernelFileExports(
   exports.push_back({kLibKernelName, kKernelCheckReachabilityNid,
                      [file_view](HleCallContext& context) {
                        return KernelCheckReachability(context, *file_view);
+                     }});
+  exports.push_back({kLibKernelName, kKernelGetdirentriesName,
+                     [file_view](HleCallContext& context) {
+                       return KernelGetdirentries(context, *file_view);
+                     }});
+  exports.push_back({kLibKernelName, kKernelGetdirentriesNid,
+                     [file_view](HleCallContext& context) {
+                       return KernelGetdirentries(context, *file_view);
                      }});
   exports.push_back({kLibKernelName, kKernelGetdentsName,
                      [file_view](HleCallContext& context) {

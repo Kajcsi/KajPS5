@@ -63,9 +63,10 @@ files. Checked open, close, read, positioned-read, seek, stat, fstat, and path
 reachability handlers expose that same service by export name and NID.
 Metadata uses the 120-byte kernel stat layout and deterministic values for
 registered regular files. Derived directory handles capture a deterministic
-snapshot of the same in-memory namespace. `sceKernelGetdents` returns checked
-512-byte records with stable `.` and `..` entries. The service does not expose
-the host file system.
+snapshot of the same in-memory namespace. `sceKernelGetdents` and
+`sceKernelGetdirentries` return checked 512-byte records with stable `.` and
+`..` entries. The latter also reports the captured entry position. The service
+does not expose the host file system.
 One atomic default registration binds all current clock, event-flag, file,
 memory, and semaphore handlers to the same kernel runtime and guest call
 context. Checked `mprotect` and `munmap` handlers use the same guest-memory

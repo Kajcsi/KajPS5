@@ -138,12 +138,13 @@ Directory::Directory(std::string path, std::vector<DirectoryEntry> entries)
 
 const std::string &Directory::path() const noexcept { return path_; }
 
-std::optional<DirectoryEntry> Directory::ReadNext() {
+DirectoryReadResult Directory::ReadNext() {
   std::lock_guard lock(mutex_);
   if (next_index_ >= entries_.size()) {
-    return std::nullopt;
+    return {KernelStatus::kOk, true, next_index_, {}};
   }
-  return entries_[next_index_++];
+  const auto position = next_index_;
+  return {KernelStatus::kOk, false, position, entries_[next_index_++]};
 }
 
 FileService::FileService(HandleTable &handles) noexcept : handles_(handles) {}
@@ -264,11 +265,9 @@ DirectoryReadResult FileService::ReadDirectory(KernelHandle handle) {
   if (!directory) {
     return {Find(handle) ? KernelStatus::kInvalidArgument
                          : KernelStatus::kNotFound,
-            false, {}};
+            false, 0, {}};
   }
-  const auto entry = directory->ReadNext();
-  return entry ? DirectoryReadResult{KernelStatus::kOk, false, *entry}
-               : DirectoryReadResult{KernelStatus::kOk, true, {}};
+  return directory->ReadNext();
 }
 
 FileStatResult FileService::Stat(std::string_view path) const {

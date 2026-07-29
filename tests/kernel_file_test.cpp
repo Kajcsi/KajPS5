@@ -104,13 +104,15 @@ int main() {
   for (std::size_t index = 0; index < expected_entries.size(); ++index) {
     const auto entry = files.ReadDirectory(directory.handle);
     Check(entry && !entry.end_of_directory &&
+              entry.position == index &&
               entry.entry.name == expected_entries[index] &&
               entry.entry.is_file == (index == 2 || index == 4) &&
               entry.entry.inode != 0,
           "directory entry order or type is incorrect");
   }
   const auto directory_end = files.ReadDirectory(directory.handle);
-  Check(directory_end && directory_end.end_of_directory,
+  Check(directory_end && directory_end.end_of_directory &&
+            directory_end.position == expected_entries.size(),
         "directory did not reach stable EOF");
   Check(files.Close(directory.handle) == KernelStatus::kOk &&
             files.ReadDirectory(directory.handle).status ==

@@ -92,8 +92,8 @@ confirmed by both references. The 120-byte stat field layout matches both
 references. The stable path inode adapts SharpEmu's deterministic FNV-1a
 file-entry hashing behavior. The directory tests adapt SharpEmu's captured
 entry list, `.` and `..` prefix, case-insensitive ordering, typed descriptor
-failure, and fixed 512-byte record behavior. No file-service source code was
-copied.
+failure, fixed 512-byte record behavior, and optional directory base-position
+output. No file-service source code was copied.
 The SharpEmu reference files state:
 
 `Copyright (C) 2026 SharpEmu Emulator Project`
