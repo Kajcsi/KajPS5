@@ -1,19 +1,23 @@
 add_executable(kajps5_project_info_test project_info_test.cpp)
 target_link_libraries(kajps5_project_info_test PRIVATE kajps5_core)
+kajps5_deploy_msvc_asan_runtime(kajps5_project_info_test)
 
 add_test(NAME kajps5_project_info COMMAND kajps5_project_info_test)
 
 add_executable(kajps5_guest_memory_test guest_memory_test.cpp)
 target_link_libraries(kajps5_guest_memory_test PRIVATE kajps5_core)
+kajps5_deploy_msvc_asan_runtime(kajps5_guest_memory_test)
 
 add_test(NAME kajps5_guest_memory COMMAND kajps5_guest_memory_test)
 
 add_executable(kajps5_elf_loader_test elf_loader_test.cpp)
 target_link_libraries(kajps5_elf_loader_test PRIVATE kajps5_core)
+kajps5_deploy_msvc_asan_runtime(kajps5_elf_loader_test)
 
 add_test(NAME kajps5_elf_loader COMMAND kajps5_elf_loader_test)
 
 add_executable(kajps5_kernel_event_flag_test kernel_event_flag_test.cpp)
 target_link_libraries(kajps5_kernel_event_flag_test PRIVATE kajps5_core)
+kajps5_deploy_msvc_asan_runtime(kajps5_kernel_event_flag_test)
 
 add_test(NAME kajps5_kernel_event_flag COMMAND kajps5_kernel_event_flag_test)

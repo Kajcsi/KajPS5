@@ -39,6 +39,8 @@ ctest --test-dir _Build -C Release --output-on-failure
 ```
 
 On Windows, the executable is usually in `_Build/src/Release/kajps5.exe`.
+When MSVC AddressSanitizer is enabled, CMake copies its required runtime DLL
+beside each executable so CTest and direct launches use the same build tree.
 
 Inspect and load-check a public decrypted ELF without executing guest code:
 

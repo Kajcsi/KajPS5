@@ -20,3 +20,4 @@ endif()
 
 add_executable(kajps5 app/main.cpp)
 target_link_libraries(kajps5 PRIVATE kajps5_core)
+kajps5_deploy_msvc_asan_runtime(kajps5)
