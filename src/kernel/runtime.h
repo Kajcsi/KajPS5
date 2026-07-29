@@ -8,6 +8,7 @@
 
 #include "kernel/clock.h"
 #include "kernel/event_flag.h"
+#include "kernel/file.h"
 #include "kernel/guest_scheduler.h"
 #include "kernel/handle_table.h"
 #include "kernel/semaphore.h"
@@ -18,10 +19,11 @@ class KernelRuntime final {
 public:
   KernelRuntime()
       : scheduler_(handles_), event_flags_(handles_, scheduler_),
-        semaphores_(handles_, scheduler_) {}
+        semaphores_(handles_, scheduler_), files_(handles_) {}
   explicit KernelRuntime(std::unique_ptr<KernelClockSource> clock_source)
       : scheduler_(handles_), event_flags_(handles_, scheduler_),
-        semaphores_(handles_, scheduler_), clock_(std::move(clock_source)) {}
+        semaphores_(handles_, scheduler_), files_(handles_),
+        clock_(std::move(clock_source)) {}
 
   KernelRuntime(const KernelRuntime &) = delete;
   KernelRuntime &operator=(const KernelRuntime &) = delete;
@@ -32,6 +34,7 @@ public:
     return event_flags_;
   }
   [[nodiscard]] SemaphoreService &semaphores() noexcept { return semaphores_; }
+  [[nodiscard]] FileService &files() noexcept { return files_; }
   [[nodiscard]] KernelClockService &clock() noexcept { return clock_; }
 
 private:
@@ -39,6 +42,7 @@ private:
   GuestScheduler scheduler_;
   EventFlagService event_flags_;
   SemaphoreService semaphores_;
+  FileService files_;
   KernelClockService clock_;
 };
 

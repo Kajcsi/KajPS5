@@ -4,11 +4,12 @@ The current source does not copy source code from KytyPS5 or SharpEmu. It uses
 both projects as research references. See `docs/stage1-loader.md` and
 `docs/stage2-kernel.md` for the reviewed files and pinned commits.
 
-The clock, event-flag, semaphore, and scheduler behaviors in `src/kernel/`,
+The clock, event-flag, file, semaphore, and scheduler behaviors in `src/kernel/`,
 `tests/kernel_event_flag_test.cpp`, `tests/kernel_event_wait_test.cpp`, and
-`tests/kernel_clock_test.cpp`, `tests/kernel_scheduler_test.cpp`, and
-`tests/kernel_semaphore_test.cpp` were implemented from focused observations of
-KytyPS5 and SharpEmu. The SharpEmu reference files state:
+`tests/kernel_clock_test.cpp`, `tests/kernel_file_test.cpp`,
+`tests/kernel_scheduler_test.cpp`, and `tests/kernel_semaphore_test.cpp` were
+implemented from focused observations of KytyPS5 and SharpEmu. The SharpEmu
+reference files state:
 
 `Copyright (C) 2026 SharpEmu Emulator Project`
 

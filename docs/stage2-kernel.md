@@ -21,6 +21,11 @@ The behavior review used these pinned upstream files:
   `src/kernel/pthread.cpp` at the pinned KytyPS5 commit.
 - SharpEmu `src/SharpEmu.Libs/Kernel/KernelRuntimeCompatExports.cs` at the
   pinned SharpEmu commit.
+- KytyPS5 `src/kernel/fileSystem.h` and `src/kernel/fileSystem.cpp` at the
+  pinned KytyPS5 commit.
+- SharpEmu open, close, read, seek, and stat behavior in
+  `src/SharpEmu.Libs/Kernel/KernelMemoryCompatExports.cs` at the pinned
+  SharpEmu commit.
 
 The focused tests record these shared behaviors:
 
@@ -52,6 +57,13 @@ The focused tests record these shared behaviors:
 - Process time starts with the kernel runtime. Its counter uses nanoseconds and
   reports a matching one-gigahertz frequency.
 - Clock conversion tests use an injected source and do not depend on host time.
+- Guest paths use forward slashes, collapse empty and current-directory
+  components, and reject relative paths, parent traversal, and embedded nulls.
+- The initial file service is read-only. It exposes only files registered in
+  memory and never resolves an untrusted guest path against the host file
+  system.
+- Read, positioned-read, seek, close, and size operations use typed handles and
+  checked offsets.
 
 KajPS5 implements these behaviors in its own C++ interfaces. It does not copy
 the upstream host-thread executor, continuation system, object ownership

@@ -11,6 +11,7 @@ enum class KernelStatus {
   kNotFound,
   kBusy,
   kWouldBlock,
+  kPermissionDenied,
   kNoResources,
 };
 

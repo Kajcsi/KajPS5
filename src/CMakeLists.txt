@@ -3,6 +3,7 @@ add_library(kajps5_core STATIC
   core/project_info.cpp
   kernel/clock.cpp
   kernel/event_flag.cpp
+  kernel/file.cpp
   kernel/guest_scheduler.cpp
   kernel/handle_table.cpp
   kernel/semaphore.cpp

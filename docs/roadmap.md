@@ -23,6 +23,7 @@
       tests.
 - [x] Add checked semaphore counts and scheduler wait integration.
 - [x] Add portable realtime, monotonic, and process-clock conversions.
+- [x] Add checked guest paths and memory-backed read-only files.
 - Run a public guest test program.
 - Add thread, event, file, and time tests.
 - Compare focused traces with the two upstream projects.

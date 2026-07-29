@@ -28,6 +28,8 @@ execution and continuation-based blocked-call resumption are not implemented.
 Event and semaphore waits use an explicit block, wake, and recheck contract.
 The kernel clock uses portable host clocks and keeps its process counter and
 frequency consistent.
+The file foundation normalizes guest paths and reads registered memory-backed
+files. It does not expose the host file system.
 
 The tests build a small ELF image in memory. The repository does not contain a
 game, firmware, system module, or encrypted executable. Guest execution and
