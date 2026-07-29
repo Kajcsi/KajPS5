@@ -82,7 +82,7 @@ int main() {
   ExportRegistry registry;
   Check(kajps5::hle::RegisterKernelClockExports(registry, clock) ==
             ExportRegistryStatus::kOk &&
-            registry.size() == 4,
+            registry.size() == 5,
         "kernel clock exports did not register atomically");
 
   GuestMemory memory(0x1000, 32);
@@ -112,6 +112,29 @@ int main() {
             ReadSigned64(timespec, 0) == 1'725'000'123 &&
             ReadSigned64(timespec, 8) == 456'789'000,
         "realtime clock-gettime export wrote the wrong value");
+
+  HleCallContext timeval_context(memory);
+  Check(timeval_context.SetRegister(kajps5::hle::HleRegister::kRdi, 0x1010),
+        "gettimeofday argument setup failed");
+  const auto timeval_result = registry.Dispatch(
+      kajps5::hle::kKernelGettimeofdayName, libraries, timeval_context);
+  std::array<std::byte, 16> timeval{};
+  Check(timeval_result && memory.Read(0x1010, timeval) &&
+            ReadSigned64(timeval, 0) == 1'725'000'123 &&
+            ReadSigned64(timeval, 8) == 456'789,
+        "gettimeofday export wrote the wrong value");
+
+  HleCallContext null_timeval_context(memory);
+  const auto null_timeval = registry.Dispatch(
+      kajps5::hle::kKernelGettimeofdayName, libraries,
+      null_timeval_context);
+  Check(null_timeval &&
+            null_timeval_context
+                    .GetRegister(kajps5::hle::HleRegister::kRax)
+                    .value_or(0) ==
+                static_cast<std::uint64_t>(static_cast<std::int64_t>(
+                    kajps5::hle::kKernelHleErrorFault)),
+        "null timeval returned the wrong kernel result");
 
   HleCallContext invalid_clock_context(memory);
   Check(invalid_clock_context.SetRegister(kajps5::hle::HleRegister::kRdi, 99) &&
@@ -174,7 +197,7 @@ int main() {
 
   Check(kajps5::hle::RegisterKernelClockExports(registry, clock) ==
             ExportRegistryStatus::kAlreadyExists &&
-            registry.size() == 4,
+            registry.size() == 5,
         "duplicate clock export batch changed the registry");
   const std::vector<std::string> wrong_library = {"libkernel"};
   Check(registry

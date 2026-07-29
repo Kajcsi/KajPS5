@@ -53,3 +53,5 @@ timespec in one checked operation. A bad guest range leaves memory unchanged.
 Guest-visible `EFAULT` and `EINVAL` values follow the pinned KytyPS5 kernel
 contract. SharpEmu's corresponding Gen5 values are documented as synthetic,
 so KajPS5 does not use them as the kernel ABI.
+`sceKernelGettimeofday` uses the same whole-range write for its seconds and
+microseconds fields.

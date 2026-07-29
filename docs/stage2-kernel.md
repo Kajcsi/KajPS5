@@ -63,6 +63,8 @@ The focused tests record these shared behaviors:
   counter, and its one-gigahertz frequency through `libKernel`.
 - The clock-gettime HLE handler writes both timespec fields atomically and
   returns kernel-compatible `EFAULT` or `EINVAL` results.
+- The gettimeofday HLE handler writes both timeval fields through the same
+  checked boundary.
 - Clock conversion tests use an injected source and do not depend on host time.
 - Guest paths use forward slashes, collapse empty and current-directory
   components, and reject relative paths, parent traversal, and embedded nulls.

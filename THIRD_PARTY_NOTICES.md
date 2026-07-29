@@ -60,9 +60,9 @@ The process-time handlers in `src/hle/kernel_clock_exports.cpp` and
 counter, and frequency behavior from the pinned KytyPS5
 `src/kernel/pthread.cpp` and SharpEmu
 `src/SharpEmu.Libs/Kernel/KernelRuntimeCompatExports.cs`. No clock export
-source code was copied. The clock-gettime handler uses KytyPS5's
-kernel-compatible `EFAULT` and `EINVAL` values. SharpEmu marks its differing
-Gen5 error values as synthetic.
+source code was copied. The clock-gettime and gettimeofday handlers use
+KytyPS5's kernel-compatible `EFAULT` and `EINVAL` values. SharpEmu marks its
+differing Gen5 error values as synthetic.
 The SharpEmu reference files state:
 
 `Copyright (C) 2026 SharpEmu Emulator Project`

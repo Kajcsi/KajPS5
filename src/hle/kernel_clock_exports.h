@@ -11,6 +11,7 @@ namespace kajps5::hle {
 
 inline constexpr auto kLibKernelName = "libKernel";
 inline constexpr auto kKernelClockGettimeName = "sceKernelClockGettime";
+inline constexpr auto kKernelGettimeofdayName = "sceKernelGettimeofday";
 inline constexpr auto kKernelGetProcessTimeName = "sceKernelGetProcessTime";
 inline constexpr auto kKernelGetProcessTimeCounterName =
     "sceKernelGetProcessTimeCounter";

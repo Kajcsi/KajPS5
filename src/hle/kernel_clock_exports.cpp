@@ -55,17 +55,42 @@ HleContextStatus ClockGettime(HleCallContext& context,
   return HleContextStatus::kOk;
 }
 
+HleContextStatus Gettimeofday(HleCallContext& context,
+                              kernel::KernelClockService& clock) {
+  const auto destination = context.Argument(0).value_or(0);
+  if (destination == 0) {
+    SetKernelResult(context, kKernelHleErrorFault);
+    return HleContextStatus::kOk;
+  }
+
+  const auto time = clock.Gettimeofday();
+  std::array<std::byte, 16> bytes{};
+  Write64(bytes, 0, time.seconds);
+  Write64(bytes, 8, time.microseconds);
+  if (context.WriteMemory(destination, bytes) != HleContextStatus::kOk) {
+    SetKernelResult(context, kKernelHleErrorFault);
+    return HleContextStatus::kOk;
+  }
+  SetKernelResult(context, 0);
+  return HleContextStatus::kOk;
+}
+
 }  // namespace
 
 ExportRegistryStatus RegisterKernelClockExports(
     ExportRegistry& registry, kernel::KernelClockService& clock) {
   auto* const clock_view = &clock;
   std::vector<HleExportDefinition> exports;
-  exports.reserve(4);
+  exports.reserve(5);
   exports.push_back(
       {kLibKernelName, kKernelClockGettimeName,
        [clock_view](HleCallContext& context) {
          return ClockGettime(context, *clock_view);
+       }});
+  exports.push_back(
+      {kLibKernelName, kKernelGettimeofdayName,
+       [clock_view](HleCallContext& context) {
+         return Gettimeofday(context, *clock_view);
        }});
   exports.push_back(
       {kLibKernelName, kKernelGetProcessTimeName,
