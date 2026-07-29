@@ -80,6 +80,14 @@ The SharpEmu reference files state:
 
 No upstream import resolver or stub source code was copied.
 
+The non-blocking semaphore handlers in
+`src/hle/kernel_semaphore_exports.cpp` and
+`tests/hle_kernel_semaphore_exports_test.cpp` use focused behavior observations
+from KytyPS5 `src/kernel/semaphore.cpp` and SharpEmu
+`src/SharpEmu.Libs/Kernel/KernelSemaphoreCompatExports.cs` at the pinned
+commits. They use the NIDs confirmed by both references and KytyPS5's
+kernel-compatible semaphore errors. No semaphore source code was copied.
+
 Add an entry here when a later change imports or adapts code. Each entry must
 state the project, commit, source path, destination path, copyright notice, and
 license.

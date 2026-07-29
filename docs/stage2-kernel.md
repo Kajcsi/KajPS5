@@ -87,6 +87,10 @@ The focused tests record these shared behaviors:
   runtime. A registration conflict leaves the destination registry unchanged.
 - The reachability handler checks only the registered guest namespace. Missing,
   invalid, and unreadable paths return distinct kernel-compatible results.
+- Non-blocking semaphore HLE handlers create, delete, poll, and signal the same
+  typed objects used by the scheduler. Handle output uses an atomic checked
+  64-bit guest write. Wait export dispatch is deferred until blocked guest
+  continuations can resume.
 
 KajPS5 implements these behaviors in its own C++ interfaces. It does not copy
 the upstream host-thread executor, continuation system, object ownership
