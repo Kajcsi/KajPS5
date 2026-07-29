@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -15,6 +16,8 @@ enum class GuestMemoryProtection : std::uint8_t {
   kRead = 1U << 0U,
   kWrite = 1U << 1U,
   kExecute = 1U << 2U,
+  kGpuRead = 0x10,
+  kGpuWrite = 0x20,
 };
 
 [[nodiscard]] constexpr GuestMemoryProtection operator|(
@@ -56,6 +59,8 @@ class GuestMemory final {
       GuestMemoryProtection required_protection) const noexcept;
   [[nodiscard]] bool CanExecute(std::uint64_t address,
                                 std::uint64_t length) const noexcept;
+  [[nodiscard]] std::optional<GuestMemoryRegion> QueryRegion(
+      std::uint64_t address) const noexcept;
   [[nodiscard]] std::span<const GuestMemoryRegion> regions() const noexcept;
 
   [[nodiscard]] bool Read(std::uint64_t address,

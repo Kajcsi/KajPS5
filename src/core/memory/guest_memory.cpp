@@ -14,7 +14,9 @@ namespace {
 constexpr std::uint8_t kAllProtectionBits =
     static_cast<std::uint8_t>(GuestMemoryProtection::kRead) |
     static_cast<std::uint8_t>(GuestMemoryProtection::kWrite) |
-    static_cast<std::uint8_t>(GuestMemoryProtection::kExecute);
+    static_cast<std::uint8_t>(GuestMemoryProtection::kExecute) |
+    static_cast<std::uint8_t>(GuestMemoryProtection::kGpuRead) |
+    static_cast<std::uint8_t>(GuestMemoryProtection::kGpuWrite);
 
 bool IsValidProtection(GuestMemoryProtection protection) noexcept {
   return (static_cast<std::uint8_t>(protection) & ~kAllProtectionBits) == 0;
@@ -223,6 +225,14 @@ bool GuestMemory::CanAccess(
 bool GuestMemory::CanExecute(std::uint64_t address,
                              std::uint64_t length) const noexcept {
   return CanAccess(address, length, GuestMemoryProtection::kExecute);
+}
+
+std::optional<GuestMemoryRegion> GuestMemory::QueryRegion(
+    std::uint64_t address) const noexcept {
+  const auto index = FindContainingRegion(address);
+  return index == regions_.size()
+             ? std::nullopt
+             : std::optional<GuestMemoryRegion>(regions_[index]);
 }
 
 std::span<const GuestMemoryRegion> GuestMemory::regions() const noexcept {

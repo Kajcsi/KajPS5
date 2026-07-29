@@ -53,7 +53,7 @@ int main() {
   ExportRegistry registry;
   Check(kajps5::hle::RegisterKernelMemoryExports(registry) ==
             ExportRegistryStatus::kOk &&
-            registry.size() == 10,
+            registry.size() == 12,
         "memory exports did not register atomically");
 
   HleCallContext page_size_context(memory);
@@ -94,6 +94,46 @@ int main() {
             !memory.CanAccess(0x8000, 1, GuestMemoryProtection::kWrite) &&
             !memory.CanExecute(0x8000, 1),
         "GPU-only protection granted guest CPU access");
+
+  HleCallContext query_context(memory);
+  Check(query_context.SetRegister(HleRegister::kRdi, 0x8001) &&
+            query_context.SetRegister(HleRegister::kRsi, 0xf000) &&
+            query_context.SetRegister(HleRegister::kRdx, 0xf008) &&
+            query_context.SetRegister(HleRegister::kRcx, 0xf010),
+        "memory protection query setup failed");
+  std::uint64_t query_start = 0;
+  std::uint64_t query_end = 0;
+  std::uint32_t query_protection = 0;
+  Check(Dispatch(registry,
+                 kajps5::hle::kKernelQueryMemoryProtectionNid,
+                 query_context) == 0 &&
+            query_context.ReadUInt64(0xf000, query_start) ==
+                kajps5::hle::HleContextStatus::kOk &&
+            query_context.ReadUInt64(0xf008, query_end) ==
+                kajps5::hle::HleContextStatus::kOk &&
+            query_context.ReadUInt32(0xf010, query_protection) ==
+                kajps5::hle::HleContextStatus::kOk &&
+            query_start == 0x8000 && query_end == 0xc000 &&
+            query_protection == kajps5::hle::kKernelProtectionGpuRead,
+        "memory protection query did not round-trip GPU metadata");
+
+  HleCallContext fault_query_context(memory);
+  constexpr std::uint64_t kQuerySentinel = 0x1122334455667788;
+  Check(fault_query_context.WriteUInt64(0xf020, kQuerySentinel) ==
+            kajps5::hle::HleContextStatus::kOk &&
+            fault_query_context.SetRegister(HleRegister::kRdi, 0x8000) &&
+            fault_query_context.SetRegister(HleRegister::kRsi, 0xf020) &&
+            fault_query_context.SetRegister(HleRegister::kRdx, 0x20000),
+        "faulting memory query setup failed");
+  query_start = 0;
+  Check(Dispatch(registry,
+                 kajps5::hle::kKernelQueryMemoryProtectionName,
+                 fault_query_context) ==
+                KernelResult(kajps5::hle::kKernelHleErrorFault) &&
+            fault_query_context.ReadUInt64(0xf020, query_start) ==
+                kajps5::hle::HleContextStatus::kOk &&
+            query_start == kQuerySentinel,
+        "faulting memory query changed an earlier output");
 
   HleCallContext execute_context(memory);
   Check(execute_context.SetRegister(HleRegister::kRdi, 0xc001) &&
@@ -164,6 +204,14 @@ int main() {
                  unmap_context) == 0 &&
             !memory.IsMapped(0x8000, 1),
         "NID munmap did not release the page");
+  HleCallContext missing_query_context(memory);
+  Check(missing_query_context.SetRegister(HleRegister::kRdi, 0x8000),
+        "missing memory query setup failed");
+  Check(Dispatch(registry,
+                 kajps5::hle::kKernelQueryMemoryProtectionName,
+                 missing_query_context) ==
+            KernelResult(kajps5::hle::kKernelHleErrorPermissionDenied),
+        "unmapped memory query returned the wrong result");
   HleCallContext gap_context(memory);
   Check(gap_context.SetRegister(HleRegister::kRdi, 0x7000) &&
             gap_context.SetRegister(HleRegister::kRsi, 0x2000),
@@ -191,7 +239,7 @@ int main() {
 
   Check(kajps5::hle::RegisterKernelMemoryExports(registry) ==
             ExportRegistryStatus::kAlreadyExists &&
-            registry.size() == 10,
+            registry.size() == 12,
         "duplicate memory export batch changed the registry");
   return failures == 0 ? 0 : 1;
 }

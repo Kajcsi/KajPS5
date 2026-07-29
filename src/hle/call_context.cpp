@@ -160,6 +160,11 @@ bool HleCallContext::UnmapMemory(std::uint64_t address,
   return memory_.Unmap(address, length);
 }
 
+std::optional<memory::GuestMemoryRegion> HleCallContext::QueryMemoryRegion(
+    std::uint64_t address) const noexcept {
+  return memory_.QueryRegion(address);
+}
+
 HleStringResult HleCallContext::ReadNullTerminatedString(
     std::uint64_t address, std::size_t maximum_bytes) const {
   if (address == 0 || maximum_bytes == 0 ||

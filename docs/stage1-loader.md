@@ -54,7 +54,7 @@ The guest-memory region table supports transactional protection and unmap
 changes. A requested range must be mapped in full before its metadata changes.
 Protection changes split and merge regions into a stable canonical form.
 Unmapping clears released backing bytes, so a later mapping cannot expose old
-guest data.
+guest data. Region queries preserve separate CPU and GPU permission bits.
 
 The standard System V hash header supplies the dynamic symbol count. The
 loader checks the complete hash and symbol-table ranges, requires 24-byte

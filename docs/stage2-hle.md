@@ -62,3 +62,6 @@ ranges use the guest's 16 KiB page granularity. Unknown protection bits and
 overflowing ranges fail before any region changes. GPU-only flags do not grant
 guest CPU access. Unmap requires a fully mapped range and clears released
 backing bytes. `getpagesize` reports the same 16 KiB granularity.
+`sceKernelQueryMemoryProtection` returns the canonical start, exclusive end,
+and complete CPU/GPU protection mask. It preflights all optional outputs before
+it writes any of them.

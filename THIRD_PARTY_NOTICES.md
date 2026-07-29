@@ -41,8 +41,9 @@ The checked memory HLE handlers in `src/hle/kernel_memory_exports.cpp` and
 `tests/hle_kernel_memory_exports_test.cpp` use focused behavior observations
 from KytyPS5 `src/kernel/memory.cpp` and `src/libs/libKernel.cpp`, and SharpEmu
 `src/SharpEmu.Libs/Kernel/KernelMemoryCompatExports.cs` at the pinned commits.
-They use the 16 KiB guest page size and the `mprotect`, `munmap`, and
-`getpagesize` names and NIDs confirmed by both references. No memory-export
+They use the 16 KiB guest page size and the `mprotect`, `munmap`,
+`getpagesize`, and memory-protection query names and NIDs confirmed by both
+references. The query uses KytyPS5's exclusive range end. No memory-export
 source code was copied.
 
 The W^X native leaf-execution behavior in

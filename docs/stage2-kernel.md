@@ -100,6 +100,9 @@ The focused tests record these shared behaviors:
 - Checked memory HLE handlers expose `sceKernelMprotect`, `sceKernelMunmap`,
   and their POSIX aliases. Protection uses 16 KiB guest-page normalization.
   Invalid or partly unmapped ranges do not change the shared region table.
+- The memory-protection query returns Kyty's exclusive region end and
+  round-trips CPU and GPU permission bits through the same region table. A
+  bad optional output does not change an earlier output.
 
 KajPS5 implements these behaviors in its own C++ interfaces. It does not copy
 the upstream host-thread executor, continuation system, object ownership

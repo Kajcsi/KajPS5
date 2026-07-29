@@ -120,6 +120,12 @@ int main() {
   Check(!mapped.Map(0x201c, 4,
                     static_cast<GuestMemoryProtection>(0x80)),
         "mapping accepted unknown protection bits");
+  const auto queried_region = mapped.QueryRegion(0x2005);
+  Check(queried_region && queried_region->address == 0x2004 &&
+            queried_region->size == 8 &&
+            queried_region->protection == GuestMemoryProtection::kRead &&
+            !mapped.QueryRegion(0x200c),
+        "region query returned the wrong canonical range");
 
   const std::array mapped_input = {
       std::byte{1}, std::byte{2}, std::byte{3}, std::byte{4},

@@ -56,7 +56,18 @@ bool DecodeProtection(std::uint32_t value,
   if ((value & kKernelProtectionCpuExecute) != 0) {
     protection = protection | memory::GuestMemoryProtection::kExecute;
   }
+  if ((value & kKernelProtectionGpuRead) != 0) {
+    protection = protection | memory::GuestMemoryProtection::kGpuRead;
+  }
+  if ((value & kKernelProtectionGpuWrite) != 0) {
+    protection = protection | memory::GuestMemoryProtection::kGpuWrite;
+  }
   return true;
+}
+
+std::uint32_t EncodeProtection(
+    memory::GuestMemoryProtection protection) noexcept {
+  return static_cast<std::uint32_t>(protection);
 }
 
 HleContextStatus KernelMprotect(HleCallContext& context) {
@@ -100,11 +111,49 @@ HleContextStatus PosixGetPageSize(HleCallContext& context) {
   return HleContextStatus::kOk;
 }
 
+HleContextStatus KernelQueryMemoryProtection(HleCallContext& context) {
+  const auto address = context.Argument(0).value_or(0);
+  const auto start_address = context.Argument(1).value_or(0);
+  const auto end_address = context.Argument(2).value_or(0);
+  const auto protection_address = context.Argument(3).value_or(0);
+  if (address == 0) {
+    SetKernelResult(context, kKernelHleErrorInvalidArgument);
+    return HleContextStatus::kOk;
+  }
+  const auto region = context.QueryMemoryRegion(address);
+  if (!region) {
+    SetKernelResult(context, kKernelHleErrorPermissionDenied);
+    return HleContextStatus::kOk;
+  }
+  if ((start_address != 0 &&
+       !context.CanWriteMemory(start_address, sizeof(std::uint64_t))) ||
+      (end_address != 0 &&
+       !context.CanWriteMemory(end_address, sizeof(std::uint64_t))) ||
+      (protection_address != 0 &&
+       !context.CanWriteMemory(protection_address, sizeof(std::uint32_t)))) {
+    SetKernelResult(context, kKernelHleErrorFault);
+    return HleContextStatus::kOk;
+  }
+  const auto write_failed =
+      (start_address != 0 &&
+       context.WriteUInt64(start_address, region->address) !=
+           HleContextStatus::kOk) ||
+      (end_address != 0 &&
+       context.WriteUInt64(end_address, region->address + region->size) !=
+           HleContextStatus::kOk) ||
+      (protection_address != 0 &&
+       context.WriteUInt32(protection_address,
+                           EncodeProtection(region->protection)) !=
+           HleContextStatus::kOk);
+  SetKernelResult(context, write_failed ? kKernelHleErrorFault : 0);
+  return HleContextStatus::kOk;
+}
+
 }  // namespace
 
 std::vector<HleExportDefinition> detail::MakeKernelMemoryExports() {
   std::vector<HleExportDefinition> exports;
-  exports.reserve(10);
+  exports.reserve(12);
   exports.push_back({kLibKernelName, kKernelMprotectName, KernelMprotect});
   exports.push_back({kLibKernelName, kKernelMprotectNid, KernelMprotect});
   exports.push_back({kLibKernelName, kPosixMprotectName, KernelMprotect});
@@ -117,6 +166,10 @@ std::vector<HleExportDefinition> detail::MakeKernelMemoryExports() {
       {kLibKernelName, kPosixGetPageSizeName, PosixGetPageSize});
   exports.push_back(
       {kLibKernelName, kPosixGetPageSizeNid, PosixGetPageSize});
+  exports.push_back({kLibKernelName, kKernelQueryMemoryProtectionName,
+                     KernelQueryMemoryProtection});
+  exports.push_back({kLibKernelName, kKernelQueryMemoryProtectionNid,
+                     KernelQueryMemoryProtection});
   return exports;
 }
 

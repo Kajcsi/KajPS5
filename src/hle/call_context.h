@@ -85,6 +85,8 @@ class HleCallContext final {
       memory::GuestMemoryProtection protection);
   [[nodiscard]] bool UnmapMemory(std::uint64_t address,
                                  std::uint64_t length);
+  [[nodiscard]] std::optional<memory::GuestMemoryRegion> QueryMemoryRegion(
+      std::uint64_t address) const noexcept;
   [[nodiscard]] HleStringResult ReadNullTerminatedString(
       std::uint64_t address, std::size_t maximum_bytes) const;
 

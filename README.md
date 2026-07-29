@@ -67,7 +67,8 @@ One atomic default registration binds all current clock, event-flag, file,
 memory, and semaphore handlers to the same kernel runtime and guest call
 context. Checked `mprotect` and `munmap` handlers use the same guest-memory
 region table and support their POSIX aliases. `getpagesize` reports the same
-16 KiB granularity. The non-blocking event-flag set
+16 KiB granularity. A checked protection query returns the canonical region
+and preserves CPU and GPU permission bits. The non-blocking event-flag set
 supports create, delete, set, clear, and poll. The non-blocking semaphore set
 supports create, delete, poll, and signal. Event-flag and semaphore waits
 remain in the kernel services until guest continuation resumption is

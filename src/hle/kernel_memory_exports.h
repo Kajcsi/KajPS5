@@ -22,6 +22,9 @@ inline constexpr auto kPosixMunmapName = "munmap";
 inline constexpr auto kPosixMunmapNid = "UqDGjXA5yUM";
 inline constexpr auto kPosixGetPageSizeName = "getpagesize";
 inline constexpr auto kPosixGetPageSizeNid = "k+AXqu2-eBc";
+inline constexpr auto kKernelQueryMemoryProtectionName =
+    "sceKernelQueryMemoryProtection";
+inline constexpr auto kKernelQueryMemoryProtectionNid = "WFcfL2lzido";
 inline constexpr std::uint64_t kKernelMemoryPageSize = 0x4000;
 inline constexpr std::uint32_t kKernelProtectionCpuRead = 0x01;
 inline constexpr std::uint32_t kKernelProtectionCpuWrite = 0x02;
