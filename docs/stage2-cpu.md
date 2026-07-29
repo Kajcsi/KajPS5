@@ -1,10 +1,11 @@
 # Stage 2 CPU research
 
-KajPS5 has one narrow native x86-64 execution test. It loads a public ELF made
-from constants, copies its six-byte leaf entry from checked guest memory into a
-writable host allocation, changes the allocation to read-execute, and calls
-it. The leaf returns 42 and does not use arguments, memory, imports, system
-calls, or threads.
+KajPS5 has two narrow native x86-64 execution tests. The first loads a public
+ELF made from constants, copies its six-byte leaf entry from checked guest
+memory into a writable host allocation, changes the allocation to read-execute,
+and calls it. The leaf returns 42 and does not use arguments, memory, imports,
+system calls, or threads. The second test-only fixture calls one no-argument
+HLE handler through a checked import and is documented in `stage2-hle.md`.
 
 The design review used these pinned references:
 

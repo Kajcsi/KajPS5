@@ -35,8 +35,9 @@ symbol names.
 One checked HLE registry resolves symbols by ordered library name and rejects
 ambiguous unscoped lookups. Checked import linking writes resolved
 `GLOB_DAT` and `JUMP_SLOT` targets and reports each unresolved symbol. It does
-not generate general callable stubs yet. A test-only redistributable ELF
-fixture calls one no-argument HLE handler through a linked `JUMP_SLOT`.
+not generate general callable stubs yet. Bounded relocation traces hex-encode
+at most 128 bytes from each untrusted symbol name. A test-only redistributable
+ELF fixture calls one no-argument HLE handler through a linked `JUMP_SLOT`.
 The kernel foundation has typed handles and deterministic event-flag polling.
 One cooperative scheduler owns guest thread state and
 deterministic ready, block, wake, yield, and exit transitions. A test-only

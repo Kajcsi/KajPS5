@@ -88,6 +88,14 @@ int main() {
             .unresolved_import_count == 2,
         "import lookup escaped needed-library scope");
 
+  GuestMemory biased_memory(0x2000, 16);
+  const auto biased =
+      ApplyRelocations(metadata, biased_memory, empty_registry, 0x1000);
+  Check(biased && biased.unresolved_imports.size() == 2 &&
+            biased.unresolved_imports[0].target_address == 0x2000 &&
+            biased.unresolved_imports[1].target_address == 0x2008,
+        "unresolved import targets did not include the load bias");
+
   auto invalid_symbol = metadata;
   invalid_symbol.dynamic_info.relocations[0].info =
       (std::uint64_t{2} << 32U) | 6U;

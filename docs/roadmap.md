@@ -32,6 +32,7 @@
 - [x] Add deterministic thread-exit joins.
 - [x] Add deterministic library-scoped HLE import lookup.
 - [x] Connect checked import lookup to standard relocation targets.
+- [x] Add bounded stable diagnostics for unresolved imports.
 - [x] Run a public no-import guest leaf test program.
 - [x] Run a public guest program through checked HLE imports.
 - Add thread, event, file, and time tests.

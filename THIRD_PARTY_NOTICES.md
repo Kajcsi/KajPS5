@@ -45,6 +45,9 @@ The library-scoped HLE import lookup and checked relocation connection in
 the pinned KytyPS5 and SharpEmu import resolvers. The test-only HLE call path in
 `tests/hle_public_guest_test.cpp` also uses focused observations of import
 thunks and dispatch in those pinned projects. No thunk source code was copied.
+The bounded trace in `src/loader/relocation_trace.cpp` and
+`tests/relocation_trace_test.cpp` adapts SharpEmu's focus on structured,
+bounded import diagnostics. No diagnostic source code was copied.
 The SharpEmu reference files state:
 
 `Copyright (C) 2026 SharpEmu Emulator Project`

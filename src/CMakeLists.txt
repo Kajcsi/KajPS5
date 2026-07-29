@@ -11,6 +11,7 @@ add_library(kajps5_core STATIC
   kernel/semaphore.cpp
   loader/elf.cpp
   loader/elf_trace.cpp
+  loader/relocation_trace.cpp
   loader/relocator.cpp
 )
 

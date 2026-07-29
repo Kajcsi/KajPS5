@@ -32,64 +32,19 @@ RelocationStatus PlanTable(const std::vector<ElfRelaEntry>& entries,
                            std::size_t& resolved_import_count,
                            std::vector<UnresolvedImport>& unresolved_imports) {
   for (const auto& entry : entries) {
-    switch (entry.type()) {
+    const auto type = entry.type();
+    switch (type) {
       case kRelocationNone: continue;
       case kRelocationGlobDat:
-      case kRelocationJumpSlot: {
-        if (resolver == nullptr) {
-          UnresolvedImport unresolved;
-          unresolved.symbol_index = entry.symbol();
-          unresolved.relocation_type = entry.type();
-          unresolved.target_address = entry.offset;
-          if (entry.symbol() < metadata.dynamic_info.symbols.size()) {
-            unresolved.symbol =
-                metadata.dynamic_info.symbols[entry.symbol()].name;
-          }
-          unresolved_imports.push_back(std::move(unresolved));
-          continue;
+      case kRelocationJumpSlot: break;
+      case kRelocationRelative:
+        if (entry.symbol() != 0) {
+          return RelocationStatus::kInvalidRelativeSymbol;
         }
-        if (entry.symbol() >= metadata.dynamic_info.symbols.size()) {
-          return RelocationStatus::kInvalidSymbolIndex;
-        }
-        const auto& symbol = metadata.dynamic_info.symbols[entry.symbol()];
-        if (symbol.name.empty()) {
-          return RelocationStatus::kEmptyImportSymbol;
-        }
-        const auto resolved = resolver->ResolveImport(
-            symbol.name, metadata.dynamic_info.needed_libraries);
-        if (!resolved.has_value()) {
-          unresolved_imports.push_back({entry.symbol(), entry.type(),
-                                        entry.offset, symbol.name});
-          continue;
-        }
-        if (*resolved == 0) {
-          return RelocationStatus::kInvalidResolvedAddress;
-        }
-        if (entry.offset >
-            std::numeric_limits<std::uint64_t>::max() - load_bias) {
-          return RelocationStatus::kTargetAddressOverflow;
-        }
-        const auto target = load_bias + entry.offset;
-        if (!memory.IsMapped(target, sizeof(std::uint64_t))) {
-          return RelocationStatus::kTargetNotMapped;
-        }
-        PlannedRelocation relocation;
-        relocation.address = target;
-        for (std::size_t index = 0; index < relocation.value.size(); ++index) {
-          relocation.value[index] =
-              static_cast<std::byte>((*resolved >> (index * 8U)) & 0xffU);
-        }
-        planned.push_back(relocation);
-        ++resolved_import_count;
-        continue;
-      }
-      case kRelocationRelative: break;
+        break;
       default: return RelocationStatus::kUnsupportedRelocation;
     }
 
-    if (entry.symbol() != 0) {
-      return RelocationStatus::kInvalidRelativeSymbol;
-    }
     if (entry.offset >
         std::numeric_limits<std::uint64_t>::max() - load_bias) {
       return RelocationStatus::kTargetAddressOverflow;
@@ -97,6 +52,47 @@ RelocationStatus PlanTable(const std::vector<ElfRelaEntry>& entries,
     const auto target = load_bias + entry.offset;
     if (!memory.IsMapped(target, sizeof(std::uint64_t))) {
       return RelocationStatus::kTargetNotMapped;
+    }
+
+    if (type == kRelocationGlobDat || type == kRelocationJumpSlot) {
+      if (resolver == nullptr) {
+        UnresolvedImport unresolved;
+        unresolved.symbol_index = entry.symbol();
+        unresolved.relocation_type = type;
+        unresolved.target_address = target;
+        if (entry.symbol() < metadata.dynamic_info.symbols.size()) {
+          unresolved.symbol =
+              metadata.dynamic_info.symbols[entry.symbol()].name;
+        }
+        unresolved_imports.push_back(std::move(unresolved));
+        continue;
+      }
+      if (entry.symbol() >= metadata.dynamic_info.symbols.size()) {
+        return RelocationStatus::kInvalidSymbolIndex;
+      }
+      const auto& symbol = metadata.dynamic_info.symbols[entry.symbol()];
+      if (symbol.name.empty()) {
+        return RelocationStatus::kEmptyImportSymbol;
+      }
+      const auto resolved = resolver->ResolveImport(
+          symbol.name, metadata.dynamic_info.needed_libraries);
+      if (!resolved.has_value()) {
+        unresolved_imports.push_back(
+            {entry.symbol(), type, target, symbol.name});
+        continue;
+      }
+      if (*resolved == 0) {
+        return RelocationStatus::kInvalidResolvedAddress;
+      }
+      PlannedRelocation relocation;
+      relocation.address = target;
+      for (std::size_t index = 0; index < relocation.value.size(); ++index) {
+        relocation.value[index] =
+            static_cast<std::byte>((*resolved >> (index * 8U)) & 0xffU);
+      }
+      planned.push_back(relocation);
+      ++resolved_import_count;
+      continue;
     }
 
     PlannedRelocation relocation;

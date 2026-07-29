@@ -40,6 +40,10 @@ The relocation pass validates every entry before it changes memory. It applies
 `R_X86_64_RELATIVE`, ignores no-operation entries, and counts unresolved
 `R_X86_64_GLOB_DAT` and `R_X86_64_JUMP_SLOT` imports. Other relocation types,
 invalid relative symbols, target overflow, and unmapped writes fail.
+The HLE boundary can resolve checked `GLOB_DAT` and `JUMP_SLOT` imports by
+ordered needed-library name. Its stable relocation trace hex-encodes untrusted
+symbol names, limits each name to 128 input bytes, and limits detailed records
+to 32 entries.
 
 The standard System V hash header supplies the dynamic symbol count. The
 loader checks the complete hash and symbol-table ranges, requires 24-byte
@@ -47,8 +51,8 @@ x86-64 symbols, and resolves each name inside the checked dynamic string table.
 ELFs that use only another hash format remain loadable, but their symbols are
 not indexed yet.
 
-This milestone does not resolve symbols or imports, interpret PS5-specific
-dynamic tags, or parse SELF containers. The separate controlled leaf test is
-documented in `stage2-cpu.md`.
+This milestone does not interpret PS5-specific dynamic tags or parse SELF
+containers. The separate controlled native tests are documented in
+`stage2-cpu.md` and `stage2-hle.md`.
 
 See `public-elf-validation.md` for the external PS5 homebrew ELF check.
