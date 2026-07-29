@@ -73,6 +73,8 @@ The focused tests record these shared behaviors:
   system.
 - Read, positioned-read, seek, close, and size operations use typed handles and
   checked offsets.
+- The first file HLE bridge reads a bounded guest path, maps service failures to
+  kernel-compatible results, and registers open and close by name and NID.
 
 KajPS5 implements these behaviors in its own C++ interfaces. It does not copy
 the upstream host-thread executor, continuation system, object ownership
