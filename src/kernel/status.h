@@ -10,6 +10,7 @@ enum class KernelStatus {
   kInvalidArgument,
   kNotFound,
   kBusy,
+  kWouldBlock,
   kNoResources,
 };
 

@@ -16,6 +16,8 @@
 
 namespace kajps5::kernel {
 
+class GuestScheduler;
+
 inline constexpr std::size_t kMaximumEventFlagNameLength = 31;
 
 inline constexpr std::uint32_t kEventFlagThreadFifo = 0x01;
@@ -86,7 +88,7 @@ struct EventFlagPollResult {
 
 class EventFlagService final {
 public:
-  explicit EventFlagService(HandleTable &handles) noexcept;
+  EventFlagService(HandleTable &handles, GuestScheduler &scheduler) noexcept;
 
   EventFlagService(const EventFlagService &) = delete;
   EventFlagService &operator=(const EventFlagService &) = delete;
@@ -98,6 +100,8 @@ public:
   [[nodiscard]] KernelStatus Set(KernelHandle handle, std::uint64_t pattern);
   [[nodiscard]] KernelStatus Clear(KernelHandle handle, std::uint64_t mask);
   [[nodiscard]] EventFlagPollResult
+  Wait(KernelHandle handle, std::uint64_t pattern, std::uint32_t wait_mode);
+  [[nodiscard]] EventFlagPollResult
   Poll(KernelHandle handle, std::uint64_t pattern, std::uint32_t wait_mode);
 
 private:
@@ -107,8 +111,12 @@ private:
   DecodeWaitMode(std::uint32_t wait_mode, EventFlagWaitCondition &condition,
                  EventFlagClearMode &clear_mode) noexcept;
   [[nodiscard]] std::shared_ptr<EventFlag> Find(KernelHandle handle) const;
+  [[nodiscard]] static std::string MakeWaitKey(KernelHandle handle);
 
   HandleTable &handles_;
+  GuestScheduler &scheduler_;
+  // Prevent a set or delete from occurring between a wait check and block.
+  std::mutex wait_mutex_;
 };
 
 } // namespace kajps5::kernel

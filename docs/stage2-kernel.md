@@ -28,7 +28,14 @@ The focused tests record these shared behaviors:
   the ready queue in handle order.
 - Yielding requeues the current thread. Exiting preserves its result for
   snapshots.
+- An unsatisfied event wait blocks the current thread on that event handle.
+- Setting or deleting an event wakes its blocked threads in handle order.
+- A woken thread rechecks its wait condition before it continues. This permits
+  deterministic spurious wakes when a set operation does not satisfy it.
 
 KajPS5 implements these behaviors in its own C++ interfaces. It does not copy
 the upstream host-thread executor, continuation system, object ownership
 model, or source code.
+
+The event-wait bridge does not resume a saved guest continuation. The caller
+must invoke the wait again after the scheduler selects the woken thread.

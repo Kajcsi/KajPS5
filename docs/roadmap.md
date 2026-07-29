@@ -19,6 +19,8 @@
 - [x] Add typed kernel handles and deterministic event-flag polling.
 - [x] Add one deterministic scheduler for ready, running, blocked, and exited
       guest thread states.
+- [x] Connect event-flag waits to the shared scheduler with wake and recheck
+      tests.
 - Run a public guest test program.
 - Add thread, event, file, and time tests.
 - Compare focused traces with the two upstream projects.

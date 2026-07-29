@@ -5,9 +5,9 @@ both projects as research references. See `docs/stage1-loader.md` and
 `docs/stage2-kernel.md` for the reviewed files and pinned commits.
 
 The event-flag and scheduler behavior in `src/kernel/`,
-`tests/kernel_event_flag_test.cpp`, and `tests/kernel_scheduler_test.cpp` was
-implemented from focused observations of KytyPS5 and SharpEmu. The SharpEmu
-reference files state:
+`tests/kernel_event_flag_test.cpp`, `tests/kernel_event_wait_test.cpp`, and
+`tests/kernel_scheduler_test.cpp` was implemented from focused observations of
+KytyPS5 and SharpEmu. The SharpEmu reference files state:
 
 `Copyright (C) 2026 SharpEmu Emulator Project`
 

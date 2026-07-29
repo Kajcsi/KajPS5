@@ -4,7 +4,10 @@
 
 #include "kernel/event_flag.h"
 
+#include <charconv>
 #include <utility>
+
+#include "kernel/guest_scheduler.h"
 
 namespace kajps5::kernel {
 
@@ -59,8 +62,9 @@ EventFlagStateResult EventFlag::Poll(std::uint64_t pattern,
   return result;
 }
 
-EventFlagService::EventFlagService(HandleTable &handles) noexcept
-    : handles_(handles) {}
+EventFlagService::EventFlagService(HandleTable &handles,
+                                   GuestScheduler &scheduler) noexcept
+    : handles_(handles), scheduler_(scheduler) {}
 
 EventFlagCreateResult EventFlagService::Create(std::string name,
                                                std::uint32_t attributes,
@@ -80,17 +84,22 @@ EventFlagCreateResult EventFlagService::Create(std::string name,
 }
 
 KernelStatus EventFlagService::Delete(KernelHandle handle) {
-  return handles_.Remove(handle, KernelObjectType::kEventFlag)
-             ? KernelStatus::kOk
-             : KernelStatus::kNotFound;
+  std::lock_guard wait_lock(wait_mutex_);
+  if (!handles_.Remove(handle, KernelObjectType::kEventFlag)) {
+    return KernelStatus::kNotFound;
+  }
+  (void)scheduler_.WakeBlockedThreads(MakeWaitKey(handle));
+  return KernelStatus::kOk;
 }
 
 KernelStatus EventFlagService::Set(KernelHandle handle, std::uint64_t pattern) {
+  std::lock_guard wait_lock(wait_mutex_);
   const auto event_flag = Find(handle);
   if (!event_flag) {
     return KernelStatus::kNotFound;
   }
   event_flag->Set(pattern);
+  (void)scheduler_.WakeBlockedThreads(MakeWaitKey(handle));
   return KernelStatus::kOk;
 }
 
@@ -101,6 +110,20 @@ KernelStatus EventFlagService::Clear(KernelHandle handle, std::uint64_t mask) {
   }
   event_flag->Clear(mask);
   return KernelStatus::kOk;
+}
+
+EventFlagPollResult EventFlagService::Wait(KernelHandle handle,
+                                           std::uint64_t pattern,
+                                           std::uint32_t wait_mode) {
+  std::lock_guard wait_lock(wait_mutex_);
+  const auto result = Poll(handle, pattern, wait_mode);
+  if (result.status != KernelStatus::kBusy) {
+    return result;
+  }
+  if (!scheduler_.BlockCurrent(MakeWaitKey(handle))) {
+    return result;
+  }
+  return {KernelStatus::kWouldBlock, result.observed_pattern};
 }
 
 EventFlagPollResult EventFlagService::Poll(KernelHandle handle,
@@ -167,6 +190,14 @@ bool EventFlagService::DecodeWaitMode(std::uint32_t wait_mode,
 std::shared_ptr<EventFlag> EventFlagService::Find(KernelHandle handle) const {
   return std::static_pointer_cast<EventFlag>(
       handles_.Find(handle, KernelObjectType::kEventFlag));
+}
+
+std::string EventFlagService::MakeWaitKey(KernelHandle handle) {
+  char digits[20]{};
+  const auto converted =
+      std::to_chars(digits, digits + sizeof(digits), handle, 16);
+  return "event_flag:" +
+         std::string(digits, static_cast<std::size_t>(converted.ptr - digits));
 }
 
 } // namespace kajps5::kernel

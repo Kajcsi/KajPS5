@@ -11,7 +11,7 @@ namespace kajps5::kernel {
 
 class KernelRuntime final {
 public:
-  KernelRuntime() : scheduler_(handles_), event_flags_(handles_) {}
+  KernelRuntime() : scheduler_(handles_), event_flags_(handles_, scheduler_) {}
 
   KernelRuntime(const KernelRuntime &) = delete;
   KernelRuntime &operator=(const KernelRuntime &) = delete;
