@@ -3,6 +3,10 @@
 KajPS5 is an early PlayStation 5 emulator research project. The repository
 contains a small buildable foundation. It does not run PlayStation 5 games.
 
+The project goal is to combine the strengths of KytyPS5 and SharpEmu where
+possible. KytyPS5 guides the native C++ architecture and runtime. SharpEmu
+guides loader and service behavior, diagnostics, and focused tests.
+
 The project uses one clear design:
 
 - Use a native C++ runtime as the primary implementation.
@@ -21,8 +25,9 @@ The program prints its version and project status. The core also has a checked
 guest-memory address space and an ELF64 metadata loader. The loader validates
 all segments before it changes memory. It maps each `PT_LOAD` range with its
 read, write, and execute flags, copies its file bytes, and clears its
-zero-filled tail. The kernel foundation has typed handles and deterministic
-event-flag polling. One cooperative scheduler owns guest thread state and
+zero-filled tail. It also validates and records raw non-null `PT_DYNAMIC`
+entries. The kernel foundation has typed handles and deterministic event-flag
+polling. One cooperative scheduler owns guest thread state and
 deterministic ready, block, wake, yield, and exit transitions. Guest CPU
 execution and continuation-based blocked-call resumption are not implemented.
 Event and semaphore waits use an explicit block, wake, and recheck contract.
