@@ -34,6 +34,7 @@
 - [x] Connect checked import lookup to standard relocation targets.
 - [x] Add bounded stable diagnostics for unresolved imports.
 - [x] Add a platform-neutral checked HLE call context.
+- [x] Add deterministic library-scoped HLE handler dispatch.
 - [x] Run a public no-import guest leaf test program.
 - [x] Run a public guest program through checked HLE imports.
 - Add thread, event, file, and time tests.

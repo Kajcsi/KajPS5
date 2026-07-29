@@ -51,6 +51,10 @@ bounded import diagnostics. No diagnostic source code was copied.
 The checked register and memory boundary in `src/hle/call_context.cpp` and
 `tests/hle_call_context_test.cpp` uses focused behavior observations from
 SharpEmu's `src/SharpEmu.HLE/CpuContext.cs`. No context source code was copied.
+The scoped handler table in `src/hle/export_registry.cpp` and
+`tests/hle_export_registry_test.cpp` uses focused behavior observations from
+SharpEmu's `src/SharpEmu.HLE/ExportedFunction.cs` and KytyPS5's native symbol
+database. No export registry source code was copied.
 The SharpEmu reference files state:
 
 `Copyright (C) 2026 SharpEmu Emulator Project`

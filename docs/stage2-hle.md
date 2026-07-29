@@ -11,7 +11,9 @@ The design review used these pinned references:
   library lookup in `src/loader/runtimeLinker.cpp`.
 - SharpEmu commit `d5108e854d609808f17093a6f5dbbc711d09ad2e`, import handling
   in `src/SharpEmu.Core/Cpu/Native/StubManager.cs` and
-  `src/SharpEmu.Core/Cpu/Native/DirectExecutionBackend.Imports.cs`.
+  `src/SharpEmu.Core/Cpu/Native/DirectExecutionBackend.Imports.cs`, plus the
+  checked context and export boundary in `src/SharpEmu.HLE/CpuContext.cs` and
+  `src/SharpEmu.HLE/ExportedFunction.cs`.
 
 The C++ registry does not copy either ownership model or executor. It provides
 a deterministic name boundary for relocation and HLE dispatch work. The
@@ -32,3 +34,9 @@ crosses an unmapped boundary, the context checks one byte at a time so it can
 still accept a terminator before the boundary. A missing terminator and a
 memory fault are different results. Native trampoline state capture is not
 connected yet.
+
+The HLE export registry stores C++ context handlers separately from executable
+import targets. Dispatch follows the same ordered needed-library scope as
+linking. An unscoped duplicate name is ambiguous and does not run. The registry
+copies the selected handler under its lock and runs it after it releases the
+lock. Handler memory faults remain distinct from lookup failures.

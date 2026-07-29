@@ -40,6 +40,8 @@ at most 128 bytes from each untrusted symbol name. A test-only redistributable
 ELF fixture calls one no-argument HLE handler through a linked `JUMP_SLOT`.
 One platform-neutral HLE call context maps the six integer argument registers,
 tracks return writes, and uses checked guest-memory reads and writes.
+A deterministic export registry dispatches context handlers by ordered library
+name and does not run ambiguous unscoped symbols.
 The kernel foundation has typed handles and deterministic event-flag polling.
 One cooperative scheduler owns guest thread state and
 deterministic ready, block, wake, yield, and exit transitions. A test-only

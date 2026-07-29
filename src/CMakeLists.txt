@@ -3,6 +3,7 @@ add_library(kajps5_core STATIC
   core/project_info.cpp
   cpu/native_leaf_executor.cpp
   hle/call_context.cpp
+  hle/export_registry.cpp
   hle/import_registry.cpp
   kernel/clock.cpp
   kernel/event_flag.cpp
