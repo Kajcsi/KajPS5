@@ -1,0 +1,87 @@
+// Copyright (C) 2026 KajPS5 contributors
+// Behavior reference: Copyright (C) 2026 SharpEmu Emulator Project
+// SPDX-License-Identifier: GPL-2.0-or-later
+
+#pragma once
+
+#include <cstddef>
+#include <cstdint>
+#include <deque>
+#include <limits>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <vector>
+
+#include "kernel/handle_table.h"
+#include "kernel/status.h"
+
+namespace kajps5::kernel {
+
+inline constexpr std::size_t kMaximumGuestThreadNameLength = 31;
+
+enum class GuestThreadState {
+  kReady,
+  kRunning,
+  kBlocked,
+  kExited,
+};
+
+struct GuestThreadCreateResult {
+  KernelStatus status = KernelStatus::kOk;
+  KernelHandle handle = kInvalidKernelHandle;
+
+  [[nodiscard]] explicit operator bool() const noexcept {
+    return status == KernelStatus::kOk;
+  }
+};
+
+struct GuestThreadSnapshot {
+  KernelHandle handle = kInvalidKernelHandle;
+  std::string name;
+  int priority = 0;
+  GuestThreadState state = GuestThreadState::kReady;
+  std::string wait_key;
+  std::uint64_t exit_value = 0;
+};
+
+class GuestScheduler final {
+public:
+  explicit GuestScheduler(HandleTable &handles) noexcept;
+  ~GuestScheduler();
+
+  GuestScheduler(const GuestScheduler &) = delete;
+  GuestScheduler &operator=(const GuestScheduler &) = delete;
+
+  [[nodiscard]] GuestThreadCreateResult CreateThread(std::string name,
+                                                     int priority);
+  [[nodiscard]] std::optional<KernelHandle> SelectNext();
+  [[nodiscard]] bool YieldCurrent();
+  [[nodiscard]] bool BlockCurrent(std::string wait_key);
+  [[nodiscard]] std::size_t WakeBlockedThreads(
+      std::string_view wait_key,
+      std::size_t maximum_count = std::numeric_limits<std::size_t>::max());
+  [[nodiscard]] bool ExitCurrent(std::uint64_t exit_value);
+
+  [[nodiscard]] std::optional<KernelHandle> current_thread() const;
+  [[nodiscard]] std::optional<GuestThreadSnapshot>
+  Snapshot(KernelHandle handle) const;
+  [[nodiscard]] std::vector<GuestThreadSnapshot> SnapshotAll() const;
+
+private:
+  struct GuestThread;
+
+  [[nodiscard]] static GuestThreadSnapshot
+  MakeSnapshot(KernelHandle handle, const GuestThread &thread);
+
+  HandleTable &handles_;
+  mutable std::mutex mutex_;
+  std::map<KernelHandle, std::shared_ptr<GuestThread>> threads_;
+  std::deque<KernelHandle> ready_threads_;
+  std::optional<KernelHandle> current_thread_;
+};
+
+} // namespace kajps5::kernel

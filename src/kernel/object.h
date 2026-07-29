@@ -9,6 +9,7 @@ namespace kajps5::kernel {
 
 enum class KernelObjectType : std::uint8_t {
   kEventFlag,
+  kThread,
   kTimer,
 };
 

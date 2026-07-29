@@ -12,6 +12,7 @@
 
 #include "kernel/handle_table.h"
 #include "kernel/object.h"
+#include "kernel/status.h"
 
 namespace kajps5::kernel {
 
@@ -26,14 +27,6 @@ inline constexpr std::uint32_t kEventFlagWaitAll = 0x01;
 inline constexpr std::uint32_t kEventFlagWaitAny = 0x02;
 inline constexpr std::uint32_t kEventFlagClearAll = 0x10;
 inline constexpr std::uint32_t kEventFlagClearPattern = 0x20;
-
-enum class KernelStatus {
-  kOk,
-  kInvalidArgument,
-  kNotFound,
-  kBusy,
-  kNoResources,
-};
 
 enum class EventFlagWaitCondition {
   kAll,
@@ -93,6 +86,11 @@ struct EventFlagPollResult {
 
 class EventFlagService final {
 public:
+  explicit EventFlagService(HandleTable &handles) noexcept;
+
+  EventFlagService(const EventFlagService &) = delete;
+  EventFlagService &operator=(const EventFlagService &) = delete;
+
   [[nodiscard]] EventFlagCreateResult Create(std::string name,
                                              std::uint32_t attributes,
                                              std::uint64_t initial_pattern);
@@ -110,7 +108,7 @@ private:
                  EventFlagClearMode &clear_mode) noexcept;
   [[nodiscard]] std::shared_ptr<EventFlag> Find(KernelHandle handle) const;
 
-  HandleTable handles_;
+  HandleTable &handles_;
 };
 
 } // namespace kajps5::kernel

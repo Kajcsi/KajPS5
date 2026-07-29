@@ -59,6 +59,9 @@ EventFlagStateResult EventFlag::Poll(std::uint64_t pattern,
   return result;
 }
 
+EventFlagService::EventFlagService(HandleTable &handles) noexcept
+    : handles_(handles) {}
+
 EventFlagCreateResult EventFlagService::Create(std::string name,
                                                std::uint32_t attributes,
                                                std::uint64_t initial_pattern) {

@@ -17,6 +17,8 @@
 ## Stage 2: CPU and kernel
 
 - [x] Add typed kernel handles and deterministic event-flag polling.
+- [x] Add one deterministic scheduler for ready, running, blocked, and exited
+      guest thread states.
 - Run a public guest test program.
 - Add thread, event, file, and time tests.
 - Compare focused traces with the two upstream projects.

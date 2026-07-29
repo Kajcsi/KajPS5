@@ -22,7 +22,9 @@ guest-memory address space and an ELF64 metadata loader. The loader validates
 all segments before it changes memory. It maps each `PT_LOAD` range with its
 read, write, and execute flags, copies its file bytes, and clears its
 zero-filled tail. The kernel foundation has typed handles and deterministic
-event-flag polling. Blocking waits and guest scheduling are not implemented.
+event-flag polling. One cooperative scheduler owns guest thread state and
+deterministic ready, block, wake, yield, and exit transitions. Guest CPU
+execution and blocked-call resumption are not implemented.
 
 The tests build a small ELF image in memory. The repository does not contain a
 game, firmware, system module, or encrypted executable. Guest execution and

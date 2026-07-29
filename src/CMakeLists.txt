@@ -2,6 +2,7 @@ add_library(kajps5_core STATIC
   core/memory/guest_memory.cpp
   core/project_info.cpp
   kernel/event_flag.cpp
+  kernel/guest_scheduler.cpp
   kernel/handle_table.cpp
   loader/elf.cpp
   loader/elf_trace.cpp

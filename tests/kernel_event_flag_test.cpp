@@ -9,6 +9,7 @@
 #include "kernel/event_flag.h"
 #include "kernel/handle_table.h"
 #include "kernel/object.h"
+#include "kernel/runtime.h"
 
 namespace {
 
@@ -58,7 +59,8 @@ void TestHandleTable() {
 void TestEventFlagService() {
   using namespace kajps5::kernel;
 
-  EventFlagService service;
+  KernelRuntime runtime;
+  auto &service = runtime.event_flags();
   const auto too_long = service.Create(std::string(32, 'x'), 0, 0);
   Check(too_long.status == KernelStatus::kInvalidArgument,
         "long event name was accepted");
