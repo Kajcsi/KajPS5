@@ -55,6 +55,12 @@ The scoped handler table in `src/hle/export_registry.cpp` and
 `tests/hle_export_registry_test.cpp` uses focused behavior observations from
 SharpEmu's `src/SharpEmu.HLE/ExportedFunction.cs` and KytyPS5's native symbol
 database. No export registry source code was copied.
+The process-time handlers in `src/hle/kernel_clock_exports.cpp` and
+`tests/hle_kernel_clock_exports_test.cpp` adapt the matching process-time,
+counter, and frequency behavior from the pinned KytyPS5
+`src/kernel/pthread.cpp` and SharpEmu
+`src/SharpEmu.Libs/Kernel/KernelRuntimeCompatExports.cs`. No clock export
+source code was copied.
 The SharpEmu reference files state:
 
 `Copyright (C) 2026 SharpEmu Emulator Project`

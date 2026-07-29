@@ -59,6 +59,8 @@ The focused tests record these shared behaviors:
   valid source.
 - Process time starts with the kernel runtime. Its counter uses nanoseconds and
   reports a matching one-gigahertz frequency.
+- The first HLE clock handlers expose process microseconds, the same nanosecond
+  counter, and its one-gigahertz frequency through `libKernel`.
 - Clock conversion tests use an injected source and do not depend on host time.
 - Guest paths use forward slashes, collapse empty and current-directory
   components, and reject relative paths, parent traversal, and embedded nulls.

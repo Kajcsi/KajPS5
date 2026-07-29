@@ -38,6 +38,34 @@ ExportRegistryStatus ExportRegistry::Register(std::string library,
                   : ExportRegistryStatus::kAlreadyExists;
 }
 
+ExportRegistryStatus ExportRegistry::RegisterBatch(
+    std::vector<HleExportDefinition> exports) {
+  if (exports.empty()) {
+    return ExportRegistryStatus::kInvalidArgument;
+  }
+  for (const auto& definition : exports) {
+    if (!IsValidName(definition.library, kMaximumExportLibraryLength) ||
+        !IsValidName(definition.symbol, kMaximumExportSymbolLength) ||
+        !definition.handler) {
+      return ExportRegistryStatus::kInvalidArgument;
+    }
+  }
+
+  std::lock_guard lock(mutex_);
+  auto updated = entries_;
+  for (auto& definition : exports) {
+    const auto [entry, inserted] = updated.emplace(
+        Key{std::move(definition.library), std::move(definition.symbol)},
+        std::move(definition.handler));
+    (void)entry;
+    if (!inserted) {
+      return ExportRegistryStatus::kAlreadyExists;
+    }
+  }
+  entries_.swap(updated);
+  return ExportRegistryStatus::kOk;
+}
+
 HleDispatchResult ExportRegistry::Dispatch(
     std::string_view symbol, std::span<const std::string> library_order,
     HleCallContext& context) const {

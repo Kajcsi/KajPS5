@@ -42,6 +42,8 @@ One platform-neutral HLE call context maps the six integer argument registers,
 tracks return writes, and uses checked guest-memory reads and writes.
 A deterministic export registry dispatches context handlers by ordered library
 name and does not run ambiguous unscoped symbols.
+The first registered `libKernel` handlers expose consistent process time,
+counter, and counter-frequency values from the shared kernel clock.
 The kernel foundation has typed handles and deterministic event-flag polling.
 One cooperative scheduler owns guest thread state and
 deterministic ready, block, wake, yield, and exit transitions. A test-only

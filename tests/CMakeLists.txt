@@ -61,6 +61,14 @@ kajps5_deploy_msvc_asan_runtime(kajps5_hle_export_registry_test)
 add_test(NAME kajps5_hle_export_registry
          COMMAND kajps5_hle_export_registry_test)
 
+add_executable(kajps5_hle_kernel_clock_exports_test
+               hle_kernel_clock_exports_test.cpp)
+target_link_libraries(kajps5_hle_kernel_clock_exports_test PRIVATE kajps5_core)
+kajps5_deploy_msvc_asan_runtime(kajps5_hle_kernel_clock_exports_test)
+
+add_test(NAME kajps5_hle_kernel_clock_exports
+         COMMAND kajps5_hle_kernel_clock_exports_test)
+
 add_executable(kajps5_hle_import_link_test hle_import_link_test.cpp)
 target_link_libraries(kajps5_hle_import_link_test PRIVATE kajps5_core)
 kajps5_deploy_msvc_asan_runtime(kajps5_hle_import_link_test)

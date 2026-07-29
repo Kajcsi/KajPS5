@@ -40,3 +40,10 @@ import targets. Dispatch follows the same ordered needed-library scope as
 linking. An unscoped duplicate name is ambiguous and does not run. The registry
 copies the selected handler under its lock and runs it after it releases the
 lock. Handler memory faults remain distinct from lookup failures.
+
+The first generic `libKernel` handler batch exposes
+`sceKernelGetProcessTime`, `sceKernelGetProcessTimeCounter`, and
+`sceKernelGetProcessTimeCounterFrequency`. All three use the shared kernel
+clock service, so the microsecond value, nanosecond counter, and one-gigahertz
+frequency stay consistent. Batch registration validates all definitions before
+it changes the export table.

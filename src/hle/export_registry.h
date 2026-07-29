@@ -12,6 +12,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include "hle/call_context.h"
 
@@ -21,6 +22,12 @@ inline constexpr std::size_t kMaximumExportLibraryLength = 127;
 inline constexpr std::size_t kMaximumExportSymbolLength = 255;
 
 using HleHandler = std::function<HleContextStatus(HleCallContext&)>;
+
+struct HleExportDefinition {
+  std::string library;
+  std::string symbol;
+  HleHandler handler;
+};
 
 enum class ExportRegistryStatus {
   kOk,
@@ -46,6 +53,8 @@ class ExportRegistry final {
   [[nodiscard]] ExportRegistryStatus Register(std::string library,
                                               std::string symbol,
                                               HleHandler handler);
+  [[nodiscard]] ExportRegistryStatus RegisterBatch(
+      std::vector<HleExportDefinition> exports);
   [[nodiscard]] HleDispatchResult Dispatch(
       std::string_view symbol, std::span<const std::string> library_order,
       HleCallContext& context) const;

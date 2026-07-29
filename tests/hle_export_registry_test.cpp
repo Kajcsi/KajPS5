@@ -78,6 +78,22 @@ int main() {
                 ExportRegistryStatus::kInvalidArgument,
         "invalid handler registration was accepted");
 
+  std::vector<kajps5::hle::HleExportDefinition> rejected_batch;
+  rejected_batch.push_back(
+      {"libc", "unique", [](HleCallContext&) {
+         return HleContextStatus::kOk;
+       }});
+  rejected_batch.push_back({"libkernel", "length", length_handler});
+  Check(registry.RegisterBatch(std::move(rejected_batch)) ==
+            ExportRegistryStatus::kAlreadyExists &&
+            registry.size() == 2 &&
+            registry.Dispatch("unique", context).status ==
+                ExportRegistryStatus::kNotFound,
+        "rejected export batch changed the registry");
+  Check(registry.RegisterBatch({}) ==
+            ExportRegistryStatus::kInvalidArgument,
+        "empty export batch was accepted");
+
   const std::vector<std::string> kernel_first = {"libkernel", "compat"};
   const auto dispatched =
       registry.Dispatch("length", kernel_first, context);

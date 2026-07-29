@@ -5,6 +5,7 @@ add_library(kajps5_core STATIC
   hle/call_context.cpp
   hle/export_registry.cpp
   hle/import_registry.cpp
+  hle/kernel_clock_exports.cpp
   kernel/clock.cpp
   kernel/event_flag.cpp
   kernel/file.cpp
