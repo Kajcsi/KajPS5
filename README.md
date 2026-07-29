@@ -17,9 +17,13 @@ trace data and tests as the boundary for C# reference work.
 
 ## Current status
 
-The current program prints its version and project status. This first commit
-also defines the architecture, contribution rules, upstream pins, and build
-checks.
+The program prints its version and project status. The core also has a checked
+guest-memory buffer and an ELF64 metadata loader. The loader validates each
+range before it copies a `PT_LOAD` segment and clears its zero-filled tail.
+
+The tests build a small ELF image in memory. The repository does not contain a
+game, firmware, system module, or encrypted executable. Guest execution and
+SELF decryption are not implemented.
 
 ## Build
 
