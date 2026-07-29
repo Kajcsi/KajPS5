@@ -81,8 +81,8 @@ source code was copied. Clock NIDs are confirmed by both pinned references.
 The clock-gettime and gettimeofday handlers use KytyPS5's kernel-compatible
 `EFAULT` and `EINVAL` values. SharpEmu marks its differing Gen5 error values as
 synthetic.
-The checked open, close, read, positioned-read, seek, stat, fstat, and
-reachability handlers in
+The checked open, close, read, positioned-read, seek, stat, fstat,
+reachability, and directory-read handlers in
 `src/hle/kernel_file_exports.cpp` and
 `tests/hle_kernel_file_exports_test.cpp` use focused behavior observations from
 KytyPS5 `src/kernel/fileSystem.cpp` and SharpEmu
@@ -90,7 +90,10 @@ KytyPS5 `src/kernel/fileSystem.cpp` and SharpEmu
 They use KytyPS5's kernel-compatible file errors and the file-operation NIDs
 confirmed by both references. The 120-byte stat field layout matches both
 references. The stable path inode adapts SharpEmu's deterministic FNV-1a
-file-entry hashing behavior. No file-service source code was copied.
+file-entry hashing behavior. The directory tests adapt SharpEmu's captured
+entry list, `.` and `..` prefix, case-insensitive ordering, typed descriptor
+failure, and fixed 512-byte record behavior. No file-service source code was
+copied.
 The SharpEmu reference files state:
 
 `Copyright (C) 2026 SharpEmu Emulator Project`

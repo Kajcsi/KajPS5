@@ -75,6 +75,15 @@ std::uint64_t ReadLittleEndian(std::span<const std::byte> bytes,
   return value;
 }
 
+std::uint32_t StableNameHash(std::string_view name) {
+  std::uint32_t hash = 2'166'136'261U;
+  for (const auto character : name) {
+    hash ^= static_cast<unsigned char>(character);
+    hash *= 16'777'619U;
+  }
+  return hash;
+}
+
 }  // namespace
 
 int main() {
@@ -99,11 +108,21 @@ int main() {
             "/app0/data/large.bin", large_file) ==
             kajps5::kernel::KernelStatus::kOk,
         "large file fixture registration failed");
+  Check(runtime.files().RegisterReadOnlyFile(
+            "/app0/list/Alpha.bin", Bytes("A")) ==
+            kajps5::kernel::KernelStatus::kOk &&
+            runtime.files().RegisterReadOnlyFile(
+                "/app0/list/nested/leaf.bin", Bytes("N")) ==
+                kajps5::kernel::KernelStatus::kOk &&
+            runtime.files().RegisterReadOnlyFile(
+                "/app0/list/test.bin", Bytes("T")) ==
+                kajps5::kernel::KernelStatus::kOk,
+        "directory fixture registration failed");
 
   ExportRegistry registry;
   Check(kajps5::hle::RegisterKernelFileExports(registry, runtime.files()) ==
             ExportRegistryStatus::kOk &&
-            registry.size() == 16,
+            registry.size() == 18,
         "file export registration failed");
 
   auto path = Bytes("/app0/data/test.bin");
@@ -119,6 +138,144 @@ int main() {
                                open_context);
   Check(handle != 0 && runtime.handles().size() == 1,
         "NID open did not return a file descriptor");
+
+  auto directory_path = Bytes("/app0/list");
+  directory_path.push_back(std::byte{0});
+  Check(memory.Initialize(0x1400, directory_path),
+        "guest directory path setup failed");
+  HleCallContext directory_open_context(memory);
+  Check(directory_open_context.SetRegister(HleRegister::kRdi, 0x1400) &&
+            directory_open_context.SetRegister(
+                HleRegister::kRsi,
+                kajps5::kernel::kFileOpenDirectory),
+        "directory open argument setup failed");
+  const auto directory_handle = Dispatch(
+      registry, kajps5::hle::kKernelOpenName, directory_open_context);
+  Check(directory_handle != 0 && runtime.handles().size() == 2,
+        "memory-backed directory did not open");
+
+  HleCallContext null_getdents_context(memory);
+  Check(null_getdents_context.SetRegister(HleRegister::kRdi,
+                                          directory_handle) &&
+            null_getdents_context.SetRegister(HleRegister::kRsi, 0) &&
+            null_getdents_context.SetRegister(
+                HleRegister::kRdx,
+                kajps5::hle::kKernelDirectoryEntrySize),
+        "null getdents argument setup failed");
+  Check(Dispatch(registry, kajps5::hle::kKernelGetdentsName,
+                 null_getdents_context) ==
+            KernelResult(kajps5::hle::kKernelHleErrorInvalidArgument),
+        "null getdents output returned the wrong kernel result");
+
+  HleCallContext fault_getdents_context(memory);
+  Check(fault_getdents_context.SetRegister(HleRegister::kRdi,
+                                           directory_handle) &&
+            fault_getdents_context.SetRegister(HleRegister::kRsi,
+                                               0x20000) &&
+            fault_getdents_context.SetRegister(
+                HleRegister::kRdx,
+                kajps5::hle::kKernelDirectoryEntrySize),
+        "fault getdents argument setup failed");
+  Check(Dispatch(registry, kajps5::hle::kKernelGetdentsNid,
+                 fault_getdents_context) ==
+            KernelResult(kajps5::hle::kKernelHleErrorFault),
+        "unmapped getdents output returned the wrong kernel result");
+
+  HleCallContext short_getdents_context(memory);
+  Check(short_getdents_context.SetRegister(HleRegister::kRdi,
+                                           directory_handle) &&
+            short_getdents_context.SetRegister(HleRegister::kRsi, 0x4000) &&
+            short_getdents_context.SetRegister(
+                HleRegister::kRdx,
+                kajps5::hle::kKernelDirectoryEntrySize - 1),
+        "short getdents argument setup failed");
+  Check(Dispatch(registry, kajps5::hle::kKernelGetdentsNid,
+                 short_getdents_context) ==
+            KernelResult(kajps5::hle::kKernelHleErrorInvalidArgument),
+        "short getdents request returned the wrong kernel result");
+
+  struct ExpectedDirectoryEntry {
+    std::string_view name;
+    std::uint8_t type;
+  };
+  const std::array<ExpectedDirectoryEntry, 5> expected_entries = {{
+      {".", 4},
+      {"..", 4},
+      {"Alpha.bin", 8},
+      {"nested", 4},
+      {"test.bin", 8},
+  }};
+  for (const auto& expected : expected_entries) {
+    HleCallContext getdents_context(memory);
+    Check(getdents_context.SetRegister(HleRegister::kRdi,
+                                       directory_handle) &&
+              getdents_context.SetRegister(HleRegister::kRsi, 0x4000) &&
+              getdents_context.SetRegister(
+                  HleRegister::kRdx,
+                  kajps5::hle::kKernelDirectoryEntrySize),
+          "getdents argument setup failed");
+    std::array<std::byte, kajps5::hle::kKernelDirectoryEntrySize> entry{};
+    const auto result = Dispatch(registry, kajps5::hle::kKernelGetdentsNid,
+                                 getdents_context);
+    const auto read = memory.Read(0x4000, entry);
+    const auto name_size = std::to_integer<std::uint8_t>(entry[7]);
+    Check(result == kajps5::hle::kKernelDirectoryEntrySize && read &&
+              ReadLittleEndian(entry, 0, 4) ==
+                  StableNameHash(expected.name) &&
+              ReadLittleEndian(entry, 4, 2) ==
+                  kajps5::hle::kKernelDirectoryEntrySize &&
+              std::to_integer<std::uint8_t>(entry[6]) == expected.type &&
+              name_size == expected.name.size() &&
+              ReadText(memory, 0x4008, name_size) == expected.name &&
+              entry[8 + name_size] == std::byte{0},
+          "getdents returned the wrong directory record");
+  }
+
+  HleCallContext directory_end_context(memory);
+  Check(directory_end_context.SetRegister(HleRegister::kRdi,
+                                          directory_handle) &&
+            directory_end_context.SetRegister(HleRegister::kRsi, 0x4000) &&
+            directory_end_context.SetRegister(
+                HleRegister::kRdx,
+                kajps5::hle::kKernelDirectoryEntrySize),
+        "directory EOF argument setup failed");
+  Check(Dispatch(registry, kajps5::hle::kKernelGetdentsName,
+                 directory_end_context) == 0 &&
+            Dispatch(registry, kajps5::hle::kKernelGetdentsName,
+                     directory_end_context) == 0,
+        "getdents did not keep stable EOF");
+
+  HleCallContext file_getdents_context(memory);
+  Check(file_getdents_context.SetRegister(HleRegister::kRdi, handle) &&
+            file_getdents_context.SetRegister(HleRegister::kRsi, 0x4000) &&
+            file_getdents_context.SetRegister(
+                HleRegister::kRdx,
+                kajps5::hle::kKernelDirectoryEntrySize),
+        "file getdents argument setup failed");
+  Check(Dispatch(registry, kajps5::hle::kKernelGetdentsName,
+                 file_getdents_context) ==
+            KernelResult(kajps5::hle::kKernelHleErrorInvalidArgument),
+        "regular file getdents looked like directory EOF");
+
+  HleCallContext directory_close_context(memory);
+  Check(directory_close_context.SetRegister(HleRegister::kRdi,
+                                            directory_handle) &&
+            Dispatch(registry, kajps5::hle::kKernelCloseName,
+                     directory_close_context) == 0 &&
+            runtime.handles().size() == 1,
+        "directory close failed");
+  HleCallContext stale_getdents_context(memory);
+  Check(stale_getdents_context.SetRegister(HleRegister::kRdi,
+                                           directory_handle) &&
+            stale_getdents_context.SetRegister(HleRegister::kRsi, 0x4000) &&
+            stale_getdents_context.SetRegister(
+                HleRegister::kRdx,
+                kajps5::hle::kKernelDirectoryEntrySize),
+        "stale getdents argument setup failed");
+  Check(Dispatch(registry, kajps5::hle::kKernelGetdentsNid,
+                 stale_getdents_context) ==
+            KernelResult(kajps5::hle::kKernelHleErrorBadFileDescriptor),
+        "stale getdents returned the wrong kernel result");
 
   HleCallContext reachable_context(memory);
   Check(reachable_context.SetRegister(HleRegister::kRdi, 0x1100),
@@ -456,7 +613,7 @@ int main() {
 
   Check(kajps5::hle::RegisterKernelFileExports(registry, runtime.files()) ==
             ExportRegistryStatus::kAlreadyExists &&
-            registry.size() == 16,
+            registry.size() == 18,
         "duplicate file export batch changed the registry");
   return failures == 0 ? 0 : 1;
 }

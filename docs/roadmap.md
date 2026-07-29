@@ -30,6 +30,7 @@
 - [x] Add checked semaphore counts and scheduler wait integration.
 - [x] Add portable realtime, monotonic, and process-clock conversions.
 - [x] Add checked guest paths and memory-backed read-only files.
+- [x] Add deterministic directory reads for the memory-backed namespace.
 - [x] Add deterministic thread-exit joins.
 - [x] Add deterministic library-scoped HLE import lookup.
 - [x] Connect checked import lookup to standard relocation targets.

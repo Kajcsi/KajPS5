@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <map>
 #include <utility>
 
 namespace kajps5::kernel {
@@ -20,6 +21,27 @@ std::uint32_t StablePathHash(std::string_view path) noexcept {
     hash *= kPrime;
   }
   return hash;
+}
+
+unsigned char FoldAscii(unsigned char value) noexcept {
+  return value >= 'A' && value <= 'Z'
+             ? static_cast<unsigned char>(value + ('a' - 'A'))
+             : value;
+}
+
+bool CaseInsensitiveLess(std::string_view left, std::string_view right) {
+  const auto common = std::min(left.size(), right.size());
+  for (std::size_t index = 0; index < common; ++index) {
+    const auto left_folded = FoldAscii(
+        static_cast<unsigned char>(left[index]));
+    const auto right_folded = FoldAscii(
+        static_cast<unsigned char>(right[index]));
+    if (left_folded != right_folded) {
+      return left_folded < right_folded;
+    }
+  }
+  return left.size() != right.size() ? left.size() < right.size()
+                                     : left < right;
 }
 
 }  // namespace
@@ -110,6 +132,20 @@ std::size_t File::ReadAt(std::uint64_t offset,
   return count;
 }
 
+Directory::Directory(std::string path, std::vector<DirectoryEntry> entries)
+    : KernelObject(KernelObjectType::kDirectory), path_(std::move(path)),
+      entries_(std::move(entries)) {}
+
+const std::string &Directory::path() const noexcept { return path_; }
+
+std::optional<DirectoryEntry> Directory::ReadNext() {
+  std::lock_guard lock(mutex_);
+  if (next_index_ >= entries_.size()) {
+    return std::nullopt;
+  }
+  return entries_[next_index_++];
+}
+
 FileService::FileService(HandleTable &handles) noexcept : handles_(handles) {}
 
 KernelStatus
@@ -128,11 +164,10 @@ FileService::RegisterReadOnlyFile(std::string path,
 }
 
 FileOpenResult FileService::Open(std::string_view path, std::uint32_t flags) {
-  if (flags > kFileOpenReadWrite) {
+  constexpr std::uint32_t kAccessMask = 3;
+  if ((flags & ~(kAccessMask | kFileOpenDirectory)) != 0 ||
+      (flags & kAccessMask) > kFileOpenReadWrite) {
     return {KernelStatus::kInvalidArgument, kInvalidKernelHandle};
-  }
-  if (flags != kFileOpenRead) {
-    return {KernelStatus::kPermissionDenied, kInvalidKernelHandle};
   }
 
   const auto normalized = NormalizeGuestPath(path);
@@ -140,14 +175,39 @@ FileOpenResult FileService::Open(std::string_view path, std::uint32_t flags) {
     return {KernelStatus::kInvalidArgument, kInvalidKernelHandle};
   }
 
+  const auto access = flags & kAccessMask;
+  const auto wants_directory = (flags & kFileOpenDirectory) != 0;
   std::shared_ptr<const std::vector<std::byte>> contents;
+  std::vector<DirectoryEntry> directory_entries;
+  bool directory_exists = false;
   {
     std::lock_guard lock(files_mutex_);
     const auto found = files_.find(*normalized);
-    if (found == files_.end()) {
+    if (found != files_.end()) {
+      contents = found->second;
+    }
+    if (wants_directory || !contents) {
+      directory_entries =
+          CollectDirectoryEntriesLocked(*normalized, directory_exists);
+    }
+  }
+
+  if (wants_directory || !contents) {
+    if (!directory_exists) {
       return {KernelStatus::kNotFound, kInvalidKernelHandle};
     }
-    contents = found->second;
+    if (access != kFileOpenRead) {
+      return {KernelStatus::kInvalidArgument, kInvalidKernelHandle};
+    }
+    auto directory = std::make_shared<Directory>(
+        *normalized, std::move(directory_entries));
+    const auto handle = handles_.Insert(std::move(directory));
+    return handle ? FileOpenResult{KernelStatus::kOk, *handle}
+                  : FileOpenResult{KernelStatus::kNoResources,
+                                   kInvalidKernelHandle};
+  }
+  if (access != kFileOpenRead) {
+    return {KernelStatus::kPermissionDenied, kInvalidKernelHandle};
   }
 
   auto file = std::make_shared<File>(*normalized, std::move(contents));
@@ -159,9 +219,11 @@ FileOpenResult FileService::Open(std::string_view path, std::uint32_t flags) {
 }
 
 KernelStatus FileService::Close(KernelHandle handle) {
-  return handles_.Remove(handle, KernelObjectType::kFile)
-             ? KernelStatus::kOk
-             : KernelStatus::kNotFound;
+  if (handles_.Remove(handle, KernelObjectType::kFile) ||
+      handles_.Remove(handle, KernelObjectType::kDirectory)) {
+    return KernelStatus::kOk;
+  }
+  return KernelStatus::kNotFound;
 }
 
 FileIoResult FileService::Read(KernelHandle handle,
@@ -195,6 +257,18 @@ FileIoResult FileService::Seek(KernelHandle handle, std::int64_t offset,
   const auto position = file->Seek(offset, whence);
   return position ? FileIoResult{KernelStatus::kOk, *position}
                   : FileIoResult{KernelStatus::kInvalidArgument, 0};
+}
+
+DirectoryReadResult FileService::ReadDirectory(KernelHandle handle) {
+  const auto directory = FindDirectory(handle);
+  if (!directory) {
+    return {Find(handle) ? KernelStatus::kInvalidArgument
+                         : KernelStatus::kNotFound,
+            false, {}};
+  }
+  const auto entry = directory->ReadNext();
+  return entry ? DirectoryReadResult{KernelStatus::kOk, false, *entry}
+               : DirectoryReadResult{KernelStatus::kOk, true, {}};
 }
 
 FileStatResult FileService::Stat(std::string_view path) const {
@@ -260,6 +334,59 @@ FileService::NormalizeGuestPath(std::string_view path) {
 std::shared_ptr<File> FileService::Find(KernelHandle handle) const {
   return std::static_pointer_cast<File>(
       handles_.Find(handle, KernelObjectType::kFile));
+}
+
+std::shared_ptr<Directory>
+FileService::FindDirectory(KernelHandle handle) const {
+  return std::static_pointer_cast<Directory>(
+      handles_.Find(handle, KernelObjectType::kDirectory));
+}
+
+std::vector<DirectoryEntry> FileService::CollectDirectoryEntriesLocked(
+    std::string_view path, bool &exists) const {
+  exists = path == "/";
+  const auto prefix = path == "/" ? std::string("/")
+                                  : std::string(path) + "/";
+  std::map<std::string, bool> children;
+  for (const auto &[file_path, contents] : files_) {
+    (void)contents;
+    if (!file_path.starts_with(prefix)) {
+      continue;
+    }
+    const auto remainder =
+        std::string_view(file_path).substr(prefix.size());
+    if (remainder.empty()) {
+      continue;
+    }
+    exists = true;
+    const auto separator = remainder.find('/');
+    const auto name = std::string(remainder.substr(0, separator));
+    const auto is_file = separator == std::string_view::npos;
+    const auto [entry, inserted] = children.emplace(name, is_file);
+    if (!inserted && !is_file) {
+      entry->second = false;
+    }
+  }
+
+  std::vector<DirectoryEntry> entries = {
+      {".", false, StablePathHash(".")},
+      {"..", false, StablePathHash("..")},
+  };
+  if (!exists) {
+    return {};
+  }
+  std::vector<std::pair<std::string, bool>> ordered(children.begin(),
+                                                    children.end());
+  std::sort(ordered.begin(), ordered.end(), [](const auto &left,
+                                                const auto &right) {
+    return CaseInsensitiveLess(left.first, right.first);
+  });
+  entries.reserve(entries.size() + ordered.size());
+  for (auto &[name, is_file] : ordered) {
+    const auto inode = StablePathHash(name);
+    entries.push_back({std::move(name), is_file, inode});
+  }
+  return entries;
 }
 
 } // namespace kajps5::kernel

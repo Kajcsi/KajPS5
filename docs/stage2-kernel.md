@@ -23,7 +23,7 @@ The behavior review used these pinned upstream files:
   pinned SharpEmu commit.
 - KytyPS5 `src/kernel/fileSystem.h` and `src/kernel/fileSystem.cpp` at the
   pinned KytyPS5 commit.
-- SharpEmu open, close, read, seek, and stat behavior in
+- SharpEmu open, close, read, seek, stat, and directory-read behavior in
   `src/SharpEmu.Libs/Kernel/KernelMemoryCompatExports.cs` at the pinned
   SharpEmu commit.
 
@@ -83,6 +83,13 @@ The focused tests record these shared behaviors:
 - Stat and fstat write the shared 120-byte regular-file layout atomically.
   Registered memory files report a stable path-based inode, their size,
   512-byte block accounting, and deterministic zero timestamps.
+- Directory handles capture immediate children from the registered in-memory
+  namespace when they open. Entries start with `.` and `..`, then use stable
+  case-insensitive name order. They do not query the host file system.
+- `sceKernelGetdents` writes one zero-filled 512-byte record per call. It uses
+  deterministic FNV-1a name hashes and distinguishes a regular-file handle,
+  a stale handle, a short request, and a bad guest output range. A failed
+  output preflight does not advance the directory cursor.
 - One atomic export batch binds all current clock, event-flag, file, and
   semaphore handlers to the same kernel runtime. A registration conflict
   leaves the destination registry unchanged.

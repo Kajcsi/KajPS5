@@ -25,6 +25,7 @@ inline constexpr std::size_t kMaximumGuestPathLength = 1'024;
 inline constexpr std::uint32_t kFileOpenRead = 0;
 inline constexpr std::uint32_t kFileOpenWrite = 1;
 inline constexpr std::uint32_t kFileOpenReadWrite = 2;
+inline constexpr std::uint32_t kFileOpenDirectory = 0x00020000;
 
 enum class FileSeekWhence {
   kSet,
@@ -58,6 +59,26 @@ private:
   std::uint64_t position_ = 0;
 };
 
+struct DirectoryEntry {
+  std::string name;
+  bool is_file = false;
+  std::uint32_t inode = 0;
+};
+
+class Directory final : public KernelObject {
+public:
+  Directory(std::string path, std::vector<DirectoryEntry> entries);
+
+  [[nodiscard]] const std::string &path() const noexcept;
+  [[nodiscard]] std::optional<DirectoryEntry> ReadNext();
+
+private:
+  std::string path_;
+  std::vector<DirectoryEntry> entries_;
+  std::mutex mutex_;
+  std::size_t next_index_ = 0;
+};
+
 struct FileOpenResult {
   KernelStatus status = KernelStatus::kOk;
   KernelHandle handle = kInvalidKernelHandle;
@@ -86,6 +107,16 @@ struct FileStatResult {
   }
 };
 
+struct DirectoryReadResult {
+  KernelStatus status = KernelStatus::kOk;
+  bool end_of_directory = false;
+  DirectoryEntry entry;
+
+  [[nodiscard]] explicit operator bool() const noexcept {
+    return status == KernelStatus::kOk;
+  }
+};
+
 class FileService final {
 public:
   explicit FileService(HandleTable &handles) noexcept;
@@ -103,6 +134,7 @@ public:
                                    std::span<std::byte> destination) const;
   [[nodiscard]] FileIoResult Seek(KernelHandle handle, std::int64_t offset,
                                   FileSeekWhence whence);
+  [[nodiscard]] DirectoryReadResult ReadDirectory(KernelHandle handle);
   [[nodiscard]] FileStatResult Stat(std::string_view path) const;
   [[nodiscard]] FileStatResult Fstat(KernelHandle handle) const;
 
@@ -111,6 +143,11 @@ public:
 
 private:
   [[nodiscard]] std::shared_ptr<File> Find(KernelHandle handle) const;
+  [[nodiscard]] std::shared_ptr<Directory>
+  FindDirectory(KernelHandle handle) const;
+  [[nodiscard]] std::vector<DirectoryEntry>
+  CollectDirectoryEntriesLocked(std::string_view path,
+                                bool &exists) const;
 
   HandleTable &handles_;
   mutable std::mutex files_mutex_;

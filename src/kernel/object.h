@@ -8,6 +8,7 @@
 namespace kajps5::kernel {
 
 enum class KernelObjectType : std::uint8_t {
+  kDirectory,
   kEventFlag,
   kFile,
   kSemaphore,

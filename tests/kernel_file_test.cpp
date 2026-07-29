@@ -74,6 +74,11 @@ int main() {
   Check(files.RegisterReadOnlyFile("relative", {}) ==
             KernelStatus::kInvalidArgument,
         "invalid registered path was accepted");
+  Check(files.RegisterReadOnlyFile("/app0/data/Alpha.bin", Bytes("A")) ==
+            KernelStatus::kOk &&
+            files.RegisterReadOnlyFile("/app0/data/nested/leaf.bin",
+                                       Bytes("N")) == KernelStatus::kOk,
+        "directory fixture registration failed");
 
   Check(files.Open("/app0/data/test.bin", kFileOpenWrite).status ==
             KernelStatus::kPermissionDenied,
@@ -84,12 +89,50 @@ int main() {
   Check(files.Open("/app0/missing.bin", kFileOpenRead).status ==
             KernelStatus::kNotFound,
         "missing file was opened");
+  Check(files.Open("/app0/data/test.bin", kFileOpenDirectory).status ==
+            KernelStatus::kNotFound,
+        "regular file opened as a directory");
+
+  const auto directory =
+      files.Open("/app0/data", kFileOpenDirectory);
+  Check(static_cast<bool>(directory) &&
+            runtime.handles().Find(directory.handle,
+                                   KernelObjectType::kDirectory) != nullptr,
+        "derived memory-backed directory did not open");
+  const std::array<std::string_view, 5> expected_entries = {
+      ".", "..", "Alpha.bin", "nested", "test.bin"};
+  for (std::size_t index = 0; index < expected_entries.size(); ++index) {
+    const auto entry = files.ReadDirectory(directory.handle);
+    Check(entry && !entry.end_of_directory &&
+              entry.entry.name == expected_entries[index] &&
+              entry.entry.is_file == (index == 2 || index == 4) &&
+              entry.entry.inode != 0,
+          "directory entry order or type is incorrect");
+  }
+  const auto directory_end = files.ReadDirectory(directory.handle);
+  Check(directory_end && directory_end.end_of_directory,
+        "directory did not reach stable EOF");
+  Check(files.Close(directory.handle) == KernelStatus::kOk &&
+            files.ReadDirectory(directory.handle).status ==
+                KernelStatus::kNotFound,
+        "closed directory handle remained valid");
+
+  const auto implicit_directory = files.Open("/app0", kFileOpenRead);
+  Check(implicit_directory &&
+            runtime.handles().Find(implicit_directory.handle,
+                                   KernelObjectType::kDirectory) != nullptr,
+        "directory without O_DIRECTORY did not open");
+  Check(files.Close(implicit_directory.handle) == KernelStatus::kOk,
+        "implicit directory close failed");
 
   const auto opened = files.Open("/app0//data/test.bin", kFileOpenRead);
   Check(static_cast<bool>(opened), "registered file did not open");
   Check(runtime.handles().Find(opened.handle, KernelObjectType::kFile) !=
             nullptr,
         "typed file lookup failed");
+  Check(files.ReadDirectory(opened.handle).status ==
+            KernelStatus::kInvalidArgument,
+        "regular file was accepted by directory enumeration");
 
   const auto event = runtime.event_flags().Create("event", 0, 0);
   Check(static_cast<bool>(event), "event fixture creation failed");

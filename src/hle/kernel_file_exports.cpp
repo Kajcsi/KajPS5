@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <limits>
 #include <span>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -31,24 +32,24 @@ void SetKernelResult(HleCallContext& context, std::int32_t result) noexcept {
       static_cast<std::uint64_t>(static_cast<std::int64_t>(result)));
 }
 
-void Write16(std::array<std::byte, kKernelStatSize>& bytes,
-             std::size_t offset, std::uint16_t value) noexcept {
+void Write16(std::span<std::byte> bytes, std::size_t offset,
+             std::uint16_t value) noexcept {
   for (std::size_t index = 0; index < sizeof(value); ++index) {
     bytes[offset + index] =
         static_cast<std::byte>((value >> (index * 8U)) & 0xffU);
   }
 }
 
-void Write32(std::array<std::byte, kKernelStatSize>& bytes,
-             std::size_t offset, std::uint32_t value) noexcept {
+void Write32(std::span<std::byte> bytes, std::size_t offset,
+             std::uint32_t value) noexcept {
   for (std::size_t index = 0; index < sizeof(value); ++index) {
     bytes[offset + index] =
         static_cast<std::byte>((value >> (index * 8U)) & 0xffU);
   }
 }
 
-void Write64(std::array<std::byte, kKernelStatSize>& bytes,
-             std::size_t offset, std::uint64_t value) noexcept {
+void Write64(std::span<std::byte> bytes, std::size_t offset,
+             std::uint64_t value) noexcept {
   for (std::size_t index = 0; index < sizeof(value); ++index) {
     bytes[offset + index] =
         static_cast<std::byte>((value >> (index * 8U)) & 0xffU);
@@ -66,6 +67,15 @@ std::array<std::byte, kKernelStatSize> RegularFileStat(
   Write64(bytes, kStatBlocksOffset, blocks);
   Write32(bytes, kStatBlockSizeOffset, 512);
   return bytes;
+}
+
+std::uint32_t StableNameHash(std::string_view name) noexcept {
+  std::uint32_t hash = 2'166'136'261U;
+  for (const auto character : name) {
+    hash ^= static_cast<unsigned char>(character);
+    hash *= 16'777'619U;
+  }
+  return hash;
 }
 
 std::int32_t FileStatusResult(kernel::KernelStatus status) noexcept {
@@ -322,13 +332,57 @@ HleContextStatus KernelCheckReachability(HleCallContext& context,
   return HleContextStatus::kOk;
 }
 
+HleContextStatus KernelGetdents(HleCallContext& context,
+                                kernel::FileService& files) {
+  const auto handle = context.Argument(0).value_or(0);
+  const auto destination = context.Argument(1).value_or(0);
+  const auto requested = context.Argument(2).value_or(0);
+  if (destination == 0 || requested < kKernelDirectoryEntrySize) {
+    SetKernelResult(context, kKernelHleErrorInvalidArgument);
+    return HleContextStatus::kOk;
+  }
+  if (!context.CanWriteMemory(destination, kKernelDirectoryEntrySize)) {
+    SetKernelResult(context, kKernelHleErrorFault);
+    return HleContextStatus::kOk;
+  }
+
+  const auto result = files.ReadDirectory(handle);
+  if (!result) {
+    SetKernelResult(context,
+                    result.status == kernel::KernelStatus::kNotFound
+                        ? kKernelHleErrorBadFileDescriptor
+                        : FileStatusResult(result.status));
+    return HleContextStatus::kOk;
+  }
+  if (result.end_of_directory) {
+    context.SetReturn(0);
+    return HleContextStatus::kOk;
+  }
+
+  std::array<std::byte, kKernelDirectoryEntrySize> bytes{};
+  const auto name_size = std::min<std::size_t>(result.entry.name.size(), 255);
+  const auto name = std::string_view(result.entry.name).substr(0, name_size);
+  Write32(bytes, 0, StableNameHash(name));
+  Write16(bytes, 4, static_cast<std::uint16_t>(bytes.size()));
+  bytes[6] = result.entry.is_file ? std::byte{8} : std::byte{4};
+  bytes[7] = static_cast<std::byte>(name_size);
+  std::transform(name.begin(), name.end(), bytes.begin() + 8,
+                 [](char value) { return static_cast<std::byte>(value); });
+  if (context.WriteMemory(destination, bytes) != HleContextStatus::kOk) {
+    SetKernelResult(context, kKernelHleErrorFault);
+    return HleContextStatus::kOk;
+  }
+  context.SetReturn(bytes.size());
+  return HleContextStatus::kOk;
+}
+
 }  // namespace
 
 std::vector<HleExportDefinition> detail::MakeKernelFileExports(
     kernel::FileService& files) {
   auto* const file_view = &files;
   std::vector<HleExportDefinition> exports;
-  exports.reserve(16);
+  exports.reserve(18);
   exports.push_back({kLibKernelName, kKernelOpenName,
                      [file_view](HleCallContext& context) {
                        return KernelOpen(context, *file_view);
@@ -392,6 +446,14 @@ std::vector<HleExportDefinition> detail::MakeKernelFileExports(
   exports.push_back({kLibKernelName, kKernelCheckReachabilityNid,
                      [file_view](HleCallContext& context) {
                        return KernelCheckReachability(context, *file_view);
+                     }});
+  exports.push_back({kLibKernelName, kKernelGetdentsName,
+                     [file_view](HleCallContext& context) {
+                       return KernelGetdents(context, *file_view);
+                     }});
+  exports.push_back({kLibKernelName, kKernelGetdentsNid,
+                     [file_view](HleCallContext& context) {
+                       return KernelGetdents(context, *file_view);
                      }});
   return exports;
 }

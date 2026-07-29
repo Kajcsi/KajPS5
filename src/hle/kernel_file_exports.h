@@ -30,7 +30,10 @@ inline constexpr auto kKernelFstatNid = "kBwCPsYX-m4";
 inline constexpr auto kKernelCheckReachabilityName =
     "sceKernelCheckReachability";
 inline constexpr auto kKernelCheckReachabilityNid = "uWyW3v98sU4";
+inline constexpr auto kKernelGetdentsName = "sceKernelGetdents";
+inline constexpr auto kKernelGetdentsNid = "j2AIqSqJP0w";
 inline constexpr std::size_t kKernelStatSize = 120;
+inline constexpr std::size_t kKernelDirectoryEntrySize = 512;
 
 namespace detail {
 [[nodiscard]] std::vector<HleExportDefinition> MakeKernelFileExports(

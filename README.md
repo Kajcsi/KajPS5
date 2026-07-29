@@ -62,7 +62,10 @@ The file foundation normalizes guest paths and reads registered memory-backed
 files. Checked open, close, read, positioned-read, seek, stat, fstat, and path
 reachability handlers expose that same service by export name and NID.
 Metadata uses the 120-byte kernel stat layout and deterministic values for
-registered regular files. The service does not expose the host file system.
+registered regular files. Derived directory handles capture a deterministic
+snapshot of the same in-memory namespace. `sceKernelGetdents` returns checked
+512-byte records with stable `.` and `..` entries. The service does not expose
+the host file system.
 One atomic default registration binds all current clock, event-flag, file,
 memory, and semaphore handlers to the same kernel runtime and guest call
 context. Checked `mprotect` and `munmap` handlers use the same guest-memory
