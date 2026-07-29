@@ -36,8 +36,13 @@ termination. Focused relocation tests check standard 24-byte `RELA` entries,
 PLT format, file-backed tables, mapped targets, and malformed metadata. A
 rejected load does not change guest memory.
 
-This milestone does not apply relocations, resolve symbols, interpret
-PS5-specific dynamic tags, or parse SELF containers. The separate controlled
-leaf test is documented in `stage2-cpu.md`.
+The relocation pass validates every entry before it changes memory. It applies
+`R_X86_64_RELATIVE`, ignores no-operation entries, and counts unresolved
+`R_X86_64_GLOB_DAT` and `R_X86_64_JUMP_SLOT` imports. Other relocation types,
+invalid relative symbols, target overflow, and unmapped writes fail.
+
+This milestone does not resolve symbols or imports, interpret PS5-specific
+dynamic tags, or parse SELF containers. The separate controlled leaf test is
+documented in `stage2-cpu.md`.
 
 See `public-elf-validation.md` for the external PS5 homebrew ELF check.

@@ -2,15 +2,18 @@
 // Behavior reference: Copyright (C) 2026 SharpEmu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
+#include <limits>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "loader/elf.h"
 #include "loader/elf_trace.h"
+#include "loader/relocator.h"
 
 namespace {
 
@@ -109,7 +112,7 @@ std::vector<std::byte> MakeRelaElf() {
   WriteDynamic(image, 3, 0, 0);
 
   Write64(image, kRelaOffset, kTargetAddress);
-  Write64(image, kRelaOffset + 8, (std::uint64_t{2} << 32U) | 8U);
+  Write64(image, kRelaOffset + 8, 8);
   Write64(image, kRelaOffset + 16,
           static_cast<std::uint64_t>(std::int64_t{-4}));
   return image;
@@ -133,13 +136,72 @@ int main() {
   Check(parsed.metadata.dynamic_info.relocations.size() == 1,
         "RELA entry count is incorrect");
   const auto& relocation = parsed.metadata.dynamic_info.relocations[0];
-  Check(relocation.offset == kTargetAddress && relocation.symbol() == 2 &&
+  Check(relocation.offset == kTargetAddress && relocation.symbol() == 0 &&
             relocation.type() == 8 && relocation.addend == -4,
         "RELA entry fields are incorrect");
   Check(kajps5::loader::FormatElfTrace(parsed.metadata)
                 .find("elf.relocations=1\nelf.plt_relocations=0\n") !=
             std::string::npos,
         "RELA counts are missing from the stable trace");
+
+  kajps5::memory::GuestMemory memory(
+      kRelaAddress, static_cast<std::size_t>(kTargetAddress - kRelaAddress + 8),
+      kajps5::memory::GuestMemoryProtection::kNone);
+  const auto loaded = kajps5::loader::LoadElf64(image, memory);
+  Check(static_cast<bool>(loaded), "RELA ELF did not load");
+  const auto applied =
+      kajps5::loader::ApplyRelativeRelocations(loaded.metadata, memory);
+  Check(applied && applied.applied_count == 1 &&
+            applied.unresolved_import_count == 0,
+        "relative relocation was not applied");
+  std::array<std::byte, 8> relocated{};
+  Check(memory.Read(kTargetAddress, relocated),
+        "relocated value could not be read");
+  const std::array expected_relocated = {
+      std::byte{0xfc}, std::byte{0xff}, std::byte{0xff}, std::byte{0xff},
+      std::byte{0xff}, std::byte{0xff}, std::byte{0xff}, std::byte{0xff}};
+  Check(relocated == expected_relocated,
+        "relative relocation wrote the wrong value");
+
+  auto invalid_symbol = loaded.metadata;
+  invalid_symbol.dynamic_info.relocations[0].info =
+      (std::uint64_t{1} << 32U) | 8U;
+  Check(kajps5::loader::ApplyRelativeRelocations(invalid_symbol, memory)
+            .status == kajps5::loader::RelocationStatus::kInvalidRelativeSymbol,
+        "relative relocation accepted a symbol");
+
+  auto unresolved_import = loaded.metadata;
+  unresolved_import.dynamic_info.relocations.push_back(
+      {kTargetAddress, (std::uint64_t{1} << 32U) | 6U, 0});
+  const auto unresolved =
+      kajps5::loader::ApplyRelativeRelocations(unresolved_import, memory);
+  Check(unresolved && unresolved.applied_count == 1 &&
+            unresolved.unresolved_import_count == 1,
+        "unresolved import was not preserved");
+
+  kajps5::memory::GuestMemory transactional_memory(
+      kRelaAddress, static_cast<std::size_t>(kTargetAddress - kRelaAddress + 8),
+      kajps5::memory::GuestMemoryProtection::kNone);
+  const auto transactional_load =
+      kajps5::loader::LoadElf64(image, transactional_memory);
+  Check(static_cast<bool>(transactional_load),
+        "transactional relocation ELF did not load");
+  auto unsupported = transactional_load.metadata;
+  unsupported.dynamic_info.relocations.push_back({kTargetAddress, 2, 0});
+  Check(kajps5::loader::ApplyRelativeRelocations(unsupported,
+                                                 transactional_memory)
+            .status == kajps5::loader::RelocationStatus::kUnsupportedRelocation,
+        "unsupported relocation was accepted");
+  std::array<std::byte, 8> unchanged{};
+  Check(transactional_memory.Read(kTargetAddress, unchanged) &&
+            unchanged == std::array<std::byte, 8>{},
+        "failed relocation pass changed guest memory");
+  Check(kajps5::loader::ApplyRelativeRelocations(
+            loaded.metadata, memory,
+            std::numeric_limits<std::uint64_t>::max())
+            .status ==
+            kajps5::loader::RelocationStatus::kTargetAddressOverflow,
+        "relocation target overflow was accepted");
 
   auto incomplete = image;
   WriteDynamic(incomplete, 2, 0x1234, kRelaEntrySize);
@@ -183,5 +245,9 @@ int main() {
   Check(kajps5::loader::ElfErrorName(ElfError::kInvalidRelaEntrySize) ==
             "invalid-rela-entry-size",
         "RELA error name is unstable");
+  Check(kajps5::loader::RelocationStatusName(
+            kajps5::loader::RelocationStatus::kTargetNotMapped) ==
+            "target-not-mapped",
+        "relocation status name is unstable");
   return failures == 0 ? 0 : 1;
 }

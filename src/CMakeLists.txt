@@ -10,6 +10,7 @@ add_library(kajps5_core STATIC
   kernel/semaphore.cpp
   loader/elf.cpp
   loader/elf_trace.cpp
+  loader/relocator.cpp
 )
 
 target_include_directories(kajps5_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

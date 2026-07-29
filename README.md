@@ -28,7 +28,8 @@ read, write, and execute flags, copies its file bytes, and clears its
 zero-filled tail. It validates raw non-null `PT_DYNAMIC` entries and resolves
 checked standard ELF string-table references for `DT_NEEDED` and `DT_SONAME`.
 It also validates and records standard x86-64 `RELA` and PLT relocation
-metadata without applying it.
+metadata. A checked relocation pass applies `R_X86_64_RELATIVE` entries and
+reports unresolved import relocations without changing them.
 The kernel foundation has typed handles and deterministic event-flag polling.
 One cooperative scheduler owns guest thread state and
 deterministic ready, block, wake, yield, and exit transitions. A test-only
