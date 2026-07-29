@@ -76,6 +76,21 @@ bool IsSupportedType(std::uint16_t type) noexcept {
          type == kTypeSceExecutable || type == kTypeSceDynamic;
 }
 
+memory::GuestMemoryProtection ProtectionFromFlags(
+    std::uint32_t flags) noexcept {
+  auto protection = memory::GuestMemoryProtection::kNone;
+  if ((flags & 4U) != 0) {
+    protection = protection | memory::GuestMemoryProtection::kRead;
+  }
+  if ((flags & 2U) != 0) {
+    protection = protection | memory::GuestMemoryProtection::kWrite;
+  }
+  if ((flags & 1U) != 0) {
+    protection = protection | memory::GuestMemoryProtection::kExecute;
+  }
+  return protection;
+}
+
 ElfParseResult ParseFailure(ElfError error) noexcept {
   ElfParseResult result;
   result.error = error;
@@ -183,6 +198,21 @@ ElfParseResult ParseElf64(std::span<const std::byte> image) {
     metadata.program_headers.push_back(header);
   }
 
+  std::vector<std::pair<std::uint64_t, std::uint64_t>> load_ranges;
+  load_ranges.reserve(metadata.program_headers.size());
+  for (const auto& header : metadata.program_headers) {
+    if (header.type == kProgramTypeLoad && header.memory_size != 0) {
+      load_ranges.emplace_back(header.virtual_address,
+                               header.virtual_address + header.memory_size);
+    }
+  }
+  std::sort(load_ranges.begin(), load_ranges.end());
+  for (std::size_t index = 1; index < load_ranges.size(); ++index) {
+    if (load_ranges[index].first < load_ranges[index - 1].second) {
+      return ParseFailure(ElfError::kOverlappingLoadSegments);
+    }
+  }
+
   ElfParseResult result;
   result.metadata = std::move(metadata);
   return result;
@@ -238,6 +268,10 @@ ElfLoadResult LoadElf64(std::span<const std::byte> image,
       result.error = ElfError::kGuestRangeOutOfRange;
       return result;
     }
+    if (!memory.CanMap(header.virtual_address, header.memory_size)) {
+      result.error = ElfError::kGuestMappingConflict;
+      return result;
+    }
     const auto zero_size = header.memory_size - header.file_size;
     if (result.loaded_file_bytes >
             std::numeric_limits<std::uint64_t>::max() - header.file_size ||
@@ -256,11 +290,23 @@ ElfLoadResult LoadElf64(std::span<const std::byte> image,
       continue;
     }
 
+    if (!memory.Map(header.virtual_address, header.memory_size,
+                    ProtectionFromFlags(header.flags))) {
+      result.error = ElfError::kGuestMappingConflict;
+      return result;
+    }
+  }
+
+  for (const auto& header : result.metadata.program_headers) {
+    if (header.type != kProgramTypeLoad || header.memory_size == 0) {
+      continue;
+    }
+
     if (header.file_size != 0) {
       const auto file_data = image.subspan(
           static_cast<std::size_t>(header.offset),
           static_cast<std::size_t>(header.file_size));
-      if (!memory.Write(header.virtual_address, file_data)) {
+      if (!memory.Initialize(header.virtual_address, file_data)) {
         result.error = ElfError::kGuestRangeOutOfRange;
         return result;
       }
@@ -268,8 +314,8 @@ ElfLoadResult LoadElf64(std::span<const std::byte> image,
 
     const auto zero_size = header.memory_size - header.file_size;
     if (zero_size != 0 &&
-        !memory.Fill(header.virtual_address + header.file_size, zero_size,
-                     std::byte{0})) {
+        !memory.InitializeFill(header.virtual_address + header.file_size,
+                               zero_size, std::byte{0})) {
       result.error = ElfError::kGuestRangeOutOfRange;
       return result;
     }
@@ -304,7 +350,10 @@ std::string_view ElfErrorName(ElfError error) noexcept {
       return "segment-address-range-overflow";
     case ElfError::kInvalidSegmentAlignment:
       return "invalid-segment-alignment";
+    case ElfError::kOverlappingLoadSegments:
+      return "overlapping-load-segments";
     case ElfError::kGuestRangeOutOfRange: return "guest-range-out-of-range";
+    case ElfError::kGuestMappingConflict: return "guest-mapping-conflict";
     case ElfError::kLoadSizeOverflow: return "load-size-overflow";
   }
   return "unknown";

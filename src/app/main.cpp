@@ -83,7 +83,8 @@ int TraceElfFile(const char* path) {
 
   try {
     kajps5::memory::GuestMemory memory(
-        range.base_address, static_cast<std::size_t>(range.size));
+        range.base_address, static_cast<std::size_t>(range.size),
+        kajps5::memory::GuestMemoryProtection::kNone);
     const auto loaded = kajps5::loader::LoadElf64(*image, memory);
     if (!loaded) {
       std::cerr << "ELF load check failed: "

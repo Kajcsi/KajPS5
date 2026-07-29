@@ -31,7 +31,9 @@ enum class ElfError {
   kSegmentFileRangeOutOfRange,
   kSegmentAddressRangeOverflow,
   kInvalidSegmentAlignment,
+  kOverlappingLoadSegments,
   kGuestRangeOutOfRange,
+  kGuestMappingConflict,
   kLoadSizeOverflow,
 };
 

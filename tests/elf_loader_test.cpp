@@ -104,6 +104,7 @@ int main() {
   using kajps5::loader::LoadElf64;
   using kajps5::loader::ParseElf64;
   using kajps5::memory::GuestMemory;
+  using kajps5::memory::GuestMemoryProtection;
 
   const auto image = MakePublicTestElf();
   const auto parsed = ParseElf64(image);
@@ -151,22 +152,53 @@ int main() {
   Check(static_cast<bool>(ParseElf64(generic_image)),
         "generic System V ELF64 fixture was rejected");
 
-  GuestMemory memory(0x1000, 0x100);
-  Check(memory.Fill(0x1000, 0x100, std::byte{0xcc}),
-        "test memory setup failed");
+  GuestMemory memory(0x1000, 0x100, GuestMemoryProtection::kNone);
   const auto loaded = LoadElf64(image, memory);
   Check(static_cast<bool>(loaded), "valid ELF load failed");
   Check(loaded.loaded_segment_count == 1, "loaded segment count is incorrect");
   Check(loaded.loaded_file_bytes == 4, "loaded file byte count is incorrect");
   Check(loaded.zero_filled_bytes == 4, "zero-filled byte count is incorrect");
 
-  std::array<std::byte, 9> loaded_bytes{};
+  std::array<std::byte, 8> loaded_bytes{};
   Check(memory.Read(0x1000, loaded_bytes), "loaded memory read failed");
   const std::array expected = {
       std::byte{0xde}, std::byte{0xad}, std::byte{0xbe},
       std::byte{0xef}, std::byte{0},    std::byte{0},
-      std::byte{0},    std::byte{0},    std::byte{0xcc}};
+      std::byte{0},    std::byte{0}};
   Check(loaded_bytes == expected, "segment copy or zero fill is incorrect");
+  Check(memory.regions().size() == 1, "load mapping count is incorrect");
+  Check(memory.regions()[0].protection ==
+            (GuestMemoryProtection::kRead |
+             GuestMemoryProtection::kExecute),
+        "ELF segment permissions were not preserved");
+  Check(memory.CanExecute(0x1000, 8), "executable segment is not executable");
+  const std::array denied_write = {std::byte{0xff}};
+  Check(!memory.Write(0x1000, denied_write),
+        "read-execute segment accepted a guest write");
+  std::array<std::byte, 1> gap_byte{};
+  Check(!memory.Read(0x1008, gap_byte), "unmapped load gap was readable");
+
+  auto multi_segment_image = image;
+  const auto second_header = kLoadHeaderOffset + 56;
+  Write32(multi_segment_image, second_header, 1);
+  Write32(multi_segment_image, second_header + 4, 2);
+  Write64(multi_segment_image, second_header + 8, 0);
+  Write64(multi_segment_image, second_header + 16, 0x1100);
+  Write64(multi_segment_image, second_header + 32, 0);
+  Write64(multi_segment_image, second_header + 40, 4);
+  Write64(multi_segment_image, second_header + 48, 1);
+  GuestMemory multi_memory(0x1000, 0x200, GuestMemoryProtection::kNone);
+  const auto multi_loaded = LoadElf64(multi_segment_image, multi_memory);
+  Check(static_cast<bool>(multi_loaded), "multi-segment ELF load failed");
+  Check(multi_memory.regions().size() == 2,
+        "multi-segment mapping count is incorrect");
+  Check(multi_memory.regions()[1].protection ==
+            GuestMemoryProtection::kWrite,
+        "write-only ELF permissions were not preserved");
+  Check(multi_memory.Write(0x1100, denied_write),
+        "write-only ELF segment rejected a write");
+  Check(!multi_memory.Read(0x1100, gap_byte),
+        "write-only ELF segment was readable");
 
   auto bad_magic = image;
   bad_magic[1] = std::byte{'X'};
@@ -220,18 +252,36 @@ int main() {
   CheckError(std::move(bad_alignment), ElfError::kInvalidSegmentAlignment,
              "invalid alignment returned the wrong error");
 
-  GuestMemory short_memory(0x1000, 4);
-  Check(short_memory.Fill(0x1000, 4, std::byte{0xcc}),
-        "short memory setup failed");
+  auto overlapping_segments = image;
+  Write32(overlapping_segments, second_header, 1);
+  Write32(overlapping_segments, second_header + 4, 4);
+  Write64(overlapping_segments, second_header + 16, 0x1004);
+  Write64(overlapping_segments, second_header + 32, 0);
+  Write64(overlapping_segments, second_header + 40, 4);
+  Write64(overlapping_segments, second_header + 48, 1);
+  CheckError(std::move(overlapping_segments),
+             ElfError::kOverlappingLoadSegments,
+             "overlapping load segments returned the wrong error");
+
+  GuestMemory short_memory(0x1000, 4, GuestMemoryProtection::kNone);
   const auto rejected_load = LoadElf64(image, short_memory);
   Check(rejected_load.error == ElfError::kGuestRangeOutOfRange,
         "out-of-range load returned the wrong error");
-  std::array<std::byte, 4> unchanged{};
-  Check(short_memory.Read(0x1000, unchanged),
-        "read after rejected load failed");
-  Check(unchanged == std::array{std::byte{0xcc}, std::byte{0xcc},
-                                std::byte{0xcc}, std::byte{0xcc}},
-        "rejected load changed guest memory");
+  Check(short_memory.regions().empty(),
+        "rejected load created a partial mapping");
+
+  GuestMemory conflicting_memory(0x1000, 0x200,
+                                 GuestMemoryProtection::kNone);
+  Check(conflicting_memory.Map(0x1100, 4, GuestMemoryProtection::kRead),
+        "mapping conflict setup failed");
+  const auto conflicting_load =
+      LoadElf64(multi_segment_image, conflicting_memory);
+  Check(conflicting_load.error == ElfError::kGuestMappingConflict,
+        "mapping conflict returned the wrong error");
+  Check(conflicting_memory.regions().size() == 1,
+        "mapping conflict created a partial mapping");
+  Check(conflicting_memory.regions()[0].address == 0x1100,
+        "mapping conflict changed the existing region");
 
   Check(kajps5::loader::ElfErrorName(ElfError::kInvalidMagic) ==
             "invalid-magic",

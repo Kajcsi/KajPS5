@@ -9,10 +9,10 @@
 
 ## Stage 1: Loader and guest memory
 
-- Parse ELF metadata without executing guest code.
-- Validate all guest address ranges.
-- Load one small public test program.
-- Produce a stable loader trace.
+- [x] Parse ELF metadata without executing guest code.
+- [x] Validate all guest address ranges and access permissions.
+- [x] Load one small public test program.
+- [x] Produce a stable loader trace.
 
 ## Stage 2: CPU and kernel
 

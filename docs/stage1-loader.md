@@ -18,11 +18,17 @@ The design review used these pinned references:
   `tests/SharpEmu.Libs.Tests/Memory/VirtualMemoryTests.cs`: whole-range access
   checks and no partial writes after a rejected access.
 
+The guest-memory model keeps sorted, non-overlapping mapped regions. Every
+read, write, and execute check must pass across the complete range before an
+access starts. The ELF loader rejects overlapping load segments and mapping
+conflicts before it creates any new region. It then preserves each segment's
+`R/W/X` flags during initialization.
+
 The public test fixture is generated from constants in
 `tests/elf_loader_test.cpp`. It has no external or proprietary bytes. The tests
 check metadata, file copies, zero fill, truncated input, integer overflow,
-alignment, and guest-memory rejection. A rejected load does not change guest
-memory.
+alignment, permissions, gaps, overlap, and guest-memory rejection. A rejected
+load does not change guest memory.
 
 This milestone does not map host pages, apply execute permissions, relocate a
 dynamic image, parse SELF containers, or run guest code.
