@@ -49,6 +49,20 @@ std::uint64_t Dispatch(kajps5::hle::ExportRegistry& registry,
   return context.GetRegister(kajps5::hle::HleRegister::kRax).value_or(0);
 }
 
+std::string ReadText(kajps5::memory::GuestMemory& memory,
+                     std::uint64_t address, std::size_t size) {
+  std::vector<std::byte> bytes(size);
+  if (!memory.Read(address, bytes)) {
+    return {};
+  }
+  std::string text;
+  text.reserve(size);
+  for (const auto byte : bytes) {
+    text.push_back(static_cast<char>(byte));
+  }
+  return text;
+}
+
 }  // namespace
 
 int main() {
@@ -59,17 +73,25 @@ int main() {
   using kajps5::kernel::KernelRuntime;
   using kajps5::memory::GuestMemory;
 
-  GuestMemory memory(0x1000, 0x3000);
+  GuestMemory memory(0x1000, 0x10000);
   KernelRuntime runtime;
   Check(runtime.files().RegisterReadOnlyFile(
             "/app0/data/test.bin", Bytes("abcdef")) ==
             kajps5::kernel::KernelStatus::kOk,
         "file fixture registration failed");
+  std::vector<std::byte> large_file(20 * 1024);
+  for (std::size_t index = 0; index < large_file.size(); ++index) {
+    large_file[index] = static_cast<std::byte>(index & 0xffU);
+  }
+  Check(runtime.files().RegisterReadOnlyFile(
+            "/app0/data/large.bin", large_file) ==
+            kajps5::kernel::KernelStatus::kOk,
+        "large file fixture registration failed");
 
   ExportRegistry registry;
   Check(kajps5::hle::RegisterKernelFileExports(registry, runtime.files()) ==
             ExportRegistryStatus::kOk &&
-            registry.size() == 4,
+            registry.size() == 10,
         "file export registration failed");
 
   auto path = Bytes("/app0/data/test.bin");
@@ -86,6 +108,51 @@ int main() {
   Check(handle != 0 && runtime.handles().size() == 1,
         "NID open did not return a file descriptor");
 
+  HleCallContext read_context(memory);
+  Check(read_context.SetRegister(HleRegister::kRdi, handle) &&
+            read_context.SetRegister(HleRegister::kRsi, 0x2800) &&
+            read_context.SetRegister(HleRegister::kRdx, 2),
+        "read argument setup failed");
+  Check(Dispatch(registry, kajps5::hle::kKernelReadNid, read_context) == 2 &&
+            ReadText(memory, 0x2800, 2) == "ab",
+        "NID read returned the wrong bytes");
+
+  HleCallContext pread_context(memory);
+  Check(pread_context.SetRegister(HleRegister::kRdi, handle) &&
+            pread_context.SetRegister(HleRegister::kRsi, 0x2810) &&
+            pread_context.SetRegister(HleRegister::kRdx, 2) &&
+            pread_context.SetRegister(HleRegister::kRcx, 4),
+        "pread argument setup failed");
+  Check(Dispatch(registry, kajps5::hle::kKernelPreadName, pread_context) == 2 &&
+            ReadText(memory, 0x2810, 2) == "ef",
+        "named pread returned the wrong bytes");
+
+  HleCallContext tell_context(memory);
+  Check(tell_context.SetRegister(HleRegister::kRdi, handle) &&
+            tell_context.SetRegister(HleRegister::kRsi, 0) &&
+            tell_context.SetRegister(HleRegister::kRdx, 1),
+        "current-position setup failed");
+  Check(Dispatch(registry, kajps5::hle::kKernelLseekNid, tell_context) == 2,
+        "pread changed the shared file position");
+
+  HleCallContext seek_context(memory);
+  Check(seek_context.SetRegister(HleRegister::kRdi, handle) &&
+            seek_context.SetRegister(HleRegister::kRsi,
+                                     static_cast<std::uint64_t>(-1)) &&
+            seek_context.SetRegister(HleRegister::kRdx, 2),
+        "end-relative seek setup failed");
+  Check(Dispatch(registry, kajps5::hle::kKernelLseekName, seek_context) == 5,
+        "named end-relative seek failed");
+
+  HleCallContext tail_context(memory);
+  Check(tail_context.SetRegister(HleRegister::kRdi, handle) &&
+            tail_context.SetRegister(HleRegister::kRsi, 0x2820) &&
+            tail_context.SetRegister(HleRegister::kRdx, 2),
+        "tail read setup failed");
+  Check(Dispatch(registry, kajps5::hle::kKernelReadName, tail_context) == 1 &&
+            ReadText(memory, 0x2820, 1) == "f",
+        "end-of-file read returned the wrong bytes");
+
   HleCallContext close_context(memory);
   Check(close_context.SetRegister(HleRegister::kRdi, handle),
         "close argument setup failed");
@@ -99,6 +166,16 @@ int main() {
   Check(Dispatch(registry, kajps5::hle::kKernelCloseNid, stale_context) ==
             KernelResult(kajps5::hle::kKernelHleErrorBadFileDescriptor),
         "stale close returned the wrong kernel result");
+
+  HleCallContext stale_read_context(memory);
+  Check(stale_read_context.SetRegister(HleRegister::kRdi, handle) &&
+            stale_read_context.SetRegister(HleRegister::kRsi, 0x2800) &&
+            stale_read_context.SetRegister(HleRegister::kRdx, 1),
+        "stale read setup failed");
+  Check(Dispatch(registry, kajps5::hle::kKernelReadName,
+                 stale_read_context) ==
+            KernelResult(kajps5::hle::kKernelHleErrorBadFileDescriptor),
+        "stale read returned the wrong kernel result");
 
   HleCallContext missing_context(memory);
   auto missing = Bytes("/app0/missing.bin");
@@ -127,7 +204,7 @@ int main() {
         "invalid open flags returned the wrong kernel result");
 
   HleCallContext fault_context(memory);
-  Check(fault_context.SetRegister(HleRegister::kRdi, 0x5000),
+  Check(fault_context.SetRegister(HleRegister::kRdi, 0x20000),
         "faulting path setup failed");
   Check(Dispatch(registry, kajps5::hle::kKernelOpenName, fault_context) ==
             KernelResult(kajps5::hle::kKernelHleErrorFault),
@@ -146,9 +223,97 @@ int main() {
             KernelResult(kajps5::hle::kKernelHleErrorFault),
         "unterminated path returned the wrong kernel result");
 
+  HleCallContext fault_open_context(memory);
+  Check(fault_open_context.SetRegister(HleRegister::kRdi, 0x1100),
+        "fault-read open setup failed");
+  const auto fault_handle = Dispatch(
+      registry, kajps5::hle::kKernelOpenName, fault_open_context);
+  HleCallContext fault_read_context(memory);
+  Check(fault_read_context.SetRegister(HleRegister::kRdi, fault_handle) &&
+            fault_read_context.SetRegister(HleRegister::kRsi, 0x20000) &&
+            fault_read_context.SetRegister(HleRegister::kRdx, 2),
+        "fault-read argument setup failed");
+  Check(Dispatch(registry, kajps5::hle::kKernelReadName,
+                 fault_read_context) ==
+            KernelResult(kajps5::hle::kKernelHleErrorFault),
+        "unmapped output returned the wrong kernel result");
+  HleCallContext preserved_context(memory);
+  Check(preserved_context.SetRegister(HleRegister::kRdi, fault_handle) &&
+            preserved_context.SetRegister(HleRegister::kRsi, 0x2830) &&
+            preserved_context.SetRegister(HleRegister::kRdx, 2),
+        "preserved-position read setup failed");
+  Check(Dispatch(registry, kajps5::hle::kKernelReadName,
+                 preserved_context) == 2 &&
+            ReadText(memory, 0x2830, 2) == "ab",
+        "failed guest write advanced the file position");
+
+  HleCallContext negative_pread_context(memory);
+  Check(negative_pread_context.SetRegister(HleRegister::kRdi, fault_handle) &&
+            negative_pread_context.SetRegister(HleRegister::kRsi, 0x2840) &&
+            negative_pread_context.SetRegister(HleRegister::kRdx, 1) &&
+            negative_pread_context.SetRegister(
+                HleRegister::kRcx, static_cast<std::uint64_t>(-1)),
+        "negative pread setup failed");
+  Check(Dispatch(registry, kajps5::hle::kKernelPreadNid,
+                 negative_pread_context) ==
+            KernelResult(kajps5::hle::kKernelHleErrorInvalidArgument),
+        "negative pread returned the wrong kernel result");
+
+  HleCallContext whence_context(memory);
+  Check(whence_context.SetRegister(HleRegister::kRdi, fault_handle) &&
+            whence_context.SetRegister(HleRegister::kRsi, 0) &&
+            whence_context.SetRegister(HleRegister::kRdx, 3),
+        "invalid-whence setup failed");
+  Check(Dispatch(registry, kajps5::hle::kKernelLseekName, whence_context) ==
+            KernelResult(kajps5::hle::kKernelHleErrorInvalidArgument),
+        "invalid seek origin returned the wrong kernel result");
+
+  HleCallContext zero_read_context(memory);
+  Check(zero_read_context.SetRegister(HleRegister::kRdi, fault_handle) &&
+            zero_read_context.SetRegister(HleRegister::kRsi, 0) &&
+            zero_read_context.SetRegister(HleRegister::kRdx, 0),
+        "zero read setup failed");
+  Check(Dispatch(registry, kajps5::hle::kKernelReadName,
+                 zero_read_context) == 0,
+        "zero-byte read rejected a null output pointer");
+
+  auto large_path = Bytes("/app0/data/large.bin");
+  large_path.push_back(std::byte{0});
+  Check(memory.Initialize(0x3000, large_path),
+        "large guest path setup failed");
+  HleCallContext large_open_context(memory);
+  Check(large_open_context.SetRegister(HleRegister::kRdi, 0x3000),
+        "large-file open setup failed");
+  const auto large_handle = Dispatch(
+      registry, kajps5::hle::kKernelOpenName, large_open_context);
+  HleCallContext large_read_context(memory);
+  Check(large_read_context.SetRegister(HleRegister::kRdi, large_handle) &&
+            large_read_context.SetRegister(HleRegister::kRsi, 0x6000) &&
+            large_read_context.SetRegister(HleRegister::kRdx,
+                                           large_file.size()),
+        "large read setup failed");
+  std::vector<std::byte> large_observed(large_file.size());
+  Check(Dispatch(registry, kajps5::hle::kKernelReadName,
+                 large_read_context) == large_file.size() &&
+            memory.Read(0x6000, large_observed) &&
+            large_observed == large_file,
+        "chunked read returned the wrong bytes");
+
+  HleCallContext large_close_context(memory);
+  Check(large_close_context.SetRegister(HleRegister::kRdi, large_handle) &&
+            Dispatch(registry, kajps5::hle::kKernelCloseName,
+                     large_close_context) == 0,
+        "large-file close failed");
+
+  HleCallContext fault_close_context(memory);
+  Check(fault_close_context.SetRegister(HleRegister::kRdi, fault_handle) &&
+            Dispatch(registry, kajps5::hle::kKernelCloseName,
+                     fault_close_context) == 0,
+        "fault-read fixture close failed");
+
   Check(kajps5::hle::RegisterKernelFileExports(registry, runtime.files()) ==
             ExportRegistryStatus::kAlreadyExists &&
-            registry.size() == 4,
+            registry.size() == 10,
         "duplicate file export batch changed the registry");
   return failures == 0 ? 0 : 1;
 }

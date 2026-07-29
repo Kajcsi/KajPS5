@@ -75,6 +75,9 @@ The focused tests record these shared behaviors:
   checked offsets.
 - The first file HLE bridge reads a bounded guest path, maps service failures to
   kernel-compatible results, and registers open and close by name and NID.
+- Checked read and positioned-read handlers preflight the full guest output
+  range and use bounded temporary chunks. Seek validates signed offsets and
+  origins before it changes the descriptor position.
 
 KajPS5 implements these behaviors in its own C++ interfaces. It does not copy
 the upstream host-thread executor, continuation system, object ownership

@@ -78,6 +78,8 @@ class HleCallContext final {
                                              std::uint64_t value) noexcept;
   [[nodiscard]] HleContextStatus WriteMemory(
       std::uint64_t address, std::span<const std::byte> value) noexcept;
+  [[nodiscard]] bool CanWriteMemory(std::uint64_t address,
+                                    std::uint64_t length) const noexcept;
   [[nodiscard]] HleStringResult ReadNullTerminatedString(
       std::uint64_t address, std::size_t maximum_bytes) const;
 

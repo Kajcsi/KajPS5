@@ -14,6 +14,12 @@ inline constexpr auto kKernelOpenName = "sceKernelOpen";
 inline constexpr auto kKernelOpenNid = "1G3lF1Gg1k8";
 inline constexpr auto kKernelCloseName = "sceKernelClose";
 inline constexpr auto kKernelCloseNid = "UK2Tl2DWUns";
+inline constexpr auto kKernelReadName = "sceKernelRead";
+inline constexpr auto kKernelReadNid = "Cg4srZ6TKbU";
+inline constexpr auto kKernelPreadName = "sceKernelPread";
+inline constexpr auto kKernelPreadNid = "+r3rMFwItV4";
+inline constexpr auto kKernelLseekName = "sceKernelLseek";
+inline constexpr auto kKernelLseekNid = "oib76F-12fk";
 
 // The file service must outlive all dispatches through the registry.
 [[nodiscard]] ExportRegistryStatus RegisterKernelFileExports(

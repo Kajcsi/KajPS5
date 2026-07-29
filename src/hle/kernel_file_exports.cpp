@@ -4,12 +4,20 @@
 
 #include "hle/kernel_file_exports.h"
 
+#include <algorithm>
+#include <array>
+#include <bit>
+#include <cstddef>
 #include <cstdint>
+#include <limits>
+#include <span>
 #include <utility>
 #include <vector>
 
 namespace kajps5::hle {
 namespace {
+
+constexpr std::size_t kFileIoChunkBytes = 16 * 1024;
 
 void SetKernelResult(HleCallContext& context, std::int32_t result) noexcept {
   context.SetReturn(
@@ -64,13 +72,140 @@ HleContextStatus KernelClose(HleCallContext& context,
   return HleContextStatus::kOk;
 }
 
+HleContextStatus KernelRead(HleCallContext& context,
+                            kernel::FileService& files) {
+  const auto handle = context.Argument(0).value_or(0);
+  const auto destination = context.Argument(1).value_or(0);
+  const auto requested = context.Argument(2).value_or(0);
+  if (requested == 0) {
+    context.SetReturn(0);
+    return HleContextStatus::kOk;
+  }
+  if (!context.CanWriteMemory(destination, requested)) {
+    SetKernelResult(context, kKernelHleErrorFault);
+    return HleContextStatus::kOk;
+  }
+
+  std::array<std::byte, kFileIoChunkBytes> buffer{};
+  std::uint64_t total = 0;
+  while (total < requested) {
+    const auto count = static_cast<std::size_t>(
+        std::min<std::uint64_t>(buffer.size(), requested - total));
+    const auto result = files.Read(handle, std::span(buffer).first(count));
+    if (!result) {
+      SetKernelResult(context,
+                      result.status == kernel::KernelStatus::kNotFound
+                          ? kKernelHleErrorBadFileDescriptor
+                          : FileStatusResult(result.status));
+      return HleContextStatus::kOk;
+    }
+    if (result.value == 0) {
+      break;
+    }
+    if (context.WriteMemory(
+            destination + total,
+            std::span(buffer).first(static_cast<std::size_t>(result.value))) !=
+        HleContextStatus::kOk) {
+      SetKernelResult(context, kKernelHleErrorFault);
+      return HleContextStatus::kOk;
+    }
+    total += result.value;
+    if (result.value < count) {
+      break;
+    }
+  }
+  context.SetReturn(total);
+  return HleContextStatus::kOk;
+}
+
+HleContextStatus KernelPread(HleCallContext& context,
+                             kernel::FileService& files) {
+  const auto handle = context.Argument(0).value_or(0);
+  const auto destination = context.Argument(1).value_or(0);
+  const auto requested = context.Argument(2).value_or(0);
+  const auto offset =
+      std::bit_cast<std::int64_t>(context.Argument(3).value_or(0));
+  if (offset < 0 ||
+      requested > static_cast<std::uint64_t>(
+                      std::numeric_limits<std::int64_t>::max() - offset)) {
+    SetKernelResult(context, kKernelHleErrorInvalidArgument);
+    return HleContextStatus::kOk;
+  }
+  if (requested != 0 && !context.CanWriteMemory(destination, requested)) {
+    SetKernelResult(context, kKernelHleErrorFault);
+    return HleContextStatus::kOk;
+  }
+
+  std::array<std::byte, kFileIoChunkBytes> buffer{};
+  std::uint64_t total = 0;
+  do {
+    const auto count = static_cast<std::size_t>(
+        std::min<std::uint64_t>(buffer.size(), requested - total));
+    const auto current_offset = offset + static_cast<std::int64_t>(total);
+    const auto result =
+        files.Pread(handle, current_offset, std::span(buffer).first(count));
+    if (!result) {
+      SetKernelResult(context,
+                      result.status == kernel::KernelStatus::kNotFound
+                          ? kKernelHleErrorBadFileDescriptor
+                          : FileStatusResult(result.status));
+      return HleContextStatus::kOk;
+    }
+    if (result.value == 0) {
+      break;
+    }
+    if (context.WriteMemory(
+            destination + total,
+            std::span(buffer).first(static_cast<std::size_t>(result.value))) !=
+        HleContextStatus::kOk) {
+      SetKernelResult(context, kKernelHleErrorFault);
+      return HleContextStatus::kOk;
+    }
+    total += result.value;
+    if (result.value < count) {
+      break;
+    }
+  } while (total < requested);
+  context.SetReturn(total);
+  return HleContextStatus::kOk;
+}
+
+HleContextStatus KernelLseek(HleCallContext& context,
+                             kernel::FileService& files) {
+  const auto handle = context.Argument(0).value_or(0);
+  const auto offset =
+      std::bit_cast<std::int64_t>(context.Argument(1).value_or(0));
+  const auto whence = context.Argument(2).value_or(0);
+
+  kernel::FileSeekWhence origin{};
+  switch (whence) {
+    case 0: origin = kernel::FileSeekWhence::kSet; break;
+    case 1: origin = kernel::FileSeekWhence::kCurrent; break;
+    case 2: origin = kernel::FileSeekWhence::kEnd; break;
+    default:
+      SetKernelResult(context, kKernelHleErrorInvalidArgument);
+      return HleContextStatus::kOk;
+  }
+
+  const auto result = files.Seek(handle, offset, origin);
+  if (!result) {
+    SetKernelResult(context,
+                    result.status == kernel::KernelStatus::kNotFound
+                        ? kKernelHleErrorBadFileDescriptor
+                        : FileStatusResult(result.status));
+    return HleContextStatus::kOk;
+  }
+  context.SetReturn(result.value);
+  return HleContextStatus::kOk;
+}
+
 }  // namespace
 
 ExportRegistryStatus RegisterKernelFileExports(ExportRegistry& registry,
                                                kernel::FileService& files) {
   auto* const file_view = &files;
   std::vector<HleExportDefinition> exports;
-  exports.reserve(4);
+  exports.reserve(10);
   exports.push_back({kLibKernelName, kKernelOpenName,
                      [file_view](HleCallContext& context) {
                        return KernelOpen(context, *file_view);
@@ -86,6 +221,30 @@ ExportRegistryStatus RegisterKernelFileExports(ExportRegistry& registry,
   exports.push_back({kLibKernelName, kKernelCloseNid,
                      [file_view](HleCallContext& context) {
                        return KernelClose(context, *file_view);
+                     }});
+  exports.push_back({kLibKernelName, kKernelReadName,
+                     [file_view](HleCallContext& context) {
+                       return KernelRead(context, *file_view);
+                     }});
+  exports.push_back({kLibKernelName, kKernelReadNid,
+                     [file_view](HleCallContext& context) {
+                       return KernelRead(context, *file_view);
+                     }});
+  exports.push_back({kLibKernelName, kKernelPreadName,
+                     [file_view](HleCallContext& context) {
+                       return KernelPread(context, *file_view);
+                     }});
+  exports.push_back({kLibKernelName, kKernelPreadNid,
+                     [file_view](HleCallContext& context) {
+                       return KernelPread(context, *file_view);
+                     }});
+  exports.push_back({kLibKernelName, kKernelLseekName,
+                     [file_view](HleCallContext& context) {
+                       return KernelLseek(context, *file_view);
+                     }});
+  exports.push_back({kLibKernelName, kKernelLseekNid,
+                     [file_view](HleCallContext& context) {
+                       return KernelLseek(context, *file_view);
                      }});
   return registry.RegisterBatch(std::move(exports));
 }

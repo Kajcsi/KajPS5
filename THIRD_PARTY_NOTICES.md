@@ -63,7 +63,8 @@ counter, and frequency behavior from the pinned KytyPS5
 source code was copied. The clock-gettime and gettimeofday handlers use
 KytyPS5's kernel-compatible `EFAULT` and `EINVAL` values. SharpEmu marks its
 differing Gen5 error values as synthetic.
-The checked open and close handlers in `src/hle/kernel_file_exports.cpp` and
+The checked open, close, read, positioned-read, and seek handlers in
+`src/hle/kernel_file_exports.cpp` and
 `tests/hle_kernel_file_exports_test.cpp` use focused behavior observations from
 KytyPS5 `src/kernel/fileSystem.cpp` and SharpEmu
 `src/SharpEmu.Libs/Kernel/KernelMemoryCompatExports.cs` at the pinned commits.
