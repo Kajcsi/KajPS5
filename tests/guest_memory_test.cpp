@@ -25,6 +25,7 @@ void Check(bool condition, const char* message) {
 
 int main() {
   using kajps5::memory::GuestMemory;
+  using kajps5::memory::GuestMemoryProtection;
 
   GuestMemory memory(0x1000, 8);
   Check(memory.base_address() == 0x1000, "base address changed");
@@ -66,6 +67,75 @@ int main() {
     rejected_overflow = true;
   }
   Check(rejected_overflow, "constructor accepted an overflowing range");
+
+  GuestMemory mapped(0x2000, 0x20, GuestMemoryProtection::kNone);
+  Check(mapped.regions().empty(), "unmapped memory created a region");
+  Check(mapped.Map(0x2008, 4, GuestMemoryProtection::kRead),
+        "out-of-order read mapping failed");
+  Check(mapped.Map(0x2000, 4,
+                   GuestMemoryProtection::kRead |
+                       GuestMemoryProtection::kWrite),
+        "read-write mapping failed");
+  Check(mapped.Map(0x2004, 4, GuestMemoryProtection::kRead),
+        "adjacent read mapping failed");
+  Check(mapped.Map(0x2010, 4, GuestMemoryProtection::kExecute),
+        "execute mapping failed");
+  Check(mapped.Map(0x2014, 4, GuestMemoryProtection::kWrite),
+        "write-only mapping failed");
+  Check(mapped.Map(0x2018, 4, GuestMemoryProtection::kNone),
+        "no-access mapping failed");
+  Check(mapped.regions().size() == 6, "mapping count is incorrect");
+  Check(mapped.regions()[0].address == 0x2000 &&
+            mapped.regions()[1].address == 0x2004 &&
+            mapped.regions()[2].address == 0x2008,
+        "out-of-order mappings were not sorted");
+  Check(!mapped.Map(0x2003, 2, GuestMemoryProtection::kRead),
+        "overlapping mapping was accepted");
+  Check(!mapped.Map(0x1fff, 2, GuestMemoryProtection::kRead),
+        "mapping outside the backing range was accepted");
+
+  const std::array mapped_input = {
+      std::byte{1}, std::byte{2}, std::byte{3}, std::byte{4},
+      std::byte{5}, std::byte{6}, std::byte{7}, std::byte{8},
+      std::byte{9}, std::byte{10}, std::byte{11}, std::byte{12}};
+  Check(mapped.Initialize(0x2000, mapped_input),
+        "initialization across adjacent mappings failed");
+  std::array<std::byte, 12> mapped_output{};
+  Check(mapped.Read(0x2000, mapped_output),
+        "read across adjacent readable mappings failed");
+  Check(mapped_output == mapped_input,
+        "adjacent mapping read returned incorrect data");
+
+  const std::array crossing_write = {std::byte{0xaa}, std::byte{0xbb},
+                                     std::byte{0xcc}, std::byte{0xdd}};
+  Check(!mapped.Write(0x2002, crossing_write),
+        "write across a read-only mapping succeeded");
+  Check(mapped.Read(0x2000, mapped_output),
+        "read after rejected permission write failed");
+  Check(mapped_output == mapped_input,
+        "rejected permission write changed memory");
+
+  Check(mapped.CanExecute(0x2010, 4), "execute access was rejected");
+  Check(!mapped.Read(0x2010, output), "execute-only memory was readable");
+  Check(!mapped.Write(0x2010, rejected), "execute-only memory was writable");
+  Check(mapped.Write(0x2014, rejected), "write-only memory rejected a write");
+  Check(!mapped.Read(0x2014, output), "write-only memory was readable");
+  Check(mapped.IsMapped(0x2018, 4), "no-access region is not mapped");
+  Check(!mapped.Read(0x2018, output), "no-access memory was readable");
+  Check(!mapped.Write(0x2018, rejected), "no-access memory was writable");
+  Check(!mapped.CanExecute(0x2018, 1), "no-access memory was executable");
+  Check(!mapped.Read(0x200a, output), "read across an unmapped gap passed");
+  Check(mapped.Read(0x2000, {}),
+        "zero-length read at a readable mapping failed");
+  Check(!mapped.Read(0x200c, {}),
+        "zero-length read at an unmapped address passed");
+
+  Check(mapped.InitializeFill(0x2004, 4, std::byte{0}),
+        "read-only initialization fill failed");
+  std::array<std::byte, 4> cleared{};
+  Check(mapped.Read(0x2004, cleared), "cleared read-only range is unreadable");
+  Check(cleared == std::array<std::byte, 4>{},
+        "initialization fill did not clear the range");
 
   return failures == 0 ? 0 : 1;
 }

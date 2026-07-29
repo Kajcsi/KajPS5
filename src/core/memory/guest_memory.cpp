@@ -20,8 +20,13 @@ std::size_t ValidateSize(std::uint64_t base_address, std::size_t size) {
 
 }  // namespace
 
-GuestMemory::GuestMemory(std::uint64_t base_address, std::size_t size)
-    : base_address_(base_address), bytes_(ValidateSize(base_address, size)) {}
+GuestMemory::GuestMemory(std::uint64_t base_address, std::size_t size,
+                         GuestMemoryProtection initial_protection)
+    : base_address_(base_address), bytes_(ValidateSize(base_address, size)) {
+  if (!bytes_.empty() && initial_protection != GuestMemoryProtection::kNone) {
+    regions_.push_back({base_address_, this->size(), initial_protection});
+  }
+}
 
 std::uint64_t GuestMemory::base_address() const noexcept {
   return base_address_;
@@ -49,9 +54,102 @@ bool GuestMemory::Contains(std::uint64_t address,
   return length <= size() - offset;
 }
 
+bool GuestMemory::CanMap(std::uint64_t address,
+                         std::uint64_t length) const noexcept {
+  if (length == 0 || !Contains(address, length)) {
+    return false;
+  }
+
+  const auto end_address = address + length;
+  const auto insertion = std::lower_bound(
+      regions_.begin(), regions_.end(), address,
+      [](const GuestMemoryRegion& region, std::uint64_t candidate) {
+        return region.address < candidate;
+      });
+  if (insertion != regions_.begin()) {
+    const auto& previous = *(insertion - 1);
+    if (previous.address + previous.size > address) {
+      return false;
+    }
+  }
+  return insertion == regions_.end() || end_address <= insertion->address;
+}
+
+bool GuestMemory::Map(std::uint64_t address, std::uint64_t length,
+                      GuestMemoryProtection protection) {
+  if (!CanMap(address, length)) {
+    return false;
+  }
+
+  const auto insertion = std::lower_bound(
+      regions_.begin(), regions_.end(), address,
+      [](const GuestMemoryRegion& region, std::uint64_t candidate) {
+        return region.address < candidate;
+      });
+  regions_.insert(insertion, {address, length, protection});
+  return true;
+}
+
+bool GuestMemory::IsMapped(std::uint64_t address,
+                           std::uint64_t length) const noexcept {
+  return CanAccess(address, length, GuestMemoryProtection::kNone);
+}
+
+bool GuestMemory::CanAccess(
+    std::uint64_t address, std::uint64_t length,
+    GuestMemoryProtection required_protection) const noexcept {
+  if (!Contains(address, length)) {
+    return false;
+  }
+
+  auto region_index = FindContainingRegion(address);
+  if (region_index == regions_.size()) {
+    return false;
+  }
+
+  auto current_address = address;
+  auto remaining = length;
+  while (region_index < regions_.size()) {
+    const auto& region = regions_[region_index];
+    const auto region_end = region.address + region.size;
+    if (current_address < region.address || current_address >= region_end) {
+      return false;
+    }
+
+    const auto actual = static_cast<std::uint8_t>(region.protection);
+    const auto required = static_cast<std::uint8_t>(required_protection);
+    if ((actual & required) != required) {
+      return false;
+    }
+    if (remaining == 0) {
+      return true;
+    }
+
+    const auto available = region_end - current_address;
+    const auto chunk = std::min(remaining, available);
+    remaining -= chunk;
+    if (remaining == 0) {
+      return true;
+    }
+    current_address += chunk;
+    ++region_index;
+  }
+  return false;
+}
+
+bool GuestMemory::CanExecute(std::uint64_t address,
+                             std::uint64_t length) const noexcept {
+  return CanAccess(address, length, GuestMemoryProtection::kExecute);
+}
+
+std::span<const GuestMemoryRegion> GuestMemory::regions() const noexcept {
+  return regions_;
+}
+
 bool GuestMemory::Read(std::uint64_t address,
                        std::span<std::byte> destination) const noexcept {
-  if (!Contains(address, destination.size())) {
+  if (!CanAccess(address, destination.size(),
+                 GuestMemoryProtection::kRead)) {
     return false;
   }
 
@@ -63,7 +161,8 @@ bool GuestMemory::Read(std::uint64_t address,
 
 bool GuestMemory::Write(std::uint64_t address,
                         std::span<const std::byte> source) noexcept {
-  if (!Contains(address, source.size())) {
+  if (!CanAccess(address, source.size(),
+                 GuestMemoryProtection::kWrite)) {
     return false;
   }
 
@@ -75,7 +174,7 @@ bool GuestMemory::Write(std::uint64_t address,
 
 bool GuestMemory::Fill(std::uint64_t address, std::uint64_t length,
                        std::byte value) noexcept {
-  if (!Contains(address, length)) {
+  if (!CanAccess(address, length, GuestMemoryProtection::kWrite)) {
     return false;
   }
 
@@ -83,6 +182,52 @@ bool GuestMemory::Fill(std::uint64_t address, std::uint64_t length,
   std::fill_n(bytes_.begin() + static_cast<std::ptrdiff_t>(offset),
               static_cast<std::size_t>(length), value);
   return true;
+}
+
+bool GuestMemory::Initialize(
+    std::uint64_t address, std::span<const std::byte> source) noexcept {
+  if (!IsMapped(address, source.size())) {
+    return false;
+  }
+
+  const auto offset = OffsetOf(address);
+  std::copy(source.begin(), source.end(),
+            bytes_.begin() + static_cast<std::ptrdiff_t>(offset));
+  return true;
+}
+
+bool GuestMemory::InitializeFill(std::uint64_t address,
+                                 std::uint64_t length,
+                                 std::byte value) noexcept {
+  if (!IsMapped(address, length)) {
+    return false;
+  }
+
+  const auto offset = OffsetOf(address);
+  std::fill_n(bytes_.begin() + static_cast<std::ptrdiff_t>(offset),
+              static_cast<std::size_t>(length), value);
+  return true;
+}
+
+std::size_t GuestMemory::FindContainingRegion(
+    std::uint64_t address) const noexcept {
+  const auto insertion = std::lower_bound(
+      regions_.begin(), regions_.end(), address,
+      [](const GuestMemoryRegion& region, std::uint64_t candidate) {
+        return region.address < candidate;
+      });
+  if (insertion != regions_.end() && insertion->address == address) {
+    return static_cast<std::size_t>(insertion - regions_.begin());
+  }
+  if (insertion == regions_.begin()) {
+    return regions_.size();
+  }
+
+  const auto previous = insertion - 1;
+  if (address < previous->address + previous->size) {
+    return static_cast<std::size_t>(previous - regions_.begin());
+  }
+  return regions_.size();
 }
 
 std::size_t GuestMemory::OffsetOf(std::uint64_t address) const noexcept {
