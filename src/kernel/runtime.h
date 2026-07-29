@@ -3,6 +3,10 @@
 
 #pragma once
 
+#include <memory>
+#include <utility>
+
+#include "kernel/clock.h"
 #include "kernel/event_flag.h"
 #include "kernel/guest_scheduler.h"
 #include "kernel/handle_table.h"
@@ -15,6 +19,9 @@ public:
   KernelRuntime()
       : scheduler_(handles_), event_flags_(handles_, scheduler_),
         semaphores_(handles_, scheduler_) {}
+  explicit KernelRuntime(std::unique_ptr<KernelClockSource> clock_source)
+      : scheduler_(handles_), event_flags_(handles_, scheduler_),
+        semaphores_(handles_, scheduler_), clock_(std::move(clock_source)) {}
 
   KernelRuntime(const KernelRuntime &) = delete;
   KernelRuntime &operator=(const KernelRuntime &) = delete;
@@ -25,12 +32,14 @@ public:
     return event_flags_;
   }
   [[nodiscard]] SemaphoreService &semaphores() noexcept { return semaphores_; }
+  [[nodiscard]] KernelClockService &clock() noexcept { return clock_; }
 
 private:
   HandleTable handles_;
   GuestScheduler scheduler_;
   EventFlagService event_flags_;
   SemaphoreService semaphores_;
+  KernelClockService clock_;
 };
 
 } // namespace kajps5::kernel

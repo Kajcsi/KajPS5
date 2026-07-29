@@ -22,6 +22,7 @@
 - [x] Connect event-flag waits to the shared scheduler with wake and recheck
       tests.
 - [x] Add checked semaphore counts and scheduler wait integration.
+- [x] Add portable realtime, monotonic, and process-clock conversions.
 - Run a public guest test program.
 - Add thread, event, file, and time tests.
 - Compare focused traces with the two upstream projects.

@@ -17,6 +17,10 @@ The behavior review used these pinned upstream files:
   KytyPS5 commit.
 - SharpEmu `src/SharpEmu.Libs/Kernel/KernelSemaphoreCompatExports.cs` at the
   pinned SharpEmu commit.
+- KytyPS5 `src/kernel/pthread.h` and the clock functions in
+  `src/kernel/pthread.cpp` at the pinned KytyPS5 commit.
+- SharpEmu `src/SharpEmu.Libs/Kernel/KernelRuntimeCompatExports.cs` at the
+  pinned SharpEmu commit.
 
 The focused tests record these shared behaviors:
 
@@ -43,6 +47,11 @@ The focused tests record these shared behaviors:
   recheck contract as event flags.
 - Priority queue attributes are validated but currently use deterministic
   handle-order wake behavior.
+- Realtime values use Unix time. Monotonic values do not move backward under a
+  valid source.
+- Process time starts with the kernel runtime. Its counter uses nanoseconds and
+  reports a matching one-gigahertz frequency.
+- Clock conversion tests use an injected source and do not depend on host time.
 
 KajPS5 implements these behaviors in its own C++ interfaces. It does not copy
 the upstream host-thread executor, continuation system, object ownership
