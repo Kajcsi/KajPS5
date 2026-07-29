@@ -15,6 +15,7 @@
 - [x] Produce a stable loader trace.
 - [x] Validate and record raw ELF64 dynamic-table entries.
 - [x] Resolve checked standard ELF dynamic strings.
+- [x] Validate standard x86-64 `RELA` metadata and targets.
 
 ## Stage 2: CPU and kernel
 

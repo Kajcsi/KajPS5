@@ -65,6 +65,10 @@ std::string FormatElfTrace(const ElfMetadata& metadata) {
   trace << "elf.has_soname="
         << (metadata.dynamic_info.shared_object_name.has_value() ? 1 : 0)
         << '\n';
+  trace << "elf.relocations=" << metadata.dynamic_info.relocations.size()
+        << '\n';
+  trace << "elf.plt_relocations="
+        << metadata.dynamic_info.plt_relocations.size() << '\n';
 
   std::size_t load_index = 0;
   for (const auto& header : metadata.program_headers) {

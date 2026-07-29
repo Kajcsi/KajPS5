@@ -153,7 +153,9 @@ int main() {
                 .find("elf.dynamic_entries=4\n"
                       "elf.dynamic_string_table_size=64\n"
                       "elf.needed_libraries=1\n"
-                      "elf.has_soname=1\n") != std::string::npos,
+                      "elf.has_soname=1\n"
+                      "elf.relocations=0\n"
+                      "elf.plt_relocations=0\n") != std::string::npos,
         "dynamic summary is missing from the stable trace");
 
   auto invalid_size = image;

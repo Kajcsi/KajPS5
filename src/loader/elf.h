@@ -37,6 +37,11 @@ enum class ElfError {
   kDynamicStringTableNotFileBacked,
   kDynamicStringOffsetOutOfRange,
   kUnterminatedDynamicString,
+  kIncompleteRelaMetadata,
+  kInvalidRelaEntrySize,
+  kRelaTableNotFileBacked,
+  kRelocationTargetOutOfRange,
+  kUnsupportedPltRelocationFormat,
   kSegmentFileSizeExceedsMemorySize,
   kSegmentFileRangeOutOfRange,
   kSegmentAddressRangeOverflow,
@@ -63,11 +68,26 @@ struct ElfDynamicEntry {
   std::uint64_t value = 0;
 };
 
+struct ElfRelaEntry {
+  std::uint64_t offset = 0;
+  std::uint64_t info = 0;
+  std::int64_t addend = 0;
+
+  [[nodiscard]] std::uint32_t symbol() const noexcept {
+    return static_cast<std::uint32_t>(info >> 32U);
+  }
+  [[nodiscard]] std::uint32_t type() const noexcept {
+    return static_cast<std::uint32_t>(info);
+  }
+};
+
 struct ElfDynamicInfo {
   std::optional<std::uint64_t> string_table_address;
   std::optional<std::uint64_t> string_table_size;
   std::vector<std::string> needed_libraries;
   std::optional<std::string> shared_object_name;
+  std::vector<ElfRelaEntry> relocations;
+  std::vector<ElfRelaEntry> plt_relocations;
 };
 
 struct ElfMetadata {

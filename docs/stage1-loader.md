@@ -32,10 +32,12 @@ check metadata, file copies, zero fill, truncated input, integer overflow,
 alignment, permissions, gaps, overlap, guest-memory rejection, and terminated
 16-byte dynamic entries. They also check file-backed standard ELF string
 tables, needed-library names, shared-object names, string offsets, and string
-termination. A rejected load does not change guest memory.
+termination. Focused relocation tests check standard 24-byte `RELA` entries,
+PLT format, file-backed tables, mapped targets, and malformed metadata. A
+rejected load does not change guest memory.
 
-This milestone does not map host pages, relocate a dynamic image, resolve its
-symbols, interpret PS5-specific dynamic tags, parse SELF containers, or run
-guest code.
+This milestone does not apply relocations, resolve symbols, interpret
+PS5-specific dynamic tags, or parse SELF containers. The separate controlled
+leaf test is documented in `stage2-cpu.md`.
 
 See `public-elf-validation.md` for the external PS5 homebrew ELF check.

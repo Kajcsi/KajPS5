@@ -143,6 +143,8 @@ int main() {
       "elf.dynamic_string_table_size=0\n"
       "elf.needed_libraries=0\n"
       "elf.has_soname=0\n"
+      "elf.relocations=0\n"
+      "elf.plt_relocations=0\n"
       "elf.load[0].flags=r-x offset=0x0000000000000100 "
       "virtual_address=0x0000000000001000 file_size=0x0000000000000004 "
       "memory_size=0x0000000000000008 alignment=0x0000000000000100\n";

@@ -27,6 +27,8 @@ all segments before it changes memory. It maps each `PT_LOAD` range with its
 read, write, and execute flags, copies its file bytes, and clears its
 zero-filled tail. It validates raw non-null `PT_DYNAMIC` entries and resolves
 checked standard ELF string-table references for `DT_NEEDED` and `DT_SONAME`.
+It also validates and records standard x86-64 `RELA` and PLT relocation
+metadata without applying it.
 The kernel foundation has typed handles and deterministic event-flag polling.
 One cooperative scheduler owns guest thread state and
 deterministic ready, block, wake, yield, and exit transitions. A test-only

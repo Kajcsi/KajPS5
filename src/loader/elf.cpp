@@ -29,9 +29,17 @@ constexpr std::uint32_t kProgramTypeDynamic = 2;
 constexpr std::size_t kDynamicEntrySize = 16;
 constexpr std::int64_t kDynamicTagNull = 0;
 constexpr std::int64_t kDynamicTagNeeded = 1;
+constexpr std::int64_t kDynamicTagPltRelocationSize = 2;
 constexpr std::int64_t kDynamicTagStringTable = 5;
+constexpr std::int64_t kDynamicTagRela = 7;
+constexpr std::int64_t kDynamicTagRelaSize = 8;
+constexpr std::int64_t kDynamicTagRelaEntrySize = 9;
 constexpr std::int64_t kDynamicTagStringTableSize = 10;
 constexpr std::int64_t kDynamicTagSharedObjectName = 14;
+constexpr std::int64_t kDynamicTagPltRelocationFormat = 20;
+constexpr std::int64_t kDynamicTagJumpRelocation = 23;
+constexpr std::uint64_t kDynamicFormatRela = 7;
+constexpr std::size_t kRelaEntrySize = 24;
 
 std::uint8_t Read8(std::span<const std::byte> image,
                    std::size_t offset) noexcept {
@@ -208,6 +216,101 @@ ElfError ParseDynamicStrings(std::span<const std::byte> image,
   return ElfError::kNone;
 }
 
+bool IsGuestRangeMapped(const ElfMetadata& metadata, std::uint64_t address,
+                        std::uint64_t size) noexcept {
+  for (const auto& header : metadata.program_headers) {
+    if (header.type != kProgramTypeLoad || address < header.virtual_address) {
+      continue;
+    }
+    const auto relative_address = address - header.virtual_address;
+    if (relative_address <= header.memory_size &&
+        size <= header.memory_size - relative_address) {
+      return true;
+    }
+  }
+  return false;
+}
+
+ElfError ParseRelaTable(std::span<const std::byte> image,
+                        ElfMetadata& metadata, std::uint64_t address,
+                        std::uint64_t size,
+                        std::vector<ElfRelaEntry>& entries) {
+  if (size % kRelaEntrySize != 0) {
+    return ElfError::kInvalidRelaEntrySize;
+  }
+  const auto file_offset = ResolveFileOffset(metadata, address, size);
+  if (!file_offset.has_value()) {
+    return ElfError::kRelaTableNotFileBacked;
+  }
+
+  entries.reserve(static_cast<std::size_t>(size / kRelaEntrySize));
+  for (std::uint64_t relative_offset = 0; relative_offset < size;
+       relative_offset += kRelaEntrySize) {
+    const auto entry_offset =
+        *file_offset + static_cast<std::size_t>(relative_offset);
+    ElfRelaEntry entry;
+    entry.offset = Read64(image, entry_offset);
+    entry.info = Read64(image, entry_offset + sizeof(std::uint64_t));
+    entry.addend = std::bit_cast<std::int64_t>(
+        Read64(image, entry_offset + 2 * sizeof(std::uint64_t)));
+    if (entry.type() != 0 && !IsGuestRangeMapped(metadata, entry.offset, 1)) {
+      return ElfError::kRelocationTargetOutOfRange;
+    }
+    entries.push_back(entry);
+  }
+  return ElfError::kNone;
+}
+
+ElfError ParseDynamicRelocations(std::span<const std::byte> image,
+                                 ElfMetadata& metadata) {
+  const auto* rela = FindDynamicEntry(metadata, kDynamicTagRela);
+  const auto* rela_size = FindDynamicEntry(metadata, kDynamicTagRelaSize);
+  const auto* rela_entry_size =
+      FindDynamicEntry(metadata, kDynamicTagRelaEntrySize);
+  const auto rela_fields = static_cast<unsigned>(rela != nullptr) +
+                           static_cast<unsigned>(rela_size != nullptr) +
+                           static_cast<unsigned>(rela_entry_size != nullptr);
+  if (rela_fields != 0 && rela_fields != 3) {
+    return ElfError::kIncompleteRelaMetadata;
+  }
+  if (rela != nullptr) {
+    if (rela_entry_size->value != kRelaEntrySize) {
+      return ElfError::kInvalidRelaEntrySize;
+    }
+    if (const auto error = ParseRelaTable(
+            image, metadata, rela->value, rela_size->value,
+            metadata.dynamic_info.relocations);
+        error != ElfError::kNone) {
+      return error;
+    }
+  }
+
+  const auto* jump_relocation =
+      FindDynamicEntry(metadata, kDynamicTagJumpRelocation);
+  const auto* plt_size =
+      FindDynamicEntry(metadata, kDynamicTagPltRelocationSize);
+  const auto* plt_format =
+      FindDynamicEntry(metadata, kDynamicTagPltRelocationFormat);
+  const auto plt_fields = static_cast<unsigned>(jump_relocation != nullptr) +
+                          static_cast<unsigned>(plt_size != nullptr) +
+                          static_cast<unsigned>(plt_format != nullptr);
+  if (plt_fields != 0 && plt_fields != 3) {
+    return ElfError::kIncompleteRelaMetadata;
+  }
+  if (jump_relocation != nullptr) {
+    if (plt_format->value != kDynamicFormatRela) {
+      return ElfError::kUnsupportedPltRelocationFormat;
+    }
+    if (const auto error = ParseRelaTable(
+            image, metadata, jump_relocation->value, plt_size->value,
+            metadata.dynamic_info.plt_relocations);
+        error != ElfError::kNone) {
+      return error;
+    }
+  }
+  return ElfError::kNone;
+}
+
 }  // namespace
 
 ElfParseResult ParseElf64(std::span<const std::byte> image) {
@@ -367,6 +470,10 @@ ElfParseResult ParseElf64(std::span<const std::byte> image) {
         error != ElfError::kNone) {
       return ParseFailure(error);
     }
+    if (const auto error = ParseDynamicRelocations(image, metadata);
+        error != ElfError::kNone) {
+      return ParseFailure(error);
+    }
   }
 
   ElfParseResult result;
@@ -514,6 +621,16 @@ std::string_view ElfErrorName(ElfError error) noexcept {
       return "dynamic-string-offset-out-of-range";
     case ElfError::kUnterminatedDynamicString:
       return "unterminated-dynamic-string";
+    case ElfError::kIncompleteRelaMetadata:
+      return "incomplete-rela-metadata";
+    case ElfError::kInvalidRelaEntrySize:
+      return "invalid-rela-entry-size";
+    case ElfError::kRelaTableNotFileBacked:
+      return "rela-table-not-file-backed";
+    case ElfError::kRelocationTargetOutOfRange:
+      return "relocation-target-out-of-range";
+    case ElfError::kUnsupportedPltRelocationFormat:
+      return "unsupported-plt-relocation-format";
     case ElfError::kSegmentFileSizeExceedsMemorySize:
       return "segment-file-size-exceeds-memory-size";
     case ElfError::kSegmentFileRangeOutOfRange:
