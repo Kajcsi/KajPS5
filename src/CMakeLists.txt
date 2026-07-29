@@ -1,6 +1,7 @@
 add_library(kajps5_core STATIC
   core/memory/guest_memory.cpp
   core/project_info.cpp
+  cpu/native_leaf_executor.cpp
   kernel/clock.cpp
   kernel/event_flag.cpp
   kernel/file.cpp

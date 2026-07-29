@@ -27,7 +27,8 @@
 - [x] Add portable realtime, monotonic, and process-clock conversions.
 - [x] Add checked guest paths and memory-backed read-only files.
 - [x] Add deterministic thread-exit joins.
-- Run a public guest test program.
+- [x] Run a public no-import guest leaf test program.
+- Run a public guest program through checked HLE imports.
 - Add thread, event, file, and time tests.
 - Compare focused traces with the two upstream projects.
 

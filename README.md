@@ -29,8 +29,10 @@ zero-filled tail. It validates raw non-null `PT_DYNAMIC` entries and resolves
 checked standard ELF string-table references for `DT_NEEDED` and `DT_SONAME`.
 The kernel foundation has typed handles and deterministic event-flag polling.
 One cooperative scheduler owns guest thread state and
-deterministic ready, block, wake, yield, and exit transitions. Guest CPU
-execution and continuation-based blocked-call resumption are not implemented.
+deterministic ready, block, wake, yield, and exit transitions. A test-only
+native x86-64 path runs one controlled no-import leaf entry from checked guest
+memory. General guest CPU execution and continuation-based blocked-call
+resumption are not implemented.
 Thread joins, event waits, and semaphore waits use an explicit block, wake,
 and recheck contract.
 The kernel clock uses portable host clocks and keeps its process counter and
@@ -38,9 +40,10 @@ frequency consistent.
 The file foundation normalizes guest paths and reads registered memory-backed
 files. It does not expose the host file system.
 
-The tests build a small ELF image in memory. The repository does not contain a
-game, firmware, system module, or encrypted executable. Guest execution and
-SELF decryption are not implemented.
+The tests build small ELF images in memory, including a six-byte leaf program
+that returns 42. The repository does not contain a game, firmware, system
+module, or encrypted executable. General guest execution and SELF decryption
+are not implemented.
 
 ## Build
 

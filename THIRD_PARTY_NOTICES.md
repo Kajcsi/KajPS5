@@ -1,8 +1,9 @@
 # Third-party notices
 
 The current source does not copy source code from KytyPS5 or SharpEmu. It uses
-both projects as research references. See `docs/stage1-loader.md` and
-`docs/stage2-kernel.md` for the reviewed files and pinned commits.
+both projects as research references. See `docs/stage1-loader.md`,
+`docs/stage2-kernel.md`, and `docs/stage2-cpu.md` for the reviewed files and
+pinned commits.
 
 The clock, event-flag, file, semaphore, and scheduler behaviors in `src/kernel/`,
 `tests/kernel_event_flag_test.cpp`, `tests/kernel_event_wait_test.cpp`, and
@@ -24,6 +25,16 @@ pinned KytyPS5 and SharpEmu loader files. The SharpEmu reference file states:
 `Copyright (C) 2026 SharpEmu Emulator Project`
 
 No upstream loader source code was copied.
+
+The W^X native leaf-execution behavior in
+`src/cpu/native_leaf_executor.cpp` and
+`tests/native_leaf_executor_test.cpp` was implemented from focused
+observations of the pinned KytyPS5 and SharpEmu host-memory and native-executor
+files. The SharpEmu reference files state:
+
+`Copyright (C) 2026 SharpEmu Emulator Project`
+
+No upstream executor or host-memory source code was copied.
 
 Add an entry here when a later change imports or adapts code. Each entry must
 state the project, commit, source path, destination path, copyright notice, and
