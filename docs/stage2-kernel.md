@@ -41,6 +41,9 @@ The focused tests record these shared behaviors:
   the ready queue in handle order.
 - Yielding requeues the current thread. Exiting preserves its result for
   snapshots.
+- Joining a live thread blocks the caller. Thread exit wakes all joiners, and a
+  repeated join returns the preserved exit value.
+- Self joins and stale thread handles fail without changing scheduler state.
 - An unsatisfied event wait blocks the current thread on that event handle.
 - Setting or deleting an event wakes its blocked threads in handle order.
 - A woken thread rechecks its wait condition before it continues. This permits

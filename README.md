@@ -31,7 +31,8 @@ The kernel foundation has typed handles and deterministic event-flag polling.
 One cooperative scheduler owns guest thread state and
 deterministic ready, block, wake, yield, and exit transitions. Guest CPU
 execution and continuation-based blocked-call resumption are not implemented.
-Event and semaphore waits use an explicit block, wake, and recheck contract.
+Thread joins, event waits, and semaphore waits use an explicit block, wake,
+and recheck contract.
 The kernel clock uses portable host clocks and keeps its process counter and
 frequency consistent.
 The file foundation normalizes guest paths and reads registered memory-backed

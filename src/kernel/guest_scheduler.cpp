@@ -9,6 +9,13 @@
 #include "kernel/object.h"
 
 namespace kajps5::kernel {
+namespace {
+
+std::string ThreadExitWaitKey(KernelHandle handle) {
+  return "thread-exit:" + std::to_string(handle);
+}
+
+} // namespace
 
 struct GuestScheduler::GuestThread final : KernelObject {
   GuestThread(std::string thread_name, int thread_priority)
@@ -132,6 +139,33 @@ std::size_t GuestScheduler::WakeBlockedThreads(std::string_view wait_key,
   return wake_count;
 }
 
+GuestThreadJoinResult GuestScheduler::JoinThread(KernelHandle handle) {
+  std::lock_guard lock(mutex_);
+  const auto target = threads_.find(handle);
+  if (target == threads_.end()) {
+    return {KernelStatus::kNotFound, 0};
+  }
+  if (target->second->state == GuestThreadState::kExited) {
+    return {KernelStatus::kOk, target->second->exit_value};
+  }
+  if (!current_thread_) {
+    return {KernelStatus::kBusy, 0};
+  }
+  if (*current_thread_ == handle) {
+    return {KernelStatus::kInvalidArgument, 0};
+  }
+
+  const auto caller = threads_.find(*current_thread_);
+  if (caller == threads_.end() ||
+      caller->second->state != GuestThreadState::kRunning) {
+    return {KernelStatus::kBusy, 0};
+  }
+  caller->second->state = GuestThreadState::kBlocked;
+  caller->second->wait_key = ThreadExitWaitKey(handle);
+  current_thread_.reset();
+  return {KernelStatus::kWouldBlock, 0};
+}
+
 bool GuestScheduler::ExitCurrent(std::uint64_t exit_value) {
   std::lock_guard lock(mutex_);
   if (!current_thread_) {
@@ -147,6 +181,16 @@ bool GuestScheduler::ExitCurrent(std::uint64_t exit_value) {
   found->second->state = GuestThreadState::kExited;
   found->second->wait_key.clear();
   found->second->exit_value = exit_value;
+  const auto wait_key = ThreadExitWaitKey(*current_thread_);
+  for (auto &[handle, thread] : threads_) {
+    if (thread->state != GuestThreadState::kBlocked ||
+        thread->wait_key != wait_key) {
+      continue;
+    }
+    thread->state = GuestThreadState::kReady;
+    thread->wait_key.clear();
+    ready_threads_.push_back(handle);
+  }
   current_thread_.reset();
   return true;
 }

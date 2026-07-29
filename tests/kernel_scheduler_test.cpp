@@ -75,20 +75,69 @@ int main() {
         "unbounded wake did not wake the remaining thread");
   Check(scheduler.SelectNext() == first.handle,
         "yield did not preserve FIFO ordering");
-  Check(scheduler.ExitCurrent(0x1234), "running thread did not exit");
+  Check(scheduler.JoinThread(999).status == KernelStatus::kNotFound,
+        "unknown thread join returned the wrong status");
+  Check(scheduler.JoinThread(first.handle).status ==
+            KernelStatus::kInvalidArgument,
+        "self join was accepted");
+  Check(scheduler.JoinThread(second.handle).status ==
+            KernelStatus::kWouldBlock,
+        "join did not block for a live thread");
+  first_snapshot = scheduler.Snapshot(first.handle);
+  Check(first_snapshot &&
+            first_snapshot->state == GuestThreadState::kBlocked &&
+            !first_snapshot->wait_key.empty(),
+        "join wait state was not preserved");
+  Check(scheduler.JoinThread(second.handle).status == KernelStatus::kBusy,
+        "join without a running caller returned the wrong status");
+
+  Check(scheduler.SelectNext() == second.handle,
+        "remaining ready thread was not selected");
+  Check(scheduler.ExitCurrent(0x5678), "second thread did not exit");
+  first_snapshot = scheduler.Snapshot(first.handle);
+  Check(first_snapshot && first_snapshot->state == GuestThreadState::kReady,
+        "thread exit did not wake its joiner");
+  Check(scheduler.SelectNext() == first.handle,
+        "woken joiner was not selected");
+  const auto joined = scheduler.JoinThread(second.handle);
+  Check(joined && joined.exit_value == 0x5678,
+        "join did not return the thread exit value");
+  Check(scheduler.ExitCurrent(0x1234), "first thread did not exit");
   first_snapshot = scheduler.Snapshot(first.handle);
   Check(first_snapshot && first_snapshot->state == GuestThreadState::kExited &&
             first_snapshot->exit_value == 0x1234,
         "thread exit state was not preserved");
-
-  Check(scheduler.SelectNext() == second.handle,
-        "remaining ready thread was not selected");
-  Check(scheduler.ExitCurrent(0), "second thread did not exit");
   Check(!scheduler.SelectNext(), "scheduler selected an exited thread");
   Check(!scheduler.YieldCurrent(),
         "scheduler yielded without a running thread");
   Check(scheduler.SnapshotAll().size() == 2,
         "thread snapshot inventory is incomplete");
+
+  KernelRuntime join_runtime;
+  auto &join_scheduler = join_runtime.scheduler();
+  const auto joiner_one = join_scheduler.CreateThread("joiner-one", 0);
+  const auto joiner_two = join_scheduler.CreateThread("joiner-two", 0);
+  const auto target = join_scheduler.CreateThread("target", 0);
+  Check(joiner_one && joiner_two && target,
+        "multi-join thread creation failed");
+  Check(join_scheduler.SelectNext() == joiner_one.handle,
+        "first joiner was not selected");
+  Check(join_scheduler.JoinThread(target.handle).status ==
+            KernelStatus::kWouldBlock,
+        "first joiner did not block");
+  Check(join_scheduler.SelectNext() == joiner_two.handle,
+        "second joiner was not selected");
+  Check(join_scheduler.JoinThread(target.handle).status ==
+            KernelStatus::kWouldBlock,
+        "second joiner did not block");
+  Check(join_scheduler.SelectNext() == target.handle,
+        "join target was not selected");
+  Check(join_scheduler.ExitCurrent(7), "join target did not exit");
+  Check(join_scheduler.Snapshot(joiner_one.handle)->state ==
+            GuestThreadState::kReady &&
+            join_scheduler.Snapshot(joiner_two.handle)->state ==
+                GuestThreadState::kReady,
+        "thread exit did not wake every joiner");
 
   Check(scheduler.CreateThread(std::string(32, 'x'), 0).status ==
             KernelStatus::kInvalidArgument,

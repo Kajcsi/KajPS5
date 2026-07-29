@@ -39,6 +39,15 @@ struct GuestThreadCreateResult {
   }
 };
 
+struct GuestThreadJoinResult {
+  KernelStatus status = KernelStatus::kOk;
+  std::uint64_t exit_value = 0;
+
+  [[nodiscard]] explicit operator bool() const noexcept {
+    return status == KernelStatus::kOk;
+  }
+};
+
 struct GuestThreadSnapshot {
   KernelHandle handle = kInvalidKernelHandle;
   std::string name;
@@ -64,6 +73,7 @@ public:
   [[nodiscard]] std::size_t WakeBlockedThreads(
       std::string_view wait_key,
       std::size_t maximum_count = std::numeric_limits<std::size_t>::max());
+  [[nodiscard]] GuestThreadJoinResult JoinThread(KernelHandle handle);
   [[nodiscard]] bool ExitCurrent(std::uint64_t exit_value);
 
   [[nodiscard]] std::optional<KernelHandle> current_thread() const;
