@@ -36,6 +36,7 @@
 - [x] Add a platform-neutral checked HLE call context.
 - [x] Add deterministic library-scoped HLE handler dispatch.
 - [x] Register consistent libkernel process-time handlers.
+- [x] Add a transactional libkernel clock-gettime handler.
 - [x] Run a public no-import guest leaf test program.
 - [x] Run a public guest program through checked HLE imports.
 - Add thread, event, file, and time tests.

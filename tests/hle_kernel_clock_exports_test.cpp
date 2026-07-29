@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <cstdint>
+#include <array>
+#include <bit>
+#include <cstddef>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -49,6 +52,17 @@ std::uint64_t DispatchReturn(kajps5::hle::ExportRegistry& registry,
   return context.GetRegister(kajps5::hle::HleRegister::kRax).value_or(0);
 }
 
+std::int64_t ReadSigned64(const std::array<std::byte, 16>& bytes,
+                          std::size_t offset) {
+  std::uint64_t value = 0;
+  for (std::size_t index = 0; index < sizeof(value); ++index) {
+    value |= static_cast<std::uint64_t>(
+                 std::to_integer<unsigned char>(bytes[offset + index]))
+             << (index * 8U);
+  }
+  return std::bit_cast<std::int64_t>(value);
+}
+
 }  // namespace
 
 int main() {
@@ -60,6 +74,7 @@ int main() {
 
   auto source = std::make_unique<TestClockSource>();
   auto* const source_view = source.get();
+  source_view->realtime_nanoseconds = 1'725'000'123'456'789'000;
   source_view->monotonic_nanoseconds = 10'000'000'000;
   KernelClockService clock(std::move(source));
   source_view->monotonic_nanoseconds = 12'500'123'456;
@@ -67,10 +82,10 @@ int main() {
   ExportRegistry registry;
   Check(kajps5::hle::RegisterKernelClockExports(registry, clock) ==
             ExportRegistryStatus::kOk &&
-            registry.size() == 3,
+            registry.size() == 4,
         "kernel clock exports did not register atomically");
 
-  GuestMemory memory(0x1000, 8);
+  GuestMemory memory(0x1000, 32);
   HleCallContext context(memory);
   Check(DispatchReturn(registry, kajps5::hle::kKernelGetProcessTimeName,
                        context) == 2'500'123,
@@ -85,9 +100,81 @@ int main() {
             context) == kajps5::kernel::kProcessTimeCounterFrequency,
         "process-time frequency export returned the wrong value");
 
+  Check(context.SetRegister(kajps5::hle::HleRegister::kRdi,
+                            kajps5::kernel::kClockRealtime) &&
+            context.SetRegister(kajps5::hle::HleRegister::kRsi, 0x1000),
+        "clock-gettime argument setup failed");
+  const std::vector<std::string> libraries = {kajps5::hle::kLibKernelName};
+  const auto clock_result = registry.Dispatch(
+      kajps5::hle::kKernelClockGettimeName, libraries, context);
+  std::array<std::byte, 16> timespec{};
+  Check(clock_result && memory.Read(0x1000, timespec) &&
+            ReadSigned64(timespec, 0) == 1'725'000'123 &&
+            ReadSigned64(timespec, 8) == 456'789'000,
+        "realtime clock-gettime export wrote the wrong value");
+
+  HleCallContext invalid_clock_context(memory);
+  Check(invalid_clock_context.SetRegister(kajps5::hle::HleRegister::kRdi, 99) &&
+            invalid_clock_context.SetRegister(kajps5::hle::HleRegister::kRsi,
+                                              0x1000),
+        "invalid clock argument setup failed");
+  const auto invalid_clock = registry.Dispatch(
+      kajps5::hle::kKernelClockGettimeName, libraries,
+      invalid_clock_context);
+  Check(invalid_clock &&
+            invalid_clock_context
+                    .GetRegister(kajps5::hle::HleRegister::kRax)
+                    .value_or(0) ==
+                static_cast<std::uint64_t>(static_cast<std::int64_t>(
+                    kajps5::hle::kKernelHleErrorInvalidArgument)),
+        "invalid clock ID returned the wrong kernel result");
+
+  HleCallContext null_context(memory);
+  Check(null_context.SetRegister(kajps5::hle::HleRegister::kRdi,
+                                 kajps5::kernel::kClockRealtime) &&
+            null_context.SetRegister(kajps5::hle::HleRegister::kRsi, 0),
+        "null clock pointer setup failed");
+  const auto null_result = registry.Dispatch(
+      kajps5::hle::kKernelClockGettimeName, libraries, null_context);
+  Check(null_result &&
+            null_context.GetRegister(kajps5::hle::HleRegister::kRax)
+                    .value_or(0) ==
+                static_cast<std::uint64_t>(static_cast<std::int64_t>(
+                    kajps5::hle::kKernelHleErrorFault)),
+        "null timespec returned the wrong kernel result");
+
+  GuestMemory partial_memory(0x2000, 16,
+                             kajps5::memory::GuestMemoryProtection::kNone);
+  Check(partial_memory.Map(
+            0x2000, 8,
+            kajps5::memory::GuestMemoryProtection::kRead |
+                kajps5::memory::GuestMemoryProtection::kWrite),
+        "partial timespec mapping failed");
+  const std::array sentinel = {
+      std::byte{0xcc}, std::byte{0xcc}, std::byte{0xcc}, std::byte{0xcc},
+      std::byte{0xcc}, std::byte{0xcc}, std::byte{0xcc}, std::byte{0xcc}};
+  Check(partial_memory.Initialize(0x2000, sentinel),
+        "partial timespec setup failed");
+  HleCallContext partial_context(partial_memory);
+  Check(partial_context.SetRegister(kajps5::hle::HleRegister::kRdi,
+                                    kajps5::kernel::kClockRealtime) &&
+            partial_context.SetRegister(kajps5::hle::HleRegister::kRsi,
+                                        0x2000),
+        "partial timespec argument setup failed");
+  const auto partial_result = registry.Dispatch(
+      kajps5::hle::kKernelClockGettimeName, libraries, partial_context);
+  std::array<std::byte, 8> preserved{};
+  Check(partial_result &&
+            partial_context.GetRegister(kajps5::hle::HleRegister::kRax)
+                    .value_or(0) ==
+                static_cast<std::uint64_t>(static_cast<std::int64_t>(
+                    kajps5::hle::kKernelHleErrorFault)) &&
+            partial_memory.Read(0x2000, preserved) && preserved == sentinel,
+        "failed timespec write changed guest memory");
+
   Check(kajps5::hle::RegisterKernelClockExports(registry, clock) ==
             ExportRegistryStatus::kAlreadyExists &&
-            registry.size() == 3,
+            registry.size() == 4,
         "duplicate clock export batch changed the registry");
   const std::vector<std::string> wrong_library = {"libkernel"};
   Check(registry

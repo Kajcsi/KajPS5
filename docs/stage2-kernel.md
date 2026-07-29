@@ -61,6 +61,8 @@ The focused tests record these shared behaviors:
   reports a matching one-gigahertz frequency.
 - The first HLE clock handlers expose process microseconds, the same nanosecond
   counter, and its one-gigahertz frequency through `libKernel`.
+- The clock-gettime HLE handler writes both timespec fields atomically and
+  returns kernel-compatible `EFAULT` or `EINVAL` results.
 - Clock conversion tests use an injected source and do not depend on host time.
 - Guest paths use forward slashes, collapse empty and current-directory
   components, and reject relative paths, parent traversal, and embedded nulls.

@@ -47,3 +47,9 @@ The first generic `libKernel` handler batch exposes
 clock service, so the microsecond value, nanosecond counter, and one-gigahertz
 frequency stay consistent. Batch registration validates all definitions before
 it changes the export table.
+
+`sceKernelClockGettime` uses the same clock service and writes its 16-byte
+timespec in one checked operation. A bad guest range leaves memory unchanged.
+Guest-visible `EFAULT` and `EINVAL` values follow the pinned KytyPS5 kernel
+contract. SharpEmu's corresponding Gen5 values are documented as synthetic,
+so KajPS5 does not use them as the kernel ABI.

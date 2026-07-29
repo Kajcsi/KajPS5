@@ -118,6 +118,30 @@ int main() {
   Check(read_only_context.WriteUInt64(0x5000, 1) ==
             HleContextStatus::kMemoryFault,
         "read-only guest memory accepted an HLE write");
+  GuestMemory partial_memory(0x6000, 16, GuestMemoryProtection::kNone);
+  Check(partial_memory.Map(0x6000, 8,
+                           GuestMemoryProtection::kRead |
+                               GuestMemoryProtection::kWrite),
+        "partial write mapping failed");
+  const std::array sentinel = {
+      std::byte{0xaa}, std::byte{0xaa}, std::byte{0xaa}, std::byte{0xaa},
+      std::byte{0xaa}, std::byte{0xaa}, std::byte{0xaa}, std::byte{0xaa}};
+  Check(partial_memory.Initialize(0x6000, sentinel),
+        "partial write setup failed");
+  HleCallContext partial_context(partial_memory);
+  const std::array oversized = {
+      std::byte{1}, std::byte{2}, std::byte{3}, std::byte{4},
+      std::byte{5}, std::byte{6}, std::byte{7}, std::byte{8},
+      std::byte{9}, std::byte{10}, std::byte{11}, std::byte{12},
+      std::byte{13}, std::byte{14}, std::byte{15}, std::byte{16}};
+  std::array<std::byte, 8> preserved{};
+  Check(partial_context.WriteMemory(0x6000, oversized) ==
+            HleContextStatus::kMemoryFault &&
+            partial_memory.Read(0x6000, preserved) && preserved == sentinel,
+        "failed whole-range HLE write changed guest memory");
+  Check(partial_context.WriteMemory(0x6000, {}) ==
+            HleContextStatus::kInvalidArgument,
+        "empty HLE memory write was accepted");
   Check(context.ReadNullTerminatedString(0, 1).status ==
             HleContextStatus::kInvalidArgument &&
             context

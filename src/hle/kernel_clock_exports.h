@@ -10,11 +10,15 @@
 namespace kajps5::hle {
 
 inline constexpr auto kLibKernelName = "libKernel";
+inline constexpr auto kKernelClockGettimeName = "sceKernelClockGettime";
 inline constexpr auto kKernelGetProcessTimeName = "sceKernelGetProcessTime";
 inline constexpr auto kKernelGetProcessTimeCounterName =
     "sceKernelGetProcessTimeCounter";
 inline constexpr auto kKernelGetProcessTimeCounterFrequencyName =
     "sceKernelGetProcessTimeCounterFrequency";
+
+inline constexpr std::int32_t kKernelHleErrorFault = -2147352562;
+inline constexpr std::int32_t kKernelHleErrorInvalidArgument = -2147352554;
 
 // The clock service must outlive all dispatches through the registry.
 [[nodiscard]] ExportRegistryStatus RegisterKernelClockExports(

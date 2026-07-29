@@ -132,6 +132,15 @@ HleContextStatus HleCallContext::WriteUInt64(std::uint64_t address,
                                        : HleContextStatus::kMemoryFault;
 }
 
+HleContextStatus HleCallContext::WriteMemory(
+    std::uint64_t address, std::span<const std::byte> value) noexcept {
+  if (value.empty()) {
+    return HleContextStatus::kInvalidArgument;
+  }
+  return memory_.Write(address, value) ? HleContextStatus::kOk
+                                       : HleContextStatus::kMemoryFault;
+}
+
 HleStringResult HleCallContext::ReadNullTerminatedString(
     std::uint64_t address, std::size_t maximum_bytes) const {
   if (address == 0 || maximum_bytes == 0 ||
