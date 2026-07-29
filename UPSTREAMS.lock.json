@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "upstreams": [
+    {
+      "name": "KytyPS5",
+      "repository": "https://github.com/KytyPS5/KytyPS5.git",
+      "commit": "f6e01e54031a3c615f089f061a4eab2f3c59acba",
+      "role": "primary-native-architecture"
+    },
+    {
+      "name": "SharpEmu",
+      "repository": "https://github.com/sharpemu/sharpemu.git",
+      "commit": "d5108e854d609808f17093a6f5dbbc711d09ad2e",
+      "role": "behavior-and-test-reference"
+    }
+  ]
+}

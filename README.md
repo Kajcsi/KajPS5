@@ -1,0 +1,50 @@
+# KajPS5
+
+KajPS5 is an early PlayStation 5 emulator research project. The repository
+contains a small buildable foundation. It does not run PlayStation 5 games.
+
+The project uses one clear design:
+
+- Use a native C++ runtime as the primary implementation.
+- Study KytyPS5 for proven native runtime and graphics behavior.
+- Study SharpEmu for proven loader, service, and test behavior.
+- Port one behavior only after a focused test proves that it is useful.
+
+KajPS5 is not a direct 50/50 merge. The two upstream projects use different
+languages and different ownership models. A direct merge would make the
+runtime difficult to test and maintain. KajPS5 keeps one C++ runtime and uses
+trace data and tests as the boundary for C# reference work.
+
+## Current status
+
+The current program prints its version and project status. This first commit
+also defines the architecture, contribution rules, upstream pins, and build
+checks.
+
+## Build
+
+Install CMake 3.24 or a newer version and a C++20 compiler.
+
+```powershell
+cmake -S . -B _Build
+cmake --build _Build --config Release
+ctest --test-dir _Build -C Release --output-on-failure
+```
+
+On Windows, the executable is usually in `_Build/src/Release/kajps5.exe`.
+
+## Legal use
+
+KajPS5 is for research and education. The project does not include games,
+firmware, keys, or proprietary system software. Use only data that you have a
+legal right to use.
+
+KajPS5 is not affiliated with Sony Interactive Entertainment or PlayStation.
+Product names can be trademarks of their owners.
+
+## License
+
+Original KajPS5 code is available under GPL-2.0-or-later. Imported code must
+keep its original copyright and license notices. See
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and
+[docs/upstreams.md](docs/upstreams.md).

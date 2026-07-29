@@ -1,0 +1,4 @@
+add_executable(kajps5_project_info_test project_info_test.cpp)
+target_link_libraries(kajps5_project_info_test PRIVATE kajps5_core)
+
+add_test(NAME kajps5_project_info COMMAND kajps5_project_info_test)

@@ -1,0 +1,31 @@
+name: Build
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S . -B _Build -A x64
+      - name: Build
+        run: cmake --build _Build --config Release --parallel
+      - name: Test
+        run: ctest --test-dir _Build -C Release --output-on-failure
+
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S . -B _Build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build _Build --parallel
+      - name: Test
+        run: ctest --test-dir _Build --output-on-failure
