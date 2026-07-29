@@ -18,4 +18,7 @@ a deterministic name boundary for relocation and HLE dispatch work. The
 relocation pass writes resolved `R_X86_64_GLOB_DAT` and
 `R_X86_64_JUMP_SLOT` targets only after it validates the complete plan. Missing
 symbols remain unchanged and produce structured diagnostics. It does not
-generate executable stubs or call host services yet.
+generate general executable stubs. One test-only redistributable ELF fixture
+uses the complete parse, load, link, and native leaf path to call a
+no-argument HLE handler. The fixture adjusts its stack for the host ABI. It is
+not a PS5 ABI bridge.

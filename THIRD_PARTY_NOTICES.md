@@ -42,8 +42,10 @@ No upstream executor or host-memory source code was copied.
 The library-scoped HLE import lookup and checked relocation connection in
 `src/hle/import_registry.cpp`, `tests/hle_import_registry_test.cpp`, and
 `tests/hle_import_link_test.cpp` was implemented from focused observations of
-the pinned KytyPS5 and SharpEmu import resolvers. The SharpEmu reference files
-state:
+the pinned KytyPS5 and SharpEmu import resolvers. The test-only HLE call path in
+`tests/hle_public_guest_test.cpp` also uses focused observations of import
+thunks and dispatch in those pinned projects. No thunk source code was copied.
+The SharpEmu reference files state:
 
 `Copyright (C) 2026 SharpEmu Emulator Project`
 

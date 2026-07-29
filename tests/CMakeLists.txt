@@ -54,6 +54,12 @@ kajps5_deploy_msvc_asan_runtime(kajps5_hle_import_link_test)
 
 add_test(NAME kajps5_hle_import_link COMMAND kajps5_hle_import_link_test)
 
+add_executable(kajps5_hle_public_guest_test hle_public_guest_test.cpp)
+target_link_libraries(kajps5_hle_public_guest_test PRIVATE kajps5_core)
+kajps5_deploy_msvc_asan_runtime(kajps5_hle_public_guest_test)
+
+add_test(NAME kajps5_hle_public_guest COMMAND kajps5_hle_public_guest_test)
+
 add_executable(kajps5_kernel_event_flag_test kernel_event_flag_test.cpp)
 target_link_libraries(kajps5_kernel_event_flag_test PRIVATE kajps5_core)
 kajps5_deploy_msvc_asan_runtime(kajps5_kernel_event_flag_test)
