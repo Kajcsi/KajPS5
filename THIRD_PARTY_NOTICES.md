@@ -48,6 +48,9 @@ thunks and dispatch in those pinned projects. No thunk source code was copied.
 The bounded trace in `src/loader/relocation_trace.cpp` and
 `tests/relocation_trace_test.cpp` adapts SharpEmu's focus on structured,
 bounded import diagnostics. No diagnostic source code was copied.
+The checked register and memory boundary in `src/hle/call_context.cpp` and
+`tests/hle_call_context_test.cpp` uses focused behavior observations from
+SharpEmu's `src/SharpEmu.HLE/CpuContext.cs`. No context source code was copied.
 The SharpEmu reference files state:
 
 `Copyright (C) 2026 SharpEmu Emulator Project`

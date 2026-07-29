@@ -24,3 +24,11 @@ generate general executable stubs. One
 test-only redistributable ELF fixture uses the complete parse, load, link, and
 native leaf path to call a no-argument HLE handler. The fixture adjusts its
 stack for the host ABI. It is not a PS5 ABI bridge.
+
+The platform-neutral HLE call context maps the six System V integer argument
+registers and the return register. Integer and string access goes through the
+checked guest-memory model. String reads are limited to 4 KiB. If a bulk read
+crosses an unmapped boundary, the context checks one byte at a time so it can
+still accept a terminator before the boundary. A missing terminator and a
+memory fault are different results. Native trampoline state capture is not
+connected yet.
