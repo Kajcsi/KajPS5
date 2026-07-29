@@ -4,6 +4,7 @@ add_library(kajps5_core STATIC
   kernel/event_flag.cpp
   kernel/guest_scheduler.cpp
   kernel/handle_table.cpp
+  kernel/semaphore.cpp
   loader/elf.cpp
   loader/elf_trace.cpp
 )

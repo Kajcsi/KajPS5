@@ -13,6 +13,10 @@ The behavior review used these pinned upstream files:
   `d5108e854d609808f17093a6f5dbbc711d09ad2e`.
 - SharpEmu `src/SharpEmu.HLE/GuestThreadExecution.cs` and
   `src/SharpEmu.Core/Cpu/Native/DirectExecutionBackend.cs` at the same commit.
+- KytyPS5 `src/kernel/semaphore.h` and `src/kernel/semaphore.cpp` at the pinned
+  KytyPS5 commit.
+- SharpEmu `src/SharpEmu.Libs/Kernel/KernelSemaphoreCompatExports.cs` at the
+  pinned SharpEmu commit.
 
 The focused tests record these shared behaviors:
 
@@ -32,10 +36,17 @@ The focused tests record these shared behaviors:
 - Setting or deleting an event wakes its blocked threads in handle order.
 - A woken thread rechecks its wait condition before it continues. This permits
   deterministic spurious wakes when a set operation does not satisfy it.
+- Semaphore creation checks its attributes, initial count, and maximum count.
+- Poll and wait operations acquire counts atomically. Signals cannot exceed the
+  maximum count.
+- Semaphore signal and delete operations use the same scheduler wake and
+  recheck contract as event flags.
+- Priority queue attributes are validated but currently use deterministic
+  handle-order wake behavior.
 
 KajPS5 implements these behaviors in its own C++ interfaces. It does not copy
 the upstream host-thread executor, continuation system, object ownership
 model, or source code.
 
-The event-wait bridge does not resume a saved guest continuation. The caller
-must invoke the wait again after the scheduler selects the woken thread.
+The wait bridges do not resume a saved guest continuation. The caller must
+invoke the wait again after the scheduler selects the woken thread.
