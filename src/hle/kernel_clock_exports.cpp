@@ -77,8 +77,8 @@ HleContextStatus Gettimeofday(HleCallContext& context,
 
 }  // namespace
 
-ExportRegistryStatus RegisterKernelClockExports(
-    ExportRegistry& registry, kernel::KernelClockService& clock) {
+std::vector<HleExportDefinition> detail::MakeKernelClockExports(
+    kernel::KernelClockService& clock) {
   auto* const clock_view = &clock;
   std::vector<HleExportDefinition> exports;
   exports.reserve(10);
@@ -138,7 +138,12 @@ ExportRegistryStatus RegisterKernelClockExports(
          context.SetReturn(clock_view->GetProcessTimeCounterFrequency());
          return HleContextStatus::kOk;
        }});
-  return registry.RegisterBatch(std::move(exports));
+  return exports;
+}
+
+ExportRegistryStatus RegisterKernelClockExports(
+    ExportRegistry& registry, kernel::KernelClockService& clock) {
+  return registry.RegisterBatch(detail::MakeKernelClockExports(clock));
 }
 
 }  // namespace kajps5::hle

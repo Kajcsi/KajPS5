@@ -61,6 +61,8 @@ files. Checked open, close, read, positioned-read, seek, stat, and fstat
 handlers expose that same service by export name and NID. Metadata uses the
 120-byte kernel stat layout and deterministic values for registered regular
 files. The service does not expose the host file system.
+One atomic default registration binds all current clock and file handlers to
+the same kernel runtime.
 
 The tests build small ELF images in memory, including a six-byte leaf program
 that returns 42. The repository does not contain a game, firmware, system

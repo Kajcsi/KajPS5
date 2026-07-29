@@ -305,8 +305,8 @@ HleContextStatus KernelFstat(HleCallContext& context,
 
 }  // namespace
 
-ExportRegistryStatus RegisterKernelFileExports(ExportRegistry& registry,
-                                               kernel::FileService& files) {
+std::vector<HleExportDefinition> detail::MakeKernelFileExports(
+    kernel::FileService& files) {
   auto* const file_view = &files;
   std::vector<HleExportDefinition> exports;
   exports.reserve(14);
@@ -366,7 +366,12 @@ ExportRegistryStatus RegisterKernelFileExports(ExportRegistry& registry,
                      [file_view](HleCallContext& context) {
                        return KernelFstat(context, *file_view);
                      }});
-  return registry.RegisterBatch(std::move(exports));
+  return exports;
+}
+
+ExportRegistryStatus RegisterKernelFileExports(ExportRegistry& registry,
+                                               kernel::FileService& files) {
+  return registry.RegisterBatch(detail::MakeKernelFileExports(files));
 }
 
 }  // namespace kajps5::hle

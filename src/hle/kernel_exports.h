@@ -5,6 +5,12 @@
 
 #include <cstdint>
 
+#include "hle/export_registry.h"
+
+namespace kajps5::kernel {
+class KernelRuntime;
+}
+
 namespace kajps5::hle {
 
 inline constexpr auto kLibKernelName = "libKernel";
@@ -15,5 +21,9 @@ inline constexpr std::int32_t kKernelHleErrorPermissionDenied = -2147352563;
 inline constexpr std::int32_t kKernelHleErrorFault = -2147352562;
 inline constexpr std::int32_t kKernelHleErrorInvalidArgument = -2147352554;
 inline constexpr std::int32_t kKernelHleErrorTooManyOpenFiles = -2147352552;
+
+// The kernel runtime must outlive all dispatches through the registry.
+[[nodiscard]] ExportRegistryStatus RegisterKernelExports(
+    ExportRegistry& registry, kernel::KernelRuntime& runtime);
 
 }  // namespace kajps5::hle

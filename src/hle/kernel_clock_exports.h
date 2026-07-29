@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <vector>
+
 #include "hle/export_registry.h"
 #include "hle/kernel_exports.h"
 #include "kernel/clock.h"
@@ -23,6 +25,11 @@ inline constexpr auto kKernelGetProcessTimeCounterFrequencyName =
     "sceKernelGetProcessTimeCounterFrequency";
 inline constexpr auto kKernelGetProcessTimeCounterFrequencyNid =
     "BNowx2l588E";
+
+namespace detail {
+[[nodiscard]] std::vector<HleExportDefinition> MakeKernelClockExports(
+    kernel::KernelClockService& clock);
+}
 
 // The clock service must outlive all dispatches through the registry.
 [[nodiscard]] ExportRegistryStatus RegisterKernelClockExports(
