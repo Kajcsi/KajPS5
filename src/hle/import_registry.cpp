@@ -66,6 +66,14 @@ ImportLookupResult ImportRegistry::Resolve(
   return result;
 }
 
+std::optional<std::uint64_t> ImportRegistry::ResolveImport(
+    std::string_view symbol,
+    std::span<const std::string> library_order) const {
+  const auto result = Resolve(symbol, library_order);
+  return result ? std::optional<std::uint64_t>(result.target_address)
+                : std::nullopt;
+}
+
 std::size_t ImportRegistry::size() const {
   std::lock_guard lock(mutex_);
   return entries_.size();

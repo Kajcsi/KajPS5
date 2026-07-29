@@ -14,5 +14,8 @@ The design review used these pinned references:
   `src/SharpEmu.Core/Cpu/Native/DirectExecutionBackend.Imports.cs`.
 
 The C++ registry does not copy either ownership model or executor. It provides
-a deterministic name boundary for later relocation and HLE dispatch work. It
-does not generate executable stubs or call host services yet.
+a deterministic name boundary for relocation and HLE dispatch work. The
+relocation pass writes resolved `R_X86_64_GLOB_DAT` and
+`R_X86_64_JUMP_SLOT` targets only after it validates the complete plan. Missing
+symbols remain unchanged and produce structured diagnostics. It does not
+generate executable stubs or call host services yet.

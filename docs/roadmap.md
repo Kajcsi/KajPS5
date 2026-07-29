@@ -31,6 +31,7 @@
 - [x] Add checked guest paths and memory-backed read-only files.
 - [x] Add deterministic thread-exit joins.
 - [x] Add deterministic library-scoped HLE import lookup.
+- [x] Connect checked import lookup to standard relocation targets.
 - [x] Run a public no-import guest leaf test program.
 - Run a public guest program through checked HLE imports.
 - Add thread, event, file, and time tests.

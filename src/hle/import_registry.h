@@ -8,10 +8,13 @@
 #include <cstdint>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
 #include <utility>
+
+#include "loader/relocator.h"
 
 namespace kajps5::hle {
 
@@ -36,7 +39,7 @@ struct ImportLookupResult {
   }
 };
 
-class ImportRegistry final {
+class ImportRegistry final : public loader::ImportResolver {
  public:
   [[nodiscard]] ImportRegistryStatus Register(std::string library,
                                               std::string symbol,
@@ -44,6 +47,9 @@ class ImportRegistry final {
   [[nodiscard]] ImportLookupResult Resolve(
       std::string_view symbol,
       std::span<const std::string> library_order = {}) const;
+  [[nodiscard]] std::optional<std::uint64_t> ResolveImport(
+      std::string_view symbol,
+      std::span<const std::string> library_order) const override;
   [[nodiscard]] std::size_t size() const;
 
  private:

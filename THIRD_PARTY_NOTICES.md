@@ -39,10 +39,11 @@ files. The SharpEmu reference files state:
 
 No upstream executor or host-memory source code was copied.
 
-The library-scoped HLE import lookup in `src/hle/import_registry.cpp` and
-`tests/hle_import_registry_test.cpp` was implemented from focused observations
-of the pinned KytyPS5 and SharpEmu import resolvers. The SharpEmu reference
-files state:
+The library-scoped HLE import lookup and checked relocation connection in
+`src/hle/import_registry.cpp`, `tests/hle_import_registry_test.cpp`, and
+`tests/hle_import_link_test.cpp` was implemented from focused observations of
+the pinned KytyPS5 and SharpEmu import resolvers. The SharpEmu reference files
+state:
 
 `Copyright (C) 2026 SharpEmu Emulator Project`
 
