@@ -83,14 +83,20 @@ The focused tests record these shared behaviors:
 - Stat and fstat write the shared 120-byte regular-file layout atomically.
   Registered memory files report a stable path-based inode, their size,
   512-byte block accounting, and deterministic zero timestamps.
-- One atomic export batch binds the clock and file handlers to the same kernel
-  runtime. A registration conflict leaves the destination registry unchanged.
+- One atomic export batch binds all current clock, event-flag, file, and
+  semaphore handlers to the same kernel runtime. A registration conflict
+  leaves the destination registry unchanged.
 - The reachability handler checks only the registered guest namespace. Missing,
   invalid, and unreadable paths return distinct kernel-compatible results.
 - Non-blocking semaphore HLE handlers create, delete, poll, and signal the same
   typed objects used by the scheduler. Handle output uses an atomic checked
   64-bit guest write. Wait export dispatch is deferred until blocked guest
   continuations can resume.
+- Non-blocking event-flag HLE handlers create, delete, set, clear, and poll the
+  same typed objects. Poll writes the observed pattern before it applies a clear
+  mode. A checked result-pointer fault cannot change the event bits. Wait and
+  cancel export dispatch remain deferred until blocked guest continuations can
+  resume.
 
 KajPS5 implements these behaviors in its own C++ interfaces. It does not copy
 the upstream host-thread executor, continuation system, object ownership

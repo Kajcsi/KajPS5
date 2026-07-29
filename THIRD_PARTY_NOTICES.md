@@ -88,6 +88,15 @@ from KytyPS5 `src/kernel/semaphore.cpp` and SharpEmu
 commits. They use the NIDs confirmed by both references and KytyPS5's
 kernel-compatible semaphore errors. No semaphore source code was copied.
 
+The non-blocking event-flag handlers in
+`src/hle/kernel_event_flag_exports.cpp` and
+`tests/hle_kernel_event_flag_exports_test.cpp` use focused behavior
+observations from KytyPS5 `src/kernel/eventFlag.cpp` and SharpEmu
+`src/SharpEmu.Libs/Kernel/KernelEventFlagCompatExports.cs` at the pinned
+commits. They use the NIDs confirmed by both references, KytyPS5's
+kernel-compatible errors, and SharpEmu's checked optional result-pattern
+write before clear-mode mutation. No event-flag source code was copied.
+
 Add an entry here when a later change imports or adapts code. Each entry must
 state the project, commit, source path, destination path, copyright notice, and
 license.

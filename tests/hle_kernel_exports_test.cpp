@@ -14,6 +14,7 @@
 #include "hle/call_context.h"
 #include "hle/export_registry.h"
 #include "hle/kernel_clock_exports.h"
+#include "hle/kernel_event_flag_exports.h"
 #include "hle/kernel_exports.h"
 #include "hle/kernel_file_exports.h"
 #include "kernel/clock.h"
@@ -73,7 +74,7 @@ int main() {
   ExportRegistry registry;
   Check(kajps5::hle::RegisterKernelExports(registry, runtime) ==
             ExportRegistryStatus::kOk &&
-            registry.size() == 34,
+            registry.size() == 44,
         "default kernel exports did not register atomically");
 
   GuestMemory memory(0x1000, 0x1000);
@@ -98,9 +99,25 @@ int main() {
   Check(handle != 0 && runtime.handles().size() == 1,
         "default file export did not use the shared runtime");
 
+  auto event_name = Bytes("default-event");
+  event_name.push_back(std::byte{0});
+  Check(memory.Initialize(0x1200, event_name),
+        "default event name setup failed");
+  HleCallContext event_context(memory);
+  Check(event_context.SetRegister(HleRegister::kRdi, 0x1300) &&
+            event_context.SetRegister(HleRegister::kRsi, 0x1200) &&
+            event_context.SetRegister(HleRegister::kRdx, 0x21) &&
+            event_context.SetRegister(HleRegister::kRcx, 1),
+        "default event create setup failed");
+  Check(registry.Dispatch(kajps5::hle::kKernelCreateEventFlagNid,
+                          libraries, event_context) &&
+            event_context.GetRegister(HleRegister::kRax).value_or(1) == 0 &&
+            runtime.handles().size() == 2,
+        "default event export did not use the shared runtime");
+
   Check(kajps5::hle::RegisterKernelExports(registry, runtime) ==
             ExportRegistryStatus::kAlreadyExists &&
-            registry.size() == 34,
+            registry.size() == 44,
         "duplicate default registration changed the registry");
 
   ExportRegistry conflict_registry;
