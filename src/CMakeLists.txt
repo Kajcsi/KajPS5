@@ -1,4 +1,5 @@
 add_library(kajps5_core STATIC
+  core/memory/guest_memory.cpp
   core/project_info.cpp
 )
 
