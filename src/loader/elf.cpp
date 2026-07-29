@@ -1,4 +1,5 @@
 // Copyright (C) 2026 KajPS5 contributors
+// Behavior reference: Copyright (C) 2026 SharpEmu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "loader/elf.h"
@@ -24,6 +25,9 @@ constexpr std::uint16_t kTypeSceExecutable = 0xfe10;
 constexpr std::uint16_t kTypeSceDynamic = 0xfe18;
 constexpr std::uint16_t kMachineX86_64 = 62;
 constexpr std::uint32_t kProgramTypeLoad = 1;
+constexpr std::uint32_t kProgramTypeDynamic = 2;
+constexpr std::size_t kDynamicEntrySize = 16;
+constexpr std::int64_t kDynamicTagNull = 0;
 
 std::uint8_t Read8(std::span<const std::byte> image,
                    std::size_t offset) noexcept {
@@ -213,6 +217,47 @@ ElfParseResult ParseElf64(std::span<const std::byte> image) {
     }
   }
 
+  const ElfProgramHeader* dynamic_header = nullptr;
+  for (const auto& header : metadata.program_headers) {
+    if (header.type != kProgramTypeDynamic) {
+      continue;
+    }
+    if (dynamic_header != nullptr) {
+      return ParseFailure(ElfError::kMultipleDynamicSegments);
+    }
+    dynamic_header = &header;
+  }
+
+  if (dynamic_header != nullptr) {
+    if (dynamic_header->file_size % kDynamicEntrySize != 0) {
+      return ParseFailure(ElfError::kInvalidDynamicSegmentSize);
+    }
+    if (!RangeWithin(static_cast<std::uint64_t>(image.size()),
+                     dynamic_header->offset, dynamic_header->file_size)) {
+      return ParseFailure(ElfError::kDynamicSegmentFileRangeOutOfRange);
+    }
+
+    metadata.dynamic_entries.reserve(static_cast<std::size_t>(
+        dynamic_header->file_size / kDynamicEntrySize));
+    bool terminated = false;
+    for (std::uint64_t relative_offset = 0;
+         relative_offset < dynamic_header->file_size;
+         relative_offset += kDynamicEntrySize) {
+      const auto entry_offset =
+          static_cast<std::size_t>(dynamic_header->offset + relative_offset);
+      const auto tag = std::bit_cast<std::int64_t>(Read64(image, entry_offset));
+      if (tag == kDynamicTagNull) {
+        terminated = true;
+        break;
+      }
+      metadata.dynamic_entries.push_back(
+          {tag, Read64(image, entry_offset + sizeof(std::uint64_t))});
+    }
+    if (!terminated) {
+      return ParseFailure(ElfError::kUnterminatedDynamicTable);
+    }
+  }
+
   ElfParseResult result;
   result.metadata = std::move(metadata);
   return result;
@@ -342,6 +387,14 @@ std::string_view ElfErrorName(ElfError error) noexcept {
       return "invalid-program-header-size";
     case ElfError::kProgramHeaderTableOutOfRange:
       return "program-header-table-out-of-range";
+    case ElfError::kMultipleDynamicSegments:
+      return "multiple-dynamic-segments";
+    case ElfError::kDynamicSegmentFileRangeOutOfRange:
+      return "dynamic-segment-file-range-out-of-range";
+    case ElfError::kInvalidDynamicSegmentSize:
+      return "invalid-dynamic-segment-size";
+    case ElfError::kUnterminatedDynamicTable:
+      return "unterminated-dynamic-table";
     case ElfError::kSegmentFileSizeExceedsMemorySize:
       return "segment-file-size-exceeds-memory-size";
     case ElfError::kSegmentFileRangeOutOfRange:

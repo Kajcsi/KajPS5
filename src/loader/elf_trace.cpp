@@ -57,6 +57,7 @@ std::string FormatElfTrace(const ElfMetadata& metadata) {
     }
   }
   trace << "elf.load_segments=" << load_segment_count << '\n';
+  trace << "elf.dynamic_entries=" << metadata.dynamic_entries.size() << '\n';
 
   std::size_t load_index = 0;
   for (const auto& header : metadata.program_headers) {

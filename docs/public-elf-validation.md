@@ -17,8 +17,9 @@ LLVM 22 needed an explicit SDK sysroot and one explicit `crt1.o` with
 
 The result is a little-endian x86-64 ELF shared object with FreeBSD ABI, four
 program headers, and three `PT_LOAD` segments. KajPS5 parsed all metadata and
-loaded 53,860 file bytes. It cleared 2,324 additional bytes and applied each
-segment's `R/W/X` flags. The required guest range was 84,264 bytes.
+24 non-null dynamic entries. It loaded 53,860 file bytes, cleared 2,324
+additional bytes, and applied each segment's `R/W/X` flags. The required guest
+range was 84,264 bytes.
 
 No PS5 console, game, firmware, key, SELF file, or proprietary system module
 was used.

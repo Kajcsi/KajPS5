@@ -139,6 +139,7 @@ int main() {
       "elf.entry=0x0000000000001002\n"
       "elf.program_headers=2\n"
       "elf.load_segments=1\n"
+      "elf.dynamic_entries=0\n"
       "elf.load[0].flags=r-x offset=0x0000000000000100 "
       "virtual_address=0x0000000000001000 file_size=0x0000000000000004 "
       "memory_size=0x0000000000000008 alignment=0x0000000000000100\n";

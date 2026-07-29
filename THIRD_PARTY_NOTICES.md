@@ -16,6 +16,14 @@ reference files state:
 Both references are GPL-2.0-or-later. No upstream host executor, continuation
 system, ownership model, or source code was copied.
 
+The checked dynamic-table behavior in `src/loader/elf.cpp` and
+`tests/elf_dynamic_test.cpp` was implemented from focused observations of the
+pinned KytyPS5 and SharpEmu loader files. The SharpEmu reference file states:
+
+`Copyright (C) 2026 SharpEmu Emulator Project`
+
+No upstream loader source code was copied.
+
 Add an entry here when a later change imports or adapts code. Each entry must
 state the project, commit, source path, destination path, copyright notice, and
 license.

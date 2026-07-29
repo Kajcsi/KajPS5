@@ -27,6 +27,10 @@ enum class ElfError {
   kInvalidHeaderSize,
   kInvalidProgramHeaderSize,
   kProgramHeaderTableOutOfRange,
+  kMultipleDynamicSegments,
+  kDynamicSegmentFileRangeOutOfRange,
+  kInvalidDynamicSegmentSize,
+  kUnterminatedDynamicTable,
   kSegmentFileSizeExceedsMemorySize,
   kSegmentFileRangeOutOfRange,
   kSegmentAddressRangeOverflow,
@@ -48,6 +52,11 @@ struct ElfProgramHeader {
   std::uint64_t alignment = 0;
 };
 
+struct ElfDynamicEntry {
+  std::int64_t tag = 0;
+  std::uint64_t value = 0;
+};
+
 struct ElfMetadata {
   std::uint8_t os_abi = 0;
   std::uint8_t abi_version = 0;
@@ -56,6 +65,7 @@ struct ElfMetadata {
   std::uint32_t version = 0;
   std::uint64_t entry_point = 0;
   std::vector<ElfProgramHeader> program_headers;
+  std::vector<ElfDynamicEntry> dynamic_entries;
 };
 
 struct ElfParseResult {

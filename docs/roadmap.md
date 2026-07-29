@@ -13,6 +13,7 @@
 - [x] Validate all guest address ranges and access permissions.
 - [x] Load one small public test program.
 - [x] Produce a stable loader trace.
+- [x] Validate and record raw ELF64 dynamic-table entries.
 
 ## Stage 2: CPU and kernel
 
