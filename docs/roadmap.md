@@ -11,6 +11,7 @@
 
 - [x] Parse ELF metadata without executing guest code.
 - [x] Validate all guest address ranges and access permissions.
+- [x] Add transactional guest protection and unmap changes.
 - [x] Load one small public test program.
 - [x] Produce a stable loader trace.
 - [x] Validate and record raw ELF64 dynamic-table entries.

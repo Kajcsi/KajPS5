@@ -19,6 +19,11 @@ The design review used these pinned references:
   `src/SharpEmu.Core/Memory/VirtualMemory.cs` and
   `tests/SharpEmu.Libs.Tests/Memory/VirtualMemoryTests.cs`: whole-range access
   checks and no partial writes after a rejected access.
+- The pinned KytyPS5 `src/common/virtualMemory.h` and
+  `src/common/virtualMemory.cpp`, plus SharpEmu
+  `src/SharpEmu.HLE/IGuestAddressSpace.cs` and
+  `src/SharpEmu.Core/Memory/PhysicalVirtualMemory.cs`: protection changes and
+  released-range behavior.
 
 The guest-memory model keeps sorted, non-overlapping mapped regions. Every
 read, write, and execute check must pass across the complete range before an
@@ -44,6 +49,12 @@ The HLE boundary can resolve checked `GLOB_DAT` and `JUMP_SLOT` imports by
 ordered needed-library name. Its stable relocation trace hex-encodes untrusted
 symbol names, limits each name to 128 input bytes, and limits detailed records
 to 32 entries.
+
+The guest-memory region table supports transactional protection and unmap
+changes. A requested range must be mapped in full before its metadata changes.
+Protection changes split and merge regions into a stable canonical form.
+Unmapping clears released backing bytes, so a later mapping cannot expose old
+guest data.
 
 The standard System V hash header supplies the dynamic symbol count. The
 loader checks the complete hash and symbol-table ranges, requires 24-byte

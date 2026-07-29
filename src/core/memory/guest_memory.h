@@ -46,6 +46,9 @@ class GuestMemory final {
                             std::uint64_t length) const noexcept;
   [[nodiscard]] bool Map(std::uint64_t address, std::uint64_t length,
                          GuestMemoryProtection protection);
+  [[nodiscard]] bool Protect(std::uint64_t address, std::uint64_t length,
+                             GuestMemoryProtection protection);
+  [[nodiscard]] bool Unmap(std::uint64_t address, std::uint64_t length);
   [[nodiscard]] bool IsMapped(std::uint64_t address,
                               std::uint64_t length) const noexcept;
   [[nodiscard]] bool CanAccess(
@@ -71,6 +74,7 @@ class GuestMemory final {
   [[nodiscard]] std::size_t FindContainingRegion(
       std::uint64_t address) const noexcept;
   [[nodiscard]] std::size_t OffsetOf(std::uint64_t address) const noexcept;
+  void CoalesceRegions();
 
   std::uint64_t base_address_ = 0;
   std::vector<std::byte> bytes_;

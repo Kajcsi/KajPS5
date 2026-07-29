@@ -1,12 +1,15 @@
 // Copyright (C) 2026 KajPS5 contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
 #include <limits>
+#include <span>
 #include <stdexcept>
+#include <vector>
 
 #include "core/memory/guest_memory.h"
 
@@ -19,6 +22,18 @@ void Check(bool condition, const char* message) {
     std::cerr << "guest_memory_test: " << message << '\n';
     ++failures;
   }
+}
+
+bool SameRegions(
+    const std::vector<kajps5::memory::GuestMemoryRegion>& expected,
+    std::span<const kajps5::memory::GuestMemoryRegion> actual) {
+  return expected.size() == actual.size() &&
+         std::equal(expected.begin(), expected.end(), actual.begin(),
+                    [](const auto& left, const auto& right) {
+                      return left.address == right.address &&
+                             left.size == right.size &&
+                             left.protection == right.protection;
+                    });
 }
 
 }  // namespace
@@ -67,6 +82,15 @@ int main() {
     rejected_overflow = true;
   }
   Check(rejected_overflow, "constructor accepted an overflowing range");
+  bool rejected_protection = false;
+  try {
+    GuestMemory invalid_protection(
+        0x1000, 8, static_cast<GuestMemoryProtection>(0x80));
+  } catch (const std::invalid_argument&) {
+    rejected_protection = true;
+  }
+  Check(rejected_protection,
+        "constructor accepted unknown protection bits");
 
   GuestMemory mapped(0x2000, 0x20, GuestMemoryProtection::kNone);
   Check(mapped.regions().empty(), "unmapped memory created a region");
@@ -84,15 +108,18 @@ int main() {
         "write-only mapping failed");
   Check(mapped.Map(0x2018, 4, GuestMemoryProtection::kNone),
         "no-access mapping failed");
-  Check(mapped.regions().size() == 6, "mapping count is incorrect");
+  Check(mapped.regions().size() == 5, "mapping count is incorrect");
   Check(mapped.regions()[0].address == 0x2000 &&
             mapped.regions()[1].address == 0x2004 &&
-            mapped.regions()[2].address == 0x2008,
-        "out-of-order mappings were not sorted");
+            mapped.regions()[1].size == 8,
+        "out-of-order mappings were not sorted and merged");
   Check(!mapped.Map(0x2003, 2, GuestMemoryProtection::kRead),
         "overlapping mapping was accepted");
   Check(!mapped.Map(0x1fff, 2, GuestMemoryProtection::kRead),
         "mapping outside the backing range was accepted");
+  Check(!mapped.Map(0x201c, 4,
+                    static_cast<GuestMemoryProtection>(0x80)),
+        "mapping accepted unknown protection bits");
 
   const std::array mapped_input = {
       std::byte{1}, std::byte{2}, std::byte{3}, std::byte{4},
@@ -136,6 +163,72 @@ int main() {
   Check(mapped.Read(0x2004, cleared), "cleared read-only range is unreadable");
   Check(cleared == std::array<std::byte, 4>{},
         "initialization fill did not clear the range");
+
+  GuestMemory mutable_regions(0x3000, 0x20,
+                              GuestMemoryProtection::kNone);
+  Check(mutable_regions.Map(0x3000, 8, GuestMemoryProtection::kRead) &&
+            mutable_regions.Map(0x3008, 8,
+                                GuestMemoryProtection::kWrite) &&
+            mutable_regions.Map(0x3010, 8,
+                                GuestMemoryProtection::kExecute),
+        "mutable region setup failed");
+  Check(mutable_regions.Protect(
+            0x3004, 0x10,
+            GuestMemoryProtection::kRead | GuestMemoryProtection::kWrite),
+        "protection across mapped regions failed");
+  Check(mutable_regions.regions().size() == 3 &&
+            mutable_regions.regions()[0].address == 0x3000 &&
+            mutable_regions.regions()[0].size == 4 &&
+            mutable_regions.regions()[0].protection ==
+                GuestMemoryProtection::kRead &&
+            mutable_regions.regions()[1].address == 0x3004 &&
+            mutable_regions.regions()[1].size == 0x10 &&
+            mutable_regions.regions()[1].protection ==
+                (GuestMemoryProtection::kRead |
+                 GuestMemoryProtection::kWrite) &&
+            mutable_regions.regions()[2].address == 0x3014 &&
+            mutable_regions.regions()[2].size == 4 &&
+            mutable_regions.regions()[2].protection ==
+                GuestMemoryProtection::kExecute,
+        "protection did not split and merge regions canonically");
+  Check(!mutable_regions.Protect(0x3000, 0,
+                                 GuestMemoryProtection::kRead),
+        "zero-length protection succeeded");
+  const auto protected_regions =
+      std::vector<kajps5::memory::GuestMemoryRegion>(
+          mutable_regions.regions().begin(),
+          mutable_regions.regions().end());
+  Check(!mutable_regions.Protect(
+            0x3000, 4, static_cast<GuestMemoryProtection>(0x80)) &&
+            SameRegions(protected_regions, mutable_regions.regions()),
+        "invalid protection changed the region table");
+
+  const std::array released_data = {
+      std::byte{0x41}, std::byte{0x42}, std::byte{0x43}, std::byte{0x44}};
+  Check(mutable_regions.Initialize(0x3008, released_data),
+        "released-byte setup failed");
+  Check(mutable_regions.Unmap(0x3008, 4) &&
+            !mutable_regions.IsMapped(0x3008, 1),
+        "unmap did not create a checked gap");
+  const auto unmapped_regions =
+      std::vector<kajps5::memory::GuestMemoryRegion>(
+          mutable_regions.regions().begin(),
+          mutable_regions.regions().end());
+  Check(!mutable_regions.Protect(0x3004, 8,
+                                 GuestMemoryProtection::kRead) &&
+            !mutable_regions.Unmap(0x3004, 8) &&
+            SameRegions(unmapped_regions, mutable_regions.regions()),
+        "operation across an existing gap changed the region table");
+  Check(mutable_regions.Map(
+            0x3008, 4,
+            GuestMemoryProtection::kRead | GuestMemoryProtection::kWrite),
+        "released range could not be remapped");
+  std::array<std::byte, 4> remapped_data{};
+  Check(mutable_regions.Read(0x3008, remapped_data) &&
+            remapped_data == std::array<std::byte, 4>{},
+        "remapped range exposed released bytes");
+  Check(!mutable_regions.Unmap(0x3000, 0),
+        "zero-length unmap succeeded");
 
   return failures == 0 ? 0 : 1;
 }

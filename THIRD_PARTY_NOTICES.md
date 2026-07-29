@@ -29,6 +29,14 @@ SharpEmu reference file states:
 
 No upstream loader source code was copied.
 
+The transactional guest-memory protection and unmap behavior in
+`src/core/memory/guest_memory.cpp` and `tests/guest_memory_test.cpp` uses
+focused observations from KytyPS5 `src/common/virtualMemory.h` and
+`src/common/virtualMemory.cpp`, and SharpEmu
+`src/SharpEmu.HLE/IGuestAddressSpace.cs` and
+`src/SharpEmu.Core/Memory/PhysicalVirtualMemory.cs` at the pinned commits.
+No upstream virtual-memory source code was copied.
+
 The W^X native leaf-execution behavior in
 `src/cpu/native_leaf_executor.cpp` and
 `tests/native_leaf_executor_test.cpp` was implemented from focused

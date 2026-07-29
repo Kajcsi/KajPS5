@@ -6,9 +6,19 @@
 #include <algorithm>
 #include <limits>
 #include <stdexcept>
+#include <utility>
 
 namespace kajps5::memory {
 namespace {
+
+constexpr std::uint8_t kAllProtectionBits =
+    static_cast<std::uint8_t>(GuestMemoryProtection::kRead) |
+    static_cast<std::uint8_t>(GuestMemoryProtection::kWrite) |
+    static_cast<std::uint8_t>(GuestMemoryProtection::kExecute);
+
+bool IsValidProtection(GuestMemoryProtection protection) noexcept {
+  return (static_cast<std::uint8_t>(protection) & ~kAllProtectionBits) == 0;
+}
 
 std::size_t ValidateSize(std::uint64_t base_address, std::size_t size) {
   const auto size64 = static_cast<std::uint64_t>(size);
@@ -23,6 +33,9 @@ std::size_t ValidateSize(std::uint64_t base_address, std::size_t size) {
 GuestMemory::GuestMemory(std::uint64_t base_address, std::size_t size,
                          GuestMemoryProtection initial_protection)
     : base_address_(base_address), bytes_(ValidateSize(base_address, size)) {
+  if (!IsValidProtection(initial_protection)) {
+    throw std::invalid_argument("Guest memory protection is invalid.");
+  }
   if (!bytes_.empty() && initial_protection != GuestMemoryProtection::kNone) {
     regions_.push_back({base_address_, this->size(), initial_protection});
   }
@@ -77,7 +90,7 @@ bool GuestMemory::CanMap(std::uint64_t address,
 
 bool GuestMemory::Map(std::uint64_t address, std::uint64_t length,
                       GuestMemoryProtection protection) {
-  if (!CanMap(address, length)) {
+  if (!IsValidProtection(protection) || !CanMap(address, length)) {
     return false;
   }
 
@@ -87,6 +100,76 @@ bool GuestMemory::Map(std::uint64_t address, std::uint64_t length,
         return region.address < candidate;
       });
   regions_.insert(insertion, {address, length, protection});
+  CoalesceRegions();
+  return true;
+}
+
+bool GuestMemory::Protect(std::uint64_t address, std::uint64_t length,
+                          GuestMemoryProtection protection) {
+  if (length == 0 || !IsValidProtection(protection) ||
+      !IsMapped(address, length)) {
+    return false;
+  }
+
+  const auto range_end = address + length;
+  std::vector<GuestMemoryRegion> updated;
+  updated.reserve(regions_.size() + 2);
+  for (const auto& region : regions_) {
+    const auto region_end = region.address + region.size;
+    if (range_end <= region.address || address >= region_end) {
+      updated.push_back(region);
+      continue;
+    }
+
+    if (region.address < address) {
+      updated.push_back(
+          {region.address, address - region.address, region.protection});
+    }
+    const auto protected_start = std::max(region.address, address);
+    const auto protected_end = std::min(region_end, range_end);
+    updated.push_back(
+        {protected_start, protected_end - protected_start, protection});
+    if (range_end < region_end) {
+      updated.push_back(
+          {range_end, region_end - range_end, region.protection});
+    }
+  }
+
+  regions_ = std::move(updated);
+  CoalesceRegions();
+  return true;
+}
+
+bool GuestMemory::Unmap(std::uint64_t address, std::uint64_t length) {
+  if (length == 0 || !IsMapped(address, length)) {
+    return false;
+  }
+
+  const auto range_end = address + length;
+  std::vector<GuestMemoryRegion> updated;
+  updated.reserve(regions_.size() + 1);
+  for (const auto& region : regions_) {
+    const auto region_end = region.address + region.size;
+    if (range_end <= region.address || address >= region_end) {
+      updated.push_back(region);
+      continue;
+    }
+
+    if (region.address < address) {
+      updated.push_back(
+          {region.address, address - region.address, region.protection});
+    }
+    if (range_end < region_end) {
+      updated.push_back(
+          {range_end, region_end - range_end, region.protection});
+    }
+  }
+
+  const auto offset = OffsetOf(address);
+  std::fill_n(bytes_.begin() + static_cast<std::ptrdiff_t>(offset),
+              static_cast<std::size_t>(length), std::byte{0});
+  regions_ = std::move(updated);
+  CoalesceRegions();
   return true;
 }
 
@@ -232,6 +315,27 @@ std::size_t GuestMemory::FindContainingRegion(
 
 std::size_t GuestMemory::OffsetOf(std::uint64_t address) const noexcept {
   return static_cast<std::size_t>(address - base_address_);
+}
+
+void GuestMemory::CoalesceRegions() {
+  if (regions_.size() < 2) {
+    return;
+  }
+
+  std::size_t output_index = 0;
+  for (std::size_t input_index = 1; input_index < regions_.size();
+       ++input_index) {
+    const auto current = regions_[input_index];
+    auto& previous = regions_[output_index];
+    if (previous.address + previous.size == current.address &&
+        previous.protection == current.protection) {
+      previous.size += current.size;
+    } else {
+      ++output_index;
+      regions_[output_index] = current;
+    }
+  }
+  regions_.resize(output_index + 1);
 }
 
 }  // namespace kajps5::memory
