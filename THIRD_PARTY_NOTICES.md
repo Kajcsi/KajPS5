@@ -2,8 +2,8 @@
 
 The current source does not copy source code from KytyPS5 or SharpEmu. It uses
 both projects as research references. See `docs/stage1-loader.md`,
-`docs/stage2-kernel.md`, and `docs/stage2-cpu.md` for the reviewed files and
-pinned commits.
+`docs/stage2-kernel.md`, `docs/stage2-cpu.md`, and `docs/stage2-hle.md` for the
+reviewed files and pinned commits.
 
 The clock, event-flag, file, semaphore, and scheduler behaviors in `src/kernel/`,
 `tests/kernel_event_flag_test.cpp`, `tests/kernel_event_wait_test.cpp`, and
@@ -38,6 +38,15 @@ files. The SharpEmu reference files state:
 `Copyright (C) 2026 SharpEmu Emulator Project`
 
 No upstream executor or host-memory source code was copied.
+
+The library-scoped HLE import lookup in `src/hle/import_registry.cpp` and
+`tests/hle_import_registry_test.cpp` was implemented from focused observations
+of the pinned KytyPS5 and SharpEmu import resolvers. The SharpEmu reference
+files state:
+
+`Copyright (C) 2026 SharpEmu Emulator Project`
+
+No upstream import resolver or stub source code was copied.
 
 Add an entry here when a later change imports or adapts code. Each entry must
 state the project, commit, source path, destination path, copyright notice, and

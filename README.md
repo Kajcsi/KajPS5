@@ -32,6 +32,8 @@ metadata. A checked relocation pass applies `R_X86_64_RELATIVE` entries and
 reports unresolved import relocations without changing them.
 The loader also reads standard `DT_HASH` symbol counts and validates dynamic
 symbol names.
+One checked HLE registry resolves symbols by ordered library name and rejects
+ambiguous unscoped lookups. It does not generate callable stubs yet.
 The kernel foundation has typed handles and deterministic event-flag polling.
 One cooperative scheduler owns guest thread state and
 deterministic ready, block, wake, yield, and exit transitions. A test-only
