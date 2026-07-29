@@ -81,9 +81,14 @@ ExportRegistryStatus RegisterKernelClockExports(
     ExportRegistry& registry, kernel::KernelClockService& clock) {
   auto* const clock_view = &clock;
   std::vector<HleExportDefinition> exports;
-  exports.reserve(5);
+  exports.reserve(10);
   exports.push_back(
       {kLibKernelName, kKernelClockGettimeName,
+       [clock_view](HleCallContext& context) {
+         return ClockGettime(context, *clock_view);
+       }});
+  exports.push_back(
+      {kLibKernelName, kKernelClockGettimeNid,
        [clock_view](HleCallContext& context) {
          return ClockGettime(context, *clock_view);
        }});
@@ -93,7 +98,18 @@ ExportRegistryStatus RegisterKernelClockExports(
          return Gettimeofday(context, *clock_view);
        }});
   exports.push_back(
+      {kLibKernelName, kKernelGettimeofdayNid,
+       [clock_view](HleCallContext& context) {
+         return Gettimeofday(context, *clock_view);
+       }});
+  exports.push_back(
       {kLibKernelName, kKernelGetProcessTimeName,
+       [clock_view](HleCallContext& context) {
+         context.SetReturn(clock_view->GetProcessTimeMicroseconds());
+         return HleContextStatus::kOk;
+       }});
+  exports.push_back(
+      {kLibKernelName, kKernelGetProcessTimeNid,
        [clock_view](HleCallContext& context) {
          context.SetReturn(clock_view->GetProcessTimeMicroseconds());
          return HleContextStatus::kOk;
@@ -105,7 +121,19 @@ ExportRegistryStatus RegisterKernelClockExports(
          return HleContextStatus::kOk;
        }});
   exports.push_back(
+      {kLibKernelName, kKernelGetProcessTimeCounterNid,
+       [clock_view](HleCallContext& context) {
+         context.SetReturn(clock_view->GetProcessTimeCounter());
+         return HleContextStatus::kOk;
+       }});
+  exports.push_back(
       {kLibKernelName, kKernelGetProcessTimeCounterFrequencyName,
+       [clock_view](HleCallContext& context) {
+         context.SetReturn(clock_view->GetProcessTimeCounterFrequency());
+         return HleContextStatus::kOk;
+       }});
+  exports.push_back(
+      {kLibKernelName, kKernelGetProcessTimeCounterFrequencyNid,
        [clock_view](HleCallContext& context) {
          context.SetReturn(clock_view->GetProcessTimeCounterFrequency());
          return HleContextStatus::kOk;

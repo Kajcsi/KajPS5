@@ -82,23 +82,23 @@ int main() {
   ExportRegistry registry;
   Check(kajps5::hle::RegisterKernelClockExports(registry, clock) ==
             ExportRegistryStatus::kOk &&
-            registry.size() == 5,
+            registry.size() == 10,
         "kernel clock exports did not register atomically");
 
   GuestMemory memory(0x1000, 32);
   HleCallContext context(memory);
-  Check(DispatchReturn(registry, kajps5::hle::kKernelGetProcessTimeName,
+  Check(DispatchReturn(registry, kajps5::hle::kKernelGetProcessTimeNid,
                        context) == 2'500'123,
-        "process-time export returned the wrong microseconds");
+        "process-time NID returned the wrong microseconds");
   Check(DispatchReturn(
-            registry, kajps5::hle::kKernelGetProcessTimeCounterName,
+            registry, kajps5::hle::kKernelGetProcessTimeCounterNid,
             context) == 2'500'123'456,
-        "process-time counter export returned the wrong value");
+        "process-time counter NID returned the wrong value");
   Check(DispatchReturn(
             registry,
-            kajps5::hle::kKernelGetProcessTimeCounterFrequencyName,
+            kajps5::hle::kKernelGetProcessTimeCounterFrequencyNid,
             context) == kajps5::kernel::kProcessTimeCounterFrequency,
-        "process-time frequency export returned the wrong value");
+        "process-time frequency NID returned the wrong value");
 
   Check(context.SetRegister(kajps5::hle::HleRegister::kRdi,
                             kajps5::kernel::kClockRealtime) &&
@@ -106,7 +106,7 @@ int main() {
         "clock-gettime argument setup failed");
   const std::vector<std::string> libraries = {kajps5::hle::kLibKernelName};
   const auto clock_result = registry.Dispatch(
-      kajps5::hle::kKernelClockGettimeName, libraries, context);
+      kajps5::hle::kKernelClockGettimeNid, libraries, context);
   std::array<std::byte, 16> timespec{};
   Check(clock_result && memory.Read(0x1000, timespec) &&
             ReadSigned64(timespec, 0) == 1'725'000'123 &&
@@ -117,7 +117,7 @@ int main() {
   Check(timeval_context.SetRegister(kajps5::hle::HleRegister::kRdi, 0x1010),
         "gettimeofday argument setup failed");
   const auto timeval_result = registry.Dispatch(
-      kajps5::hle::kKernelGettimeofdayName, libraries, timeval_context);
+      kajps5::hle::kKernelGettimeofdayNid, libraries, timeval_context);
   std::array<std::byte, 16> timeval{};
   Check(timeval_result && memory.Read(0x1010, timeval) &&
             ReadSigned64(timeval, 0) == 1'725'000'123 &&
@@ -197,7 +197,7 @@ int main() {
 
   Check(kajps5::hle::RegisterKernelClockExports(registry, clock) ==
             ExportRegistryStatus::kAlreadyExists &&
-            registry.size() == 5,
+            registry.size() == 10,
         "duplicate clock export batch changed the registry");
   const std::vector<std::string> wrong_library = {"libkernel"};
   Check(registry

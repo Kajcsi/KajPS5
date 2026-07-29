@@ -11,12 +11,18 @@
 namespace kajps5::hle {
 
 inline constexpr auto kKernelClockGettimeName = "sceKernelClockGettime";
+inline constexpr auto kKernelClockGettimeNid = "QBi7HCK03hw";
 inline constexpr auto kKernelGettimeofdayName = "sceKernelGettimeofday";
+inline constexpr auto kKernelGettimeofdayNid = "ejekcaNQNq0";
 inline constexpr auto kKernelGetProcessTimeName = "sceKernelGetProcessTime";
+inline constexpr auto kKernelGetProcessTimeNid = "4J2sUJmuHZQ";
 inline constexpr auto kKernelGetProcessTimeCounterName =
     "sceKernelGetProcessTimeCounter";
+inline constexpr auto kKernelGetProcessTimeCounterNid = "fgxnMeTNUtY";
 inline constexpr auto kKernelGetProcessTimeCounterFrequencyName =
     "sceKernelGetProcessTimeCounterFrequency";
+inline constexpr auto kKernelGetProcessTimeCounterFrequencyNid =
+    "BNowx2l588E";
 
 // The clock service must outlive all dispatches through the registry.
 [[nodiscard]] ExportRegistryStatus RegisterKernelClockExports(

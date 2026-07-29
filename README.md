@@ -45,7 +45,7 @@ name and does not run ambiguous unscoped symbols.
 The first registered `libKernel` handlers expose consistent process time,
 counter, counter-frequency, and checked `sceKernelClockGettime` behavior from
 the shared kernel clock. `sceKernelGettimeofday` uses the same checked output
-boundary.
+boundary. Each clock handler is available by export name and NID.
 The kernel foundation has typed handles and deterministic event-flag polling.
 One cooperative scheduler owns guest thread state and
 deterministic ready, block, wake, yield, and exit transitions. A test-only

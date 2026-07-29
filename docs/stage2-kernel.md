@@ -61,6 +61,8 @@ The focused tests record these shared behaviors:
   reports a matching one-gigahertz frequency.
 - The first HLE clock handlers expose process microseconds, the same nanosecond
   counter, and its one-gigahertz frequency through `libKernel`.
+- Clock handlers register both readable export names and the NIDs confirmed by
+  the two pinned references.
 - The clock-gettime HLE handler writes both timespec fields atomically and
   returns kernel-compatible `EFAULT` or `EINVAL` results.
 - The gettimeofday HLE handler writes both timeval fields through the same
