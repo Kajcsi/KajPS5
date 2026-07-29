@@ -26,3 +26,5 @@ memory.
 
 This milestone does not map host pages, apply execute permissions, relocate a
 dynamic image, parse SELF containers, or run guest code.
+
+See `public-elf-validation.md` for the external PS5 homebrew ELF check.

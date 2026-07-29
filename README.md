@@ -37,6 +37,15 @@ ctest --test-dir _Build -C Release --output-on-failure
 
 On Windows, the executable is usually in `_Build/src/Release/kajps5.exe`.
 
+Inspect and load-check a public decrypted ELF without executing guest code:
+
+```powershell
+_Build\src\Release\kajps5.exe --trace-elf R:\path\sample.elf
+```
+
+The command reads at most 512 MiB and refuses a guest range larger than
+512 MiB. It prints stable ELF and load summary fields for test comparison.
+
 ## Legal use
 
 KajPS5 is for research and education. The project does not include games,
