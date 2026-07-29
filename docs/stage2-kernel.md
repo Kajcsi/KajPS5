@@ -85,6 +85,8 @@ The focused tests record these shared behaviors:
   512-byte block accounting, and deterministic zero timestamps.
 - One atomic export batch binds the clock and file handlers to the same kernel
   runtime. A registration conflict leaves the destination registry unchanged.
+- The reachability handler checks only the registered guest namespace. Missing,
+  invalid, and unreadable paths return distinct kernel-compatible results.
 
 KajPS5 implements these behaviors in its own C++ interfaces. It does not copy
 the upstream host-thread executor, continuation system, object ownership

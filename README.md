@@ -57,10 +57,10 @@ and recheck contract.
 The kernel clock uses portable host clocks and keeps its process counter and
 frequency consistent.
 The file foundation normalizes guest paths and reads registered memory-backed
-files. Checked open, close, read, positioned-read, seek, stat, and fstat
-handlers expose that same service by export name and NID. Metadata uses the
-120-byte kernel stat layout and deterministic values for registered regular
-files. The service does not expose the host file system.
+files. Checked open, close, read, positioned-read, seek, stat, fstat, and path
+reachability handlers expose that same service by export name and NID.
+Metadata uses the 120-byte kernel stat layout and deterministic values for
+registered regular files. The service does not expose the host file system.
 One atomic default registration binds all current clock and file handlers to
 the same kernel runtime.
 

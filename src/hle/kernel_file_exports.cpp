@@ -303,13 +303,32 @@ HleContextStatus KernelFstat(HleCallContext& context,
   return HleContextStatus::kOk;
 }
 
+HleContextStatus KernelCheckReachability(HleCallContext& context,
+                                         kernel::FileService& files) {
+  const auto path_address = context.Argument(0).value_or(0);
+  if (path_address == 0) {
+    SetKernelResult(context, kKernelHleErrorInvalidArgument);
+    return HleContextStatus::kOk;
+  }
+  const auto path = context.ReadNullTerminatedString(
+      path_address, kernel::kMaximumGuestPathLength + 1);
+  if (!path) {
+    SetKernelResult(context, kKernelHleErrorFault);
+    return HleContextStatus::kOk;
+  }
+  const auto stat = files.Stat(path.value);
+  SetKernelResult(context,
+                  stat ? 0 : FileStatusResult(stat.status));
+  return HleContextStatus::kOk;
+}
+
 }  // namespace
 
 std::vector<HleExportDefinition> detail::MakeKernelFileExports(
     kernel::FileService& files) {
   auto* const file_view = &files;
   std::vector<HleExportDefinition> exports;
-  exports.reserve(14);
+  exports.reserve(16);
   exports.push_back({kLibKernelName, kKernelOpenName,
                      [file_view](HleCallContext& context) {
                        return KernelOpen(context, *file_view);
@@ -365,6 +384,14 @@ std::vector<HleExportDefinition> detail::MakeKernelFileExports(
   exports.push_back({kLibKernelName, kKernelFstatNid,
                      [file_view](HleCallContext& context) {
                        return KernelFstat(context, *file_view);
+                     }});
+  exports.push_back({kLibKernelName, kKernelCheckReachabilityName,
+                     [file_view](HleCallContext& context) {
+                       return KernelCheckReachability(context, *file_view);
+                     }});
+  exports.push_back({kLibKernelName, kKernelCheckReachabilityNid,
+                     [file_view](HleCallContext& context) {
+                       return KernelCheckReachability(context, *file_view);
                      }});
   return exports;
 }

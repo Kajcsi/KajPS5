@@ -103,7 +103,7 @@ int main() {
   ExportRegistry registry;
   Check(kajps5::hle::RegisterKernelFileExports(registry, runtime.files()) ==
             ExportRegistryStatus::kOk &&
-            registry.size() == 14,
+            registry.size() == 16,
         "file export registration failed");
 
   auto path = Bytes("/app0/data/test.bin");
@@ -119,6 +119,13 @@ int main() {
                                open_context);
   Check(handle != 0 && runtime.handles().size() == 1,
         "NID open did not return a file descriptor");
+
+  HleCallContext reachable_context(memory);
+  Check(reachable_context.SetRegister(HleRegister::kRdi, 0x1100),
+        "reachable path setup failed");
+  Check(Dispatch(registry, kajps5::hle::kKernelCheckReachabilityNid,
+                 reachable_context) == 0,
+        "registered path was not reachable by NID");
 
   HleCallContext stat_context(memory);
   Check(stat_context.SetRegister(HleRegister::kRdi, 0x1100) &&
@@ -273,6 +280,32 @@ int main() {
   Check(Dispatch(registry, kajps5::hle::kKernelOpenName, missing_context) ==
             KernelResult(kajps5::hle::kKernelHleErrorNotFound),
         "missing open returned the wrong kernel result");
+  HleCallContext missing_reachability_context(memory);
+  Check(missing_reachability_context.SetRegister(HleRegister::kRdi, 0x1200),
+        "missing reachability setup failed");
+  Check(Dispatch(registry, kajps5::hle::kKernelCheckReachabilityName,
+                 missing_reachability_context) ==
+            KernelResult(kajps5::hle::kKernelHleErrorNotFound),
+        "missing reachability returned the wrong kernel result");
+  auto relative = Bytes("relative.bin");
+  relative.push_back(std::byte{0});
+  Check(memory.Initialize(0x1300, relative),
+        "relative reachability path setup failed");
+  HleCallContext relative_reachability_context(memory);
+  Check(relative_reachability_context.SetRegister(HleRegister::kRdi, 0x1300),
+        "relative reachability setup failed");
+  Check(Dispatch(registry, kajps5::hle::kKernelCheckReachabilityName,
+                 relative_reachability_context) ==
+            KernelResult(kajps5::hle::kKernelHleErrorInvalidArgument),
+        "relative reachability returned the wrong kernel result");
+
+  HleCallContext null_reachability_context(memory);
+  Check(null_reachability_context.SetRegister(HleRegister::kRdi, 0),
+        "null reachability setup failed");
+  Check(Dispatch(registry, kajps5::hle::kKernelCheckReachabilityName,
+                 null_reachability_context) ==
+            KernelResult(kajps5::hle::kKernelHleErrorInvalidArgument),
+        "null reachability returned the wrong kernel result");
 
   std::array<std::byte, kajps5::hle::kKernelStatSize> missing_sentinel{};
   missing_sentinel.fill(std::byte{0xa5});
@@ -312,6 +345,13 @@ int main() {
   Check(Dispatch(registry, kajps5::hle::kKernelOpenName, fault_context) ==
             KernelResult(kajps5::hle::kKernelHleErrorFault),
         "unmapped path returned the wrong kernel result");
+  HleCallContext fault_reachability_context(memory);
+  Check(fault_reachability_context.SetRegister(HleRegister::kRdi, 0x20000),
+        "faulting reachability setup failed");
+  Check(Dispatch(registry, kajps5::hle::kKernelCheckReachabilityName,
+                 fault_reachability_context) ==
+            KernelResult(kajps5::hle::kKernelHleErrorFault),
+        "faulting reachability returned the wrong kernel result");
 
   std::array<std::byte, kajps5::kernel::kMaximumGuestPathLength + 1>
       unterminated{};
@@ -416,7 +456,7 @@ int main() {
 
   Check(kajps5::hle::RegisterKernelFileExports(registry, runtime.files()) ==
             ExportRegistryStatus::kAlreadyExists &&
-            registry.size() == 14,
+            registry.size() == 16,
         "duplicate file export batch changed the registry");
   return failures == 0 ? 0 : 1;
 }

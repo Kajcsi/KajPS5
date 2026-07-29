@@ -27,6 +27,9 @@ inline constexpr auto kKernelStatName = "sceKernelStat";
 inline constexpr auto kKernelStatNid = "eV9wAD2riIA";
 inline constexpr auto kKernelFstatName = "sceKernelFstat";
 inline constexpr auto kKernelFstatNid = "kBwCPsYX-m4";
+inline constexpr auto kKernelCheckReachabilityName =
+    "sceKernelCheckReachability";
+inline constexpr auto kKernelCheckReachabilityNid = "uWyW3v98sU4";
 inline constexpr std::size_t kKernelStatSize = 120;
 
 namespace detail {
