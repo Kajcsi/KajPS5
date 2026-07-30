@@ -37,6 +37,7 @@ enum class ElfError {
   kDynamicStringTableNotFileBacked,
   kDynamicStringOffsetOutOfRange,
   kUnterminatedDynamicString,
+  kDecodedStringBudgetExceeded,
   kIncompleteRelaMetadata,
   kInvalidRelaEntrySize,
   kRelaTableNotFileBacked,

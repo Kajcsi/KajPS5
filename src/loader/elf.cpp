@@ -44,6 +44,9 @@ constexpr std::int64_t kDynamicTagJumpRelocation = 23;
 constexpr std::uint64_t kDynamicFormatRela = 7;
 constexpr std::size_t kRelaEntrySize = 24;
 constexpr std::size_t kSymbolEntrySize = 24;
+constexpr std::size_t kMinimumDecodedStringBudget = 64 * 1024;
+constexpr std::size_t kMaximumDecodedStringBudget = 64 * 1024 * 1024;
+constexpr std::size_t kDecodedStringBudgetScale = 4;
 
 std::uint8_t Read8(std::span<const std::byte> image,
                    std::size_t offset) noexcept {
@@ -142,26 +145,50 @@ std::optional<std::size_t> ResolveFileOffset(
   return std::nullopt;
 }
 
-std::optional<std::string> ReadDynamicString(
-    std::span<const std::byte> string_table, std::uint64_t offset) {
+enum class DynamicStringReadStatus {
+  kOk,
+  kUnterminated,
+  kBudgetExceeded,
+};
+
+std::size_t CalculateDecodedStringBudget(std::size_t image_size) noexcept {
+  const auto scaled =
+      image_size >= kMaximumDecodedStringBudget / kDecodedStringBudgetScale
+          ? kMaximumDecodedStringBudget
+          : image_size * kDecodedStringBudgetScale;
+  return std::clamp(scaled, kMinimumDecodedStringBudget,
+                    kMaximumDecodedStringBudget);
+}
+
+DynamicStringReadStatus ReadDynamicString(
+    std::span<const std::byte> string_table, std::uint64_t offset,
+    std::size_t& remaining_budget, std::string& value) {
   if (offset >= string_table.size()) {
-    return std::nullopt;
+    return DynamicStringReadStatus::kUnterminated;
   }
 
-  std::string value;
+  value.clear();
   for (auto index = static_cast<std::size_t>(offset);
        index < string_table.size(); ++index) {
     const auto byte = std::to_integer<unsigned char>(string_table[index]);
     if (byte == 0) {
-      return value;
+      if (value.size() >= remaining_budget) {
+        return DynamicStringReadStatus::kBudgetExceeded;
+      }
+      remaining_budget -= value.size() + 1;
+      return DynamicStringReadStatus::kOk;
+    }
+    if (remaining_budget == 0 || value.size() >= remaining_budget - 1) {
+      return DynamicStringReadStatus::kBudgetExceeded;
     }
     value.push_back(static_cast<char>(byte));
   }
-  return std::nullopt;
+  return DynamicStringReadStatus::kUnterminated;
 }
 
 ElfError ParseDynamicStrings(std::span<const std::byte> image,
-                             ElfMetadata& metadata) {
+                             ElfMetadata& metadata,
+                             std::size_t& decoded_string_budget) {
   const auto* string_table =
       FindDynamicEntry(metadata, kDynamicTagStringTable);
   const auto* string_table_size =
@@ -200,22 +227,32 @@ ElfError ParseDynamicStrings(std::span<const std::byte> image,
     if (entry.value >= bytes.size()) {
       return ElfError::kDynamicStringOffsetOutOfRange;
     }
-    auto value = ReadDynamicString(bytes, entry.value);
-    if (!value.has_value()) {
+    std::string value;
+    const auto status =
+        ReadDynamicString(bytes, entry.value, decoded_string_budget, value);
+    if (status == DynamicStringReadStatus::kBudgetExceeded) {
+      return ElfError::kDecodedStringBudgetExceeded;
+    }
+    if (status != DynamicStringReadStatus::kOk) {
       return ElfError::kUnterminatedDynamicString;
     }
-    metadata.dynamic_info.needed_libraries.push_back(std::move(*value));
+    metadata.dynamic_info.needed_libraries.push_back(std::move(value));
   }
 
   if (shared_object_name != nullptr) {
     if (shared_object_name->value >= bytes.size()) {
       return ElfError::kDynamicStringOffsetOutOfRange;
     }
-    auto value = ReadDynamicString(bytes, shared_object_name->value);
-    if (!value.has_value()) {
+    std::string value;
+    const auto status = ReadDynamicString(bytes, shared_object_name->value,
+                                          decoded_string_budget, value);
+    if (status == DynamicStringReadStatus::kBudgetExceeded) {
+      return ElfError::kDecodedStringBudgetExceeded;
+    }
+    if (status != DynamicStringReadStatus::kOk) {
       return ElfError::kUnterminatedDynamicString;
     }
-    metadata.dynamic_info.shared_object_name = std::move(*value);
+    metadata.dynamic_info.shared_object_name = std::move(value);
   }
   return ElfError::kNone;
 }
@@ -316,7 +353,8 @@ ElfError ParseDynamicRelocations(std::span<const std::byte> image,
 }
 
 ElfError ParseDynamicSymbols(std::span<const std::byte> image,
-                             ElfMetadata& metadata) {
+                             ElfMetadata& metadata,
+                             std::size_t& decoded_string_budget) {
   const auto* hash = FindDynamicEntry(metadata, kDynamicTagHash);
   if (hash == nullptr) {
     return ElfError::kNone;
@@ -379,11 +417,16 @@ ElfError ParseDynamicSymbols(std::span<const std::byte> image,
     if (symbol.name_offset >= strings.size()) {
       return ElfError::kSymbolNameOffsetOutOfRange;
     }
-    auto name = ReadDynamicString(strings, symbol.name_offset);
-    if (!name.has_value()) {
+    std::string name;
+    const auto status = ReadDynamicString(strings, symbol.name_offset,
+                                          decoded_string_budget, name);
+    if (status == DynamicStringReadStatus::kBudgetExceeded) {
+      return ElfError::kDecodedStringBudgetExceeded;
+    }
+    if (status != DynamicStringReadStatus::kOk) {
       return ElfError::kUnterminatedSymbolName;
     }
-    symbol.name = std::move(*name);
+    symbol.name = std::move(name);
     metadata.dynamic_info.symbols.push_back(std::move(symbol));
   }
   return ElfError::kNone;
@@ -469,8 +512,7 @@ ElfParseResult ParseElf64(std::span<const std::byte> image) {
       if (header.file_size > header.memory_size) {
         return ParseFailure(ElfError::kSegmentFileSizeExceedsMemorySize);
       }
-      if (header.file_size != 0 &&
-          !RangeWithin(static_cast<std::uint64_t>(image.size()),
+      if (!RangeWithin(static_cast<std::uint64_t>(image.size()),
                        header.offset, header.file_size)) {
         return ParseFailure(ElfError::kSegmentFileRangeOutOfRange);
       }
@@ -544,7 +586,9 @@ ElfParseResult ParseElf64(std::span<const std::byte> image) {
     if (!terminated) {
       return ParseFailure(ElfError::kUnterminatedDynamicTable);
     }
-    if (const auto error = ParseDynamicStrings(image, metadata);
+    auto decoded_string_budget = CalculateDecodedStringBudget(image.size());
+    if (const auto error =
+            ParseDynamicStrings(image, metadata, decoded_string_budget);
         error != ElfError::kNone) {
       return ParseFailure(error);
     }
@@ -552,7 +596,8 @@ ElfParseResult ParseElf64(std::span<const std::byte> image) {
         error != ElfError::kNone) {
       return ParseFailure(error);
     }
-    if (const auto error = ParseDynamicSymbols(image, metadata);
+    if (const auto error =
+            ParseDynamicSymbols(image, metadata, decoded_string_budget);
         error != ElfError::kNone) {
       return ParseFailure(error);
     }
@@ -703,6 +748,8 @@ std::string_view ElfErrorName(ElfError error) noexcept {
       return "dynamic-string-offset-out-of-range";
     case ElfError::kUnterminatedDynamicString:
       return "unterminated-dynamic-string";
+    case ElfError::kDecodedStringBudgetExceeded:
+      return "decoded-string-budget-exceeded";
     case ElfError::kIncompleteRelaMetadata:
       return "incomplete-rela-metadata";
     case ElfError::kInvalidRelaEntrySize:

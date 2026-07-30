@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -117,6 +118,97 @@ std::vector<std::byte> MakeDynamicElf() {
   return image;
 }
 
+std::vector<std::byte> MakeRepeatedNeededElf(std::size_t needed_count,
+                                             std::size_t string_length) {
+  const auto dynamic_entry_count = needed_count + 3;
+  const auto dynamic_size = dynamic_entry_count * kDynamicEntrySize;
+  const auto string_table_offset = kDynamicOffset + dynamic_size;
+  const auto string_table_size = string_length + 1;
+  std::vector<std::byte> image(string_table_offset + string_table_size);
+
+  image[0] = std::byte{0x7f};
+  image[1] = std::byte{'E'};
+  image[2] = std::byte{'L'};
+  image[3] = std::byte{'F'};
+  image[4] = std::byte{2};
+  image[5] = std::byte{1};
+  image[6] = std::byte{1};
+  Write16(image, 16, 3);
+  Write16(image, 18, 62);
+  Write32(image, 20, 1);
+  Write64(image, 32, kProgramHeaderOffset);
+  Write16(image, 52, 64);
+  Write16(image, 54, 56);
+  Write16(image, 56, 2);
+
+  Write32(image, kProgramHeaderOffset, 2);
+  Write32(image, kProgramHeaderOffset + 4, 4);
+  Write64(image, kProgramHeaderOffset + 8, kDynamicOffset);
+  Write64(image, kProgramHeaderOffset + 16, 0x2000);
+  Write64(image, kProgramHeaderOffset + 32, dynamic_size);
+  Write64(image, kProgramHeaderOffset + 40, dynamic_size);
+  Write64(image, kProgramHeaderOffset + 48, 8);
+
+  const auto load_header = kProgramHeaderOffset + 56;
+  Write32(image, load_header, 1);
+  Write32(image, load_header + 4, 4);
+  Write64(image, load_header + 8, string_table_offset);
+  Write64(image, load_header + 16, kStringTableAddress);
+  Write64(image, load_header + 32, string_table_size);
+  Write64(image, load_header + 40, string_table_size);
+  Write64(image, load_header + 48, 1);
+
+  WriteDynamic(image, 0, 5, kStringTableAddress);
+  WriteDynamic(image, 1, 10, string_table_size);
+  for (std::size_t index = 0; index < needed_count; ++index) {
+    WriteDynamic(image, index + 2, 1, 0);
+  }
+  WriteDynamic(image, dynamic_entry_count - 1, 0, 0);
+  WriteString(image, string_table_offset, std::string(string_length, 'A'));
+  return image;
+}
+
+std::vector<std::byte> MakeZeroLengthOffsetElf() {
+  std::vector<std::byte> image(0x140);
+  image[0] = std::byte{0x7f};
+  image[1] = std::byte{'E'};
+  image[2] = std::byte{'L'};
+  image[3] = std::byte{'F'};
+  image[4] = std::byte{2};
+  image[5] = std::byte{1};
+  image[6] = std::byte{1};
+  Write16(image, 16, 3);
+  Write16(image, 18, 62);
+  Write32(image, 20, 1);
+  Write64(image, 32, kProgramHeaderOffset);
+  Write16(image, 52, 64);
+  Write16(image, 54, 56);
+  Write16(image, 56, 2);
+
+  Write32(image, kProgramHeaderOffset, 2);
+  Write32(image, kProgramHeaderOffset + 4, 4);
+  Write64(image, kProgramHeaderOffset + 8, kDynamicOffset);
+  Write64(image, kProgramHeaderOffset + 16, 0x2000);
+  Write64(image, kProgramHeaderOffset + 32, 4 * kDynamicEntrySize);
+  Write64(image, kProgramHeaderOffset + 40, 4 * kDynamicEntrySize);
+  Write64(image, kProgramHeaderOffset + 48, 8);
+
+  const auto load_header = kProgramHeaderOffset + 56;
+  Write32(image, load_header, 1);
+  Write32(image, load_header + 4, 4);
+  Write64(image, load_header + 8, std::numeric_limits<std::uint64_t>::max());
+  Write64(image, load_header + 16, kStringTableAddress);
+  Write64(image, load_header + 32, 0);
+  Write64(image, load_header + 40, 0);
+  Write64(image, load_header + 48, 1);
+
+  WriteDynamic(image, 0, 5, kStringTableAddress);
+  WriteDynamic(image, 1, 10, 0);
+  WriteDynamic(image, 2, 1, 0);
+  WriteDynamic(image, 3, 0, 0);
+  return image;
+}
+
 void CheckError(std::vector<std::byte> image, kajps5::loader::ElfError expected,
                 const char* message) {
   const auto parsed = kajps5::loader::ParseElf64(image);
@@ -215,9 +307,31 @@ int main() {
              ElfError::kUnterminatedDynamicString,
              "unterminated string returned the wrong error");
 
+  const auto repeated_control = ParseElf64(MakeRepeatedNeededElf(2, 127));
+  Check(repeated_control &&
+            repeated_control.metadata.dynamic_info.needed_libraries.size() == 2,
+        "valid repeated library references were not preserved");
+
+  const auto amplified = ParseElf64(MakeRepeatedNeededElf(4096, 127));
+  Check(amplified.error == ElfError::kDecodedStringBudgetExceeded,
+        "amplified dynamic strings returned the wrong error");
+
+  CheckError(MakeZeroLengthOffsetElf(), ElfError::kSegmentFileRangeOutOfRange,
+             "zero-length segment offset returned the wrong error");
+
+  auto valid_empty_range = MakeZeroLengthOffsetElf();
+  Write64(valid_empty_range, kProgramHeaderOffset + 56 + 8,
+          valid_empty_range.size());
+  CheckError(std::move(valid_empty_range),
+             ElfError::kDynamicStringOffsetOutOfRange,
+             "valid end-of-image empty range was rejected");
+
   Check(kajps5::loader::ElfErrorName(ElfError::kUnterminatedDynamicTable) ==
             "unterminated-dynamic-table",
         "dynamic-table error name is unstable");
+  Check(kajps5::loader::ElfErrorName(ElfError::kDecodedStringBudgetExceeded) ==
+            "decoded-string-budget-exceeded",
+        "decoded-string-budget error name is unstable");
 
   return failures == 0 ? 0 : 1;
 }

@@ -132,6 +132,70 @@ std::vector<std::byte> MakeSymbolElf() {
   return image;
 }
 
+std::vector<std::byte> MakeRepeatedSymbolElf(std::size_t symbol_count,
+                                             std::size_t string_length) {
+  constexpr std::size_t kDynamicSize = 6 * kDynamicEntrySize;
+  constexpr std::size_t kDataStart = 0x180;
+  const auto string_size = string_length + 1;
+  const auto symbol_offset = kDataStart + string_size;
+  const auto symbol_size = symbol_count * kSymbolEntrySize;
+  const auto hash_offset = symbol_offset + symbol_size;
+  const auto hash_size = 8 + 4 * (1 + symbol_count);
+  const auto data_size = string_size + symbol_size + hash_size;
+  const auto symbol_address = kDataAddress + string_size;
+  const auto hash_address = symbol_address + symbol_size;
+  std::vector<std::byte> image(kDataStart + data_size);
+
+  image[0] = std::byte{0x7f};
+  image[1] = std::byte{'E'};
+  image[2] = std::byte{'L'};
+  image[3] = std::byte{'F'};
+  image[4] = std::byte{2};
+  image[5] = std::byte{1};
+  image[6] = std::byte{1};
+  Write16(image, 16, 3);
+  Write16(image, 18, 62);
+  Write32(image, 20, 1);
+  Write64(image, 32, kProgramHeaderOffset);
+  Write16(image, 52, 64);
+  Write16(image, 54, 56);
+  Write16(image, 56, 2);
+
+  Write32(image, kProgramHeaderOffset, 2);
+  Write32(image, kProgramHeaderOffset + 4, 4);
+  Write64(image, kProgramHeaderOffset + 8, kDynamicOffset);
+  Write64(image, kProgramHeaderOffset + 16, 0x2000);
+  Write64(image, kProgramHeaderOffset + 32, kDynamicSize);
+  Write64(image, kProgramHeaderOffset + 40, kDynamicSize);
+  Write64(image, kProgramHeaderOffset + 48, 8);
+
+  const auto data_header = kProgramHeaderOffset + 56;
+  Write32(image, data_header, 1);
+  Write32(image, data_header + 4, 4);
+  Write64(image, data_header + 8, kDataStart);
+  Write64(image, data_header + 16, kDataAddress);
+  Write64(image, data_header + 32, data_size);
+  Write64(image, data_header + 40, data_size);
+  Write64(image, data_header + 48, 8);
+
+  WriteDynamic(image, 0, 5, kDataAddress);
+  WriteDynamic(image, 1, 10, string_size);
+  WriteDynamic(image, 2, 4, hash_address);
+  WriteDynamic(image, 3, 6, symbol_address);
+  WriteDynamic(image, 4, 11, kSymbolEntrySize);
+  WriteDynamic(image, 5, 0, 0);
+
+  WriteString(image, kDataStart, std::string(string_length, 'S'));
+  for (std::size_t index = 0; index < symbol_count; ++index) {
+    const auto offset = symbol_offset + index * kSymbolEntrySize;
+    Write32(image, offset, 0);
+    image[offset + 4] = std::byte{0x12};
+  }
+  Write32(image, hash_offset, 1);
+  Write32(image, hash_offset + 4, static_cast<std::uint32_t>(symbol_count));
+  return image;
+}
+
 void CheckError(std::vector<std::byte> image, kajps5::loader::ElfError expected,
                 const char* message) {
   const auto parsed = kajps5::loader::ParseElf64(image);
@@ -188,6 +252,17 @@ int main() {
   WriteDynamic(unterminated_name, 1, 10, 8);
   CheckError(std::move(unterminated_name), ElfError::kUnterminatedSymbolName,
              "unterminated symbol name returned the wrong error");
+
+  const auto repeated_control = ParseElf64(MakeRepeatedSymbolElf(2, 127));
+  Check(
+      repeated_control &&
+          repeated_control.metadata.dynamic_info.symbols.size() == 2 &&
+          repeated_control.metadata.dynamic_info.symbols[0].name.size() == 127,
+      "valid repeated symbol names were not preserved");
+
+  const auto amplified = ParseElf64(MakeRepeatedSymbolElf(4096, 127));
+  Check(amplified.error == ElfError::kDecodedStringBudgetExceeded,
+        "amplified symbol names returned the wrong error");
 
   Check(kajps5::loader::ElfErrorName(ElfError::kInvalidSymbolEntrySize) ==
             "invalid-symbol-entry-size",
