@@ -181,7 +181,7 @@ int TraceExecutableFile(const char* path) {
       return 7;
     }
     const auto coverage = kajps5::hle::AnalyzeImportCoverage(
-        loaded.metadata, hle_exports);
+        loaded.metadata, hle_exports, &hle_data);
     std::cout << kajps5::hle::FormatImportCoverageTrace(coverage);
     if (!coverage) {
       std::cerr << "HLE coverage check failed: "

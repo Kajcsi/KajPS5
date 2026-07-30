@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "hle/export_registry.h"
+#include "hle/import_registry.h"
 #include "loader/elf.h"
 
 namespace kajps5::hle {
@@ -37,6 +38,7 @@ struct ImportCoverageEntry {
 struct ImportCoverageResult {
   ImportCoverageStatus status = ImportCoverageStatus::kOk;
   std::size_t available_export_count = 0;
+  std::size_t available_data_symbol_count = 0;
   std::size_t import_relocation_count = 0;
   std::size_t resolved_relocation_count = 0;
   std::size_t unresolved_relocation_count = 0;
@@ -51,7 +53,8 @@ struct ImportCoverageResult {
 };
 
 [[nodiscard]] ImportCoverageResult AnalyzeImportCoverage(
-    const loader::ElfMetadata& metadata, const ExportRegistry& registry);
+    const loader::ElfMetadata& metadata, const ExportRegistry& registry,
+    const ImportRegistry* data_registry = nullptr);
 [[nodiscard]] std::string FormatImportCoverageTrace(
     const ImportCoverageResult& result);
 [[nodiscard]] std::string_view ImportCoverageStatusName(

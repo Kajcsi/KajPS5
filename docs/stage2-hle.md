@@ -44,10 +44,11 @@ handler stay distinct from lookup failures.
 The executable trace also compares required import relocations with the
 built-in HLE registry. It reports both relocation references and unique
 imports, ignores permitted weak imports, and never calls a handler or writes a
-synthetic address. Repeated imports are grouped like SharpEmu's useful import
-inventory, while lookup preserves KytyPS5's library scope. Missing imports are
-ranked by relocation count. Names and scope use a bounded hex format, so guest
-text cannot add trace lines.
+synthetic address. Its totals include known guest-owned data symbols. Repeated
+imports are grouped like SharpEmu's useful import inventory, while lookup
+preserves KytyPS5's library scope. Missing imports are ranked by relocation
+count. Names and scope use a bounded hex format, so guest text cannot add trace
+lines.
 
 Known runtime data never points into host memory. Startup maps one checked
 16 KiB guest page for the stack guard, process name, and two libc need flags.

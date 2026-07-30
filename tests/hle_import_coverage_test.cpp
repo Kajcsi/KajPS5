@@ -10,6 +10,7 @@
 
 #include "hle/export_registry.h"
 #include "hle/import_coverage.h"
+#include "hle/import_registry.h"
 
 namespace {
 
@@ -52,6 +53,8 @@ int main() {
   using kajps5::hle::ExportRegistryStatus;
   using kajps5::hle::HleContextStatus;
   using kajps5::hle::ImportCoverageStatus;
+  using kajps5::hle::ImportRegistry;
+  using kajps5::hle::ImportRegistryStatus;
 
   std::size_t dispatch_count = 0;
   ExportRegistry registry;
@@ -65,6 +68,7 @@ int main() {
 
   const auto coverage = AnalyzeImportCoverage(MakeCoverageMetadata(), registry);
   Check(coverage && coverage.available_export_count == 1 &&
+            coverage.available_data_symbol_count == 0 &&
             coverage.import_relocation_count == 3 &&
             coverage.resolved_relocation_count == 2 &&
             coverage.unresolved_relocation_count == 1 &&
@@ -83,8 +87,25 @@ int main() {
             ExportRegistryStatus::kNotFound,
         "missing import coverage detail is incorrect");
 
+  ImportRegistry data_registry;
+  Check(data_registry.Register("libKernel", "missing", 0x2000) ==
+            ImportRegistryStatus::kOk,
+        "coverage data-symbol setup failed");
+  const auto combined = AnalyzeImportCoverage(
+      MakeCoverageMetadata(), registry, &data_registry);
+  Check(combined && combined.available_export_count == 1 &&
+            combined.available_data_symbol_count == 1 &&
+            combined.resolved_relocation_count == 3 &&
+            combined.unresolved_relocation_count == 0 &&
+            combined.resolved_unique_import_count == 2 &&
+            combined.unresolved_unique_import_count == 0 &&
+            dispatch_count == 0,
+        "data-symbol coverage was not combined without dispatch");
+
   const auto trace = kajps5::hle::FormatImportCoverageTrace(coverage);
   Check(trace.find("hle.coverage.status=ok\n") != std::string::npos &&
+            trace.find("hle.coverage.available_data_symbols=0\n") !=
+                std::string::npos &&
             trace.find("hle.coverage.resolved_relocations=2\n") !=
                 std::string::npos &&
             trace.find("hle.coverage.unresolved_unique_imports=1\n") !=

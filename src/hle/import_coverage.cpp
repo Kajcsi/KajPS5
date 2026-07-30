@@ -63,6 +63,7 @@ void WriteEncodedField(std::ostringstream& trace, std::string_view prefix,
 bool AnalyzeTable(const std::vector<loader::ElfRelaEntry>& relocations,
                   const loader::ElfMetadata& metadata,
                   const ExportRegistry& registry,
+                  const ImportRegistry* data_registry,
                   std::map<std::string, std::size_t>& import_indices,
                   ImportCoverageResult& result) {
   for (const auto& relocation : relocations) {
@@ -118,6 +119,23 @@ bool AnalyzeTable(const std::vector<loader::ElfRelaEntry>& relocations,
           requested_library = lookup.library;
         }
       }
+      if (!lookup && data_registry != nullptr) {
+        ImportLookupResult data_lookup;
+        if (reference.library != nullptr && reference.module != nullptr) {
+          data_lookup = data_registry->Resolve(
+              reference.nid,
+              std::span<const std::string>(&requested_library, 1));
+        } else {
+          data_lookup = data_registry->Resolve(
+              reference.nid, metadata.dynamic_info.needed_libraries);
+        }
+        if (data_lookup) {
+          lookup = {ExportRegistryStatus::kOk, data_lookup.library};
+          if (requested_library.empty()) {
+            requested_library = data_lookup.library;
+          }
+        }
+      }
     }
 
     const auto new_index = result.imports.size();
@@ -140,17 +158,20 @@ bool AnalyzeTable(const std::vector<loader::ElfRelaEntry>& relocations,
 }  // namespace
 
 ImportCoverageResult AnalyzeImportCoverage(
-    const loader::ElfMetadata& metadata, const ExportRegistry& registry) {
+    const loader::ElfMetadata& metadata, const ExportRegistry& registry,
+    const ImportRegistry* data_registry) {
   ImportCoverageResult result;
   result.available_export_count = registry.size();
+  result.available_data_symbol_count =
+      data_registry == nullptr ? 0 : data_registry->size();
   result.imports.reserve(metadata.dynamic_info.symbols.size());
   std::map<std::string, std::size_t> import_indices;
   if (!AnalyzeTable(metadata.dynamic_info.relocations, metadata, registry,
-                    import_indices, result)) {
+                    data_registry, import_indices, result)) {
     return result;
   }
   (void)AnalyzeTable(metadata.dynamic_info.plt_relocations, metadata, registry,
-                     import_indices, result);
+                     data_registry, import_indices, result);
   return result;
 }
 
@@ -176,6 +197,8 @@ std::string FormatImportCoverageTrace(const ImportCoverageResult& result) {
         << '\n'
         << "hle.coverage.available_exports="
         << result.available_export_count << '\n'
+        << "hle.coverage.available_data_symbols="
+        << result.available_data_symbol_count << '\n'
         << "hle.coverage.import_relocations="
         << result.import_relocation_count << '\n'
         << "hle.coverage.resolved_relocations="

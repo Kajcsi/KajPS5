@@ -129,7 +129,9 @@ The read-only HLE coverage inventory in `src/hle/import_coverage.cpp` and
 `tests/hle_import_coverage_test.cpp` follows KytyPS5's scoped symbol lookup and
 adapts SharpEmu's ordered unique-NID inventory and relocation descriptor
 counts from `src/SharpEmu.Core/Loader/SelfLoader.cs` at the pinned commits. It
-does not copy upstream source or create SharpEmu import stubs.
+also checks the guest-owned data registry without reading or dispatching the
+registered targets. It does not copy upstream source or create SharpEmu import
+stubs.
 
 The guest-owned HLE data page in `src/hle/data_symbols.cpp` and
 `tests/hle_data_symbols_test.cpp` uses the four object NIDs and library scopes
