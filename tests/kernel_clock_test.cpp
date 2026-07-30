@@ -44,6 +44,9 @@ int main() {
   source_view->monotonic_nanoseconds = 9'000'000'000;
   KernelRuntime runtime(std::move(source));
   auto &clock = runtime.clock();
+  Check(clock.RealtimeNanoseconds() == 1'725'000'123'456'789'000 &&
+            clock.MonotonicNanoseconds() == 9'000'000'000,
+        "raw clock readings did not use the injected source");
 
   constexpr std::array realtime_clock_ids = {
       kClockRealtime, kClockRealtimePrecise, kClockRealtimeFast};

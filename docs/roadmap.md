@@ -33,6 +33,7 @@
 - [x] Add typed kernel handles and deterministic event-flag polling.
 - [x] Add one deterministic scheduler for ready, running, blocked, and exited
       guest thread states.
+- [x] Add monotonic scheduler deadlines and deterministic timeout wakeups.
 - [x] Connect event-flag waits to the shared scheduler with wake and recheck
       tests.
 - [x] Add checked semaphore counts and scheduler wait integration.

@@ -21,16 +21,16 @@ namespace kajps5::kernel {
 class KernelRuntime final {
 public:
   KernelRuntime()
-      : scheduler_(handles_), pthreads_(scheduler_),
+      : scheduler_(handles_, clock_), pthreads_(scheduler_),
         event_queues_(handles_, scheduler_),
         event_flags_(handles_, scheduler_),
         semaphores_(handles_, scheduler_), files_(handles_) {}
   explicit KernelRuntime(std::unique_ptr<KernelClockSource> clock_source)
-      : scheduler_(handles_), pthreads_(scheduler_),
+      : clock_(std::move(clock_source)), scheduler_(handles_, clock_),
+        pthreads_(scheduler_),
         event_queues_(handles_, scheduler_),
         event_flags_(handles_, scheduler_),
-        semaphores_(handles_, scheduler_), files_(handles_),
-        clock_(std::move(clock_source)) {}
+        semaphores_(handles_, scheduler_), files_(handles_) {}
 
   KernelRuntime(const KernelRuntime &) = delete;
   KernelRuntime &operator=(const KernelRuntime &) = delete;
@@ -53,13 +53,13 @@ public:
 
 private:
   HandleTable handles_;
+  KernelClockService clock_;
   GuestScheduler scheduler_;
   PthreadService pthreads_;
   EventQueueService event_queues_;
   EventFlagService event_flags_;
   SemaphoreService semaphores_;
   FileService files_;
-  KernelClockService clock_;
   DirectMemoryService direct_memory_;
 };
 

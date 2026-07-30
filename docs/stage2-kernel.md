@@ -41,6 +41,9 @@ The tests capture the behavior below.
   Yield puts the current thread at the end of the ready queue.
 - Blocking records a wait key. Wake operations return matching threads to the
   ready queue in handle order, with an optional wake limit.
+- A timed block records a monotonic deadline. Scheduler selection wakes expired
+  waits in stable handle order and keeps timeout wakeups distinct from normal
+  signals. Tests control the clock and do not sleep.
 - Thread exit keeps the return value and wakes every joiner. Joining a live
   thread blocks; joining an exited thread returns its saved value. Self joins
   and stale handles leave scheduler state unchanged.

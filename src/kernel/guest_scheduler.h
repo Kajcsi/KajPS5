@@ -16,6 +16,7 @@
 #include <string_view>
 #include <vector>
 
+#include "kernel/clock.h"
 #include "kernel/handle_table.h"
 #include "kernel/status.h"
 
@@ -61,7 +62,7 @@ struct GuestThreadSnapshot {
 
 class GuestScheduler final {
 public:
-  explicit GuestScheduler(HandleTable &handles) noexcept;
+  GuestScheduler(HandleTable &handles, KernelClockService &clock) noexcept;
   ~GuestScheduler();
 
   GuestScheduler(const GuestScheduler &) = delete;
@@ -75,11 +76,15 @@ public:
   [[nodiscard]] std::optional<KernelHandle> SelectNext();
   [[nodiscard]] bool YieldCurrent();
   [[nodiscard]] bool BlockCurrent(std::string wait_key);
+  [[nodiscard]] bool BlockCurrentUntil(std::string wait_key,
+                                       std::uint64_t deadline_nanoseconds);
   [[nodiscard]] std::size_t WakeBlockedThreads(
       std::string_view wait_key,
       std::size_t maximum_count = std::numeric_limits<std::size_t>::max());
   [[nodiscard]] GuestThreadJoinResult JoinThread(KernelHandle handle);
   [[nodiscard]] bool ExitCurrent(std::uint64_t exit_value);
+  [[nodiscard]] bool CurrentThreadTimedOut(
+      std::string_view wait_key) const;
 
   [[nodiscard]] std::optional<KernelHandle> current_thread() const;
   [[nodiscard]] std::optional<GuestThreadSnapshot>
@@ -91,8 +96,13 @@ private:
 
   [[nodiscard]] static GuestThreadSnapshot
   MakeSnapshot(KernelHandle handle, const GuestThread &thread);
+  [[nodiscard]] bool BlockCurrentLocked(
+      std::string wait_key,
+      std::optional<std::uint64_t> deadline_nanoseconds);
+  void WakeExpiredThreadsLocked(std::uint64_t now_nanoseconds);
 
   HandleTable &handles_;
+  KernelClockService &clock_;
   mutable std::mutex mutex_;
   std::map<KernelHandle, std::shared_ptr<GuestThread>> threads_;
   std::deque<KernelHandle> ready_threads_;

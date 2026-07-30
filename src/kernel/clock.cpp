@@ -78,6 +78,14 @@ KernelTimeval KernelClockService::Gettimeofday() const {
   return {time.seconds, time.nanoseconds / 1'000};
 }
 
+std::int64_t KernelClockService::RealtimeNanoseconds() const {
+  return source_->RealtimeNanoseconds();
+}
+
+std::uint64_t KernelClockService::MonotonicNanoseconds() const {
+  return source_->MonotonicNanoseconds();
+}
+
 std::uint64_t KernelClockService::GetProcessTimeMicroseconds() const {
   return ProcessNanoseconds() / 1'000;
 }

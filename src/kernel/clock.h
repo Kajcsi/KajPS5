@@ -68,6 +68,8 @@ public:
 
   [[nodiscard]] KernelTimespecResult ClockGettime(std::int32_t clock_id) const;
   [[nodiscard]] KernelTimeval Gettimeofday() const;
+  [[nodiscard]] std::int64_t RealtimeNanoseconds() const;
+  [[nodiscard]] std::uint64_t MonotonicNanoseconds() const;
   [[nodiscard]] std::uint64_t GetProcessTimeMicroseconds() const;
   [[nodiscard]] std::uint64_t GetProcessTimeCounter() const;
   [[nodiscard]] constexpr std::uint64_t

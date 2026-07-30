@@ -3,6 +3,7 @@
 
 #include <cstdlib>
 #include <iostream>
+#include <memory>
 #include <string>
 
 #include "kernel/event_flag.h"
@@ -18,6 +19,19 @@ void Check(bool condition, const char *message) {
     std::exit(1);
   }
 }
+
+class SchedulerClockSource final : public kajps5::kernel::KernelClockSource {
+public:
+  [[nodiscard]] std::int64_t RealtimeNanoseconds() const override {
+    return 0;
+  }
+
+  [[nodiscard]] std::uint64_t MonotonicNanoseconds() const override {
+    return monotonic_nanoseconds;
+  }
+
+  std::uint64_t monotonic_nanoseconds = 0;
+};
 
 } // namespace
 
@@ -154,6 +168,33 @@ int main() {
             !scheduler.Snapshot(disposable.handle) &&
             runtime.handles().size() == 3,
         "ready thread rollback did not release its shared handle");
+
+  auto timeout_source = std::make_unique<SchedulerClockSource>();
+  auto *timeout_source_view = timeout_source.get();
+  timeout_source_view->monotonic_nanoseconds = 100;
+  KernelRuntime timeout_runtime(std::move(timeout_source));
+  auto &timeout_scheduler = timeout_runtime.scheduler();
+  const auto timed_thread = timeout_scheduler.CreateThread("timed", 0);
+  Check(timed_thread && timeout_scheduler.SelectNext() == timed_thread.handle &&
+            !timeout_scheduler.BlockCurrentUntil("", 200) &&
+            timeout_scheduler.BlockCurrentUntil("timer", 200),
+        "timed scheduler wait setup failed");
+  Check(!timeout_scheduler.SelectNext(),
+        "timed wait woke before its deadline");
+  timeout_source_view->monotonic_nanoseconds = 200;
+  Check(timeout_scheduler.SelectNext() == timed_thread.handle &&
+            timeout_scheduler.CurrentThreadTimedOut("timer") &&
+            !timeout_scheduler.CurrentThreadTimedOut("other"),
+        "timed wait did not wake at its deadline");
+  Check(timeout_scheduler.YieldCurrent() &&
+            timeout_scheduler.SelectNext() == timed_thread.handle &&
+            timeout_scheduler.CurrentThreadTimedOut("timer") &&
+            timeout_scheduler.BlockCurrentUntil("signal-before-timeout", 300),
+        "timed-out state was not stable until the next wait");
+  Check(timeout_scheduler.WakeBlockedThreads("signal-before-timeout", 1) == 1 &&
+            timeout_scheduler.SelectNext() == timed_thread.handle &&
+            !timeout_scheduler.CurrentThreadTimedOut("signal-before-timeout"),
+        "a normal wake was reported as a timeout");
 
   std::cout << "kernel scheduler tests passed\n";
   return 0;

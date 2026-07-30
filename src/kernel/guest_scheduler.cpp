@@ -32,10 +32,13 @@ struct GuestScheduler::GuestThread final : KernelObject {
   std::uint64_t exit_value = 0;
   std::uint64_t entry_address = 0;
   std::uint64_t argument = 0;
+  std::optional<std::uint64_t> wait_deadline_nanoseconds;
+  std::string timed_out_wait_key;
 };
 
-GuestScheduler::GuestScheduler(HandleTable &handles) noexcept
-    : handles_(handles) {}
+GuestScheduler::GuestScheduler(HandleTable &handles,
+                               KernelClockService &clock) noexcept
+    : handles_(handles), clock_(clock) {}
 
 GuestScheduler::~GuestScheduler() = default;
 
@@ -81,6 +84,7 @@ std::optional<KernelHandle> GuestScheduler::SelectNext() {
   if (current_thread_) {
     return std::nullopt;
   }
+  WakeExpiredThreadsLocked(clock_.MonotonicNanoseconds());
 
   while (!ready_threads_.empty()) {
     const auto handle = ready_threads_.front();
@@ -117,11 +121,22 @@ bool GuestScheduler::YieldCurrent() {
 }
 
 bool GuestScheduler::BlockCurrent(std::string wait_key) {
+  std::lock_guard lock(mutex_);
+  return BlockCurrentLocked(std::move(wait_key), std::nullopt);
+}
+
+bool GuestScheduler::BlockCurrentUntil(
+    std::string wait_key, std::uint64_t deadline_nanoseconds) {
+  std::lock_guard lock(mutex_);
+  return BlockCurrentLocked(std::move(wait_key), deadline_nanoseconds);
+}
+
+bool GuestScheduler::BlockCurrentLocked(
+    std::string wait_key,
+    std::optional<std::uint64_t> deadline_nanoseconds) {
   if (wait_key.empty()) {
     return false;
   }
-
-  std::lock_guard lock(mutex_);
   if (!current_thread_) {
     return false;
   }
@@ -134,6 +149,8 @@ bool GuestScheduler::BlockCurrent(std::string wait_key) {
 
   found->second->state = GuestThreadState::kBlocked;
   found->second->wait_key = std::move(wait_key);
+  found->second->wait_deadline_nanoseconds = deadline_nanoseconds;
+  found->second->timed_out_wait_key.clear();
   current_thread_.reset();
   return true;
 }
@@ -145,6 +162,7 @@ std::size_t GuestScheduler::WakeBlockedThreads(std::string_view wait_key,
   }
 
   std::lock_guard lock(mutex_);
+  WakeExpiredThreadsLocked(clock_.MonotonicNanoseconds());
   std::size_t wake_count = 0;
   for (auto &[handle, thread] : threads_) {
     if (wake_count == maximum_count) {
@@ -157,6 +175,8 @@ std::size_t GuestScheduler::WakeBlockedThreads(std::string_view wait_key,
 
     thread->state = GuestThreadState::kReady;
     thread->wait_key.clear();
+    thread->wait_deadline_nanoseconds.reset();
+    thread->timed_out_wait_key.clear();
     ready_threads_.push_back(handle);
     ++wake_count;
   }
@@ -186,6 +206,8 @@ GuestThreadJoinResult GuestScheduler::JoinThread(KernelHandle handle) {
   }
   caller->second->state = GuestThreadState::kBlocked;
   caller->second->wait_key = ThreadExitWaitKey(handle);
+  caller->second->wait_deadline_nanoseconds.reset();
+  caller->second->timed_out_wait_key.clear();
   current_thread_.reset();
   return {KernelStatus::kWouldBlock, 0};
 }
@@ -204,6 +226,8 @@ bool GuestScheduler::ExitCurrent(std::uint64_t exit_value) {
 
   found->second->state = GuestThreadState::kExited;
   found->second->wait_key.clear();
+  found->second->wait_deadline_nanoseconds.reset();
+  found->second->timed_out_wait_key.clear();
   found->second->exit_value = exit_value;
   const auto wait_key = ThreadExitWaitKey(*current_thread_);
   for (auto &[handle, thread] : threads_) {
@@ -213,10 +237,26 @@ bool GuestScheduler::ExitCurrent(std::uint64_t exit_value) {
     }
     thread->state = GuestThreadState::kReady;
     thread->wait_key.clear();
+    thread->wait_deadline_nanoseconds.reset();
+    thread->timed_out_wait_key.clear();
     ready_threads_.push_back(handle);
   }
   current_thread_.reset();
   return true;
+}
+
+bool GuestScheduler::CurrentThreadTimedOut(std::string_view wait_key) const {
+  if (wait_key.empty()) {
+    return false;
+  }
+  std::lock_guard lock(mutex_);
+  if (!current_thread_) {
+    return false;
+  }
+  const auto found = threads_.find(*current_thread_);
+  return found != threads_.end() &&
+         found->second->state == GuestThreadState::kRunning &&
+         found->second->timed_out_wait_key == wait_key;
 }
 
 std::optional<KernelHandle> GuestScheduler::current_thread() const {
@@ -242,6 +282,22 @@ std::vector<GuestThreadSnapshot> GuestScheduler::SnapshotAll() const {
     snapshots.push_back(MakeSnapshot(handle, *thread));
   }
   return snapshots;
+}
+
+void GuestScheduler::WakeExpiredThreadsLocked(
+    std::uint64_t now_nanoseconds) {
+  for (auto &[handle, thread] : threads_) {
+    if (thread->state != GuestThreadState::kBlocked ||
+        !thread->wait_deadline_nanoseconds ||
+        *thread->wait_deadline_nanoseconds > now_nanoseconds) {
+      continue;
+    }
+    thread->state = GuestThreadState::kReady;
+    thread->timed_out_wait_key = thread->wait_key;
+    thread->wait_key.clear();
+    thread->wait_deadline_nanoseconds.reset();
+    ready_threads_.push_back(handle);
+  }
 }
 
 GuestThreadSnapshot GuestScheduler::MakeSnapshot(KernelHandle handle,

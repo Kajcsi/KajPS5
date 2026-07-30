@@ -9,7 +9,9 @@ in `docs/stage1-loader.md`, `docs/stage2-kernel.md`, `docs/stage2-cpu.md`, and
 
 The clock, event-flag, file, semaphore, and scheduler behavior in `src/kernel/`
 and the matching `tests/kernel_*_test.cpp` files was based on behavior observed
-in KytyPS5 and SharpEmu. The SharpEmu reference files state:
+in KytyPS5 and SharpEmu. Scheduler deadlines use KytyPS5's monotonic deadline
+model and adapt SharpEmu's separate timeout completion state without adding a
+host timer thread. The SharpEmu reference files state:
 
 `Copyright (C) 2026 SharpEmu Emulator Project`
 
