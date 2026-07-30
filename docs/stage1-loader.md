@@ -48,15 +48,19 @@ file-backed tables, mapped targets, and malformed metadata. A rejected load
 does not change guest memory.
 
 The relocation pass validates its full plan before writing memory. It applies
-`R_X86_64_RELATIVE` and `R_X86_64_64`, skips no-operation entries, and counts
-unresolved `R_X86_64_GLOB_DAT` and `R_X86_64_JUMP_SLOT` imports. Absolute
-relocations use defined symbols, resolved imports, or zero for an unresolved
-weak symbol. `R_X86_64_DTPMOD64` writes a checked nonzero TLS module ID after
-TLS registration. Unsupported types, missing TLS identity, invalid relative
-symbols, target overflow, and unmapped writes fail. The HLE layer resolves
-symbol relocations by ordered needed-library name. Relocation traces encode
-untrusted names as hex, report a rejected numeric relocation type, and show at
-most 32 records with 128 input bytes per name.
+`R_X86_64_64`, `PC32`, `PLT32`, `GLOB_DAT`, `JUMP_SLOT`, `RELATIVE`, `32`,
+`32S`, `DTPMOD64`, `PC64`, `SIZE32`, `SIZE64`, and `RELATIVE64`. PC-relative
+writes use `S + A - P`; size writes use `Z + A`; and relative writes use
+`B + A`. Four-byte targets are checked as four-byte ranges. Signed and
+unsigned overflow stops the full pass before any write. Absolute relocations
+use defined symbols, resolved imports, or zero for an unresolved weak symbol.
+`R_X86_64_DTPMOD64` writes a checked nonzero TLS module ID after TLS
+registration. TLS-offset relocations remain unsupported until the runtime has
+a static TLS layout. Missing TLS identity, invalid relative symbols, target
+overflow, and unmapped writes also fail. The HLE layer resolves symbol
+relocations by ordered needed-library name. Relocation traces encode untrusted
+names as hex, report a rejected numeric relocation type, and show at most 32
+records with 128 input bytes per name.
 
 Protection and unmap changes are transactional. The full requested range must
 be mapped before its metadata changes. Protection can split and merge regions

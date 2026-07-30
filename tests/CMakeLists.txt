@@ -58,6 +58,12 @@ kajps5_deploy_msvc_asan_runtime(kajps5_elf_relocation_test)
 
 add_test(NAME kajps5_elf_relocation COMMAND kajps5_elf_relocation_test)
 
+add_executable(kajps5_relocation_kinds_test relocation_kinds_test.cpp)
+target_link_libraries(kajps5_relocation_kinds_test PRIVATE kajps5_core)
+kajps5_deploy_msvc_asan_runtime(kajps5_relocation_kinds_test)
+
+add_test(NAME kajps5_relocation_kinds COMMAND kajps5_relocation_kinds_test)
+
 add_executable(kajps5_elf_symbol_test elf_symbol_test.cpp)
 target_link_libraries(kajps5_elf_symbol_test PRIVATE kajps5_core)
 kajps5_deploy_msvc_asan_runtime(kajps5_elf_symbol_test)

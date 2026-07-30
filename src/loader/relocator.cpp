@@ -17,16 +17,25 @@ namespace {
 
 constexpr std::uint32_t kRelocationNone = 0;
 constexpr std::uint32_t kRelocationAbsolute64 = 1;
+constexpr std::uint32_t kRelocationPc32 = 2;
+constexpr std::uint32_t kRelocationPlt32 = 4;
 constexpr std::uint32_t kRelocationGlobDat = 6;
 constexpr std::uint32_t kRelocationJumpSlot = 7;
 constexpr std::uint32_t kRelocationRelative = 8;
+constexpr std::uint32_t kRelocationUnsigned32 = 10;
+constexpr std::uint32_t kRelocationSigned32 = 11;
 constexpr std::uint32_t kRelocationTlsModuleId = 16;
+constexpr std::uint32_t kRelocationPc64 = 24;
+constexpr std::uint32_t kRelocationSize32 = 32;
+constexpr std::uint32_t kRelocationSize64 = 33;
+constexpr std::uint32_t kRelocationRelative64 = 38;
 constexpr std::uint8_t kSymbolBindingWeak = 2;
 constexpr std::uint16_t kUndefinedSectionIndex = 0;
 
 struct PlannedRelocation {
   std::uint64_t address = 0;
   std::array<std::byte, sizeof(std::uint64_t)> value{};
+  std::size_t size = sizeof(std::uint64_t);
 };
 
 struct ImportReference {
@@ -103,6 +112,49 @@ ImportReference ParseImportReference(const ElfMetadata& metadata,
   return {nid, library, library != nullptr && module != nullptr};
 }
 
+constexpr bool IsSymbolRelocation(std::uint32_t type) noexcept {
+  switch (type) {
+    case kRelocationAbsolute64:
+    case kRelocationPc32:
+    case kRelocationPlt32:
+    case kRelocationGlobDat:
+    case kRelocationJumpSlot:
+    case kRelocationUnsigned32:
+    case kRelocationSigned32:
+    case kRelocationPc64:
+    case kRelocationSize32:
+    case kRelocationSize64: return true;
+    default: return false;
+  }
+}
+
+constexpr bool IsPcRelativeRelocation(std::uint32_t type) noexcept {
+  return type == kRelocationPc32 || type == kRelocationPlt32 ||
+         type == kRelocationPc64;
+}
+
+constexpr bool IsSizeRelocation(std::uint32_t type) noexcept {
+  return type == kRelocationSize32 || type == kRelocationSize64;
+}
+
+constexpr std::size_t RelocationWriteSize(std::uint32_t type) noexcept {
+  switch (type) {
+    case kRelocationPc32:
+    case kRelocationPlt32:
+    case kRelocationUnsigned32:
+    case kRelocationSigned32:
+    case kRelocationSize32: return sizeof(std::uint32_t);
+    default: return sizeof(std::uint64_t);
+  }
+}
+
+void EncodeLittleEndian(std::uint64_t value, PlannedRelocation& relocation) {
+  for (std::size_t index = 0; index < relocation.size; ++index) {
+    relocation.value[index] =
+        static_cast<std::byte>((value >> (index * 8U)) & 0xffU);
+  }
+}
+
 RelocationStatus PlanTable(const std::vector<ElfRelaEntry>& entries,
                            const ElfMetadata& metadata,
                            const memory::GuestMemory& memory,
@@ -118,10 +170,18 @@ RelocationStatus PlanTable(const std::vector<ElfRelaEntry>& entries,
     switch (type) {
       case kRelocationNone: continue;
       case kRelocationAbsolute64:
+      case kRelocationPc32:
+      case kRelocationPlt32:
       case kRelocationGlobDat:
-      case kRelocationJumpSlot: break;
+      case kRelocationJumpSlot:
+      case kRelocationUnsigned32:
+      case kRelocationSigned32:
+      case kRelocationPc64:
+      case kRelocationSize32:
+      case kRelocationSize64: break;
       case kRelocationTlsModuleId: break;
       case kRelocationRelative:
+      case kRelocationRelative64:
         if (entry.symbol() != 0) {
           return RelocationStatus::kInvalidRelativeSymbol;
         }
@@ -136,7 +196,8 @@ RelocationStatus PlanTable(const std::vector<ElfRelaEntry>& entries,
       return RelocationStatus::kTargetAddressOverflow;
     }
     const auto target = load_bias + entry.offset;
-    if (!memory.IsMapped(target, sizeof(std::uint64_t))) {
+    const auto write_size = RelocationWriteSize(type);
+    if (!memory.IsMapped(target, write_size)) {
       return RelocationStatus::kTargetNotMapped;
     }
 
@@ -146,52 +207,48 @@ RelocationStatus PlanTable(const std::vector<ElfRelaEntry>& entries,
       }
       PlannedRelocation relocation;
       relocation.address = target;
-      for (std::size_t index = 0; index < relocation.value.size(); ++index) {
-        relocation.value[index] = static_cast<std::byte>(
-            (tls_module_id >> (index * 8U)) & 0xffU);
-      }
+      EncodeLittleEndian(tls_module_id, relocation);
       planned.push_back(relocation);
       continue;
     }
 
-    if (type == kRelocationAbsolute64 || type == kRelocationGlobDat ||
-        type == kRelocationJumpSlot) {
-      if (resolver == nullptr) {
-        UnresolvedImport unresolved;
-        unresolved.symbol_index = entry.symbol();
-        unresolved.relocation_type = type;
-        unresolved.target_address = target;
-        if (entry.symbol() < metadata.dynamic_info.symbols.size()) {
-          unresolved.symbol =
-              metadata.dynamic_info.symbols[entry.symbol()].name;
+    if (IsSymbolRelocation(type)) {
+      const ElfSymbol* symbol = nullptr;
+      if (entry.symbol() != 0) {
+        if (entry.symbol() >= metadata.dynamic_info.symbols.size()) {
+          return RelocationStatus::kInvalidSymbolIndex;
         }
-        unresolved_imports.push_back(std::move(unresolved));
-        continue;
+        symbol = &metadata.dynamic_info.symbols[entry.symbol()];
       }
-      if (entry.symbol() >= metadata.dynamic_info.symbols.size()) {
-        return RelocationStatus::kInvalidSymbolIndex;
-      }
-      const auto& symbol = metadata.dynamic_info.symbols[entry.symbol()];
+
       std::optional<std::uint64_t> resolved;
       bool resolved_import = false;
       if (entry.symbol() == 0) {
         resolved = 0;
-      } else if (symbol.section_index != kUndefinedSectionIndex) {
-        if (symbol.value >
-            std::numeric_limits<std::uint64_t>::max() - load_bias) {
-          return RelocationStatus::kInvalidResolvedAddress;
+      } else if (symbol->section_index != kUndefinedSectionIndex) {
+        if (IsSizeRelocation(type)) {
+          resolved = symbol->size;
+        } else {
+          if (symbol->value >
+              std::numeric_limits<std::uint64_t>::max() - load_bias) {
+            return RelocationStatus::kInvalidResolvedAddress;
+          }
+          resolved = load_bias + symbol->value;
         }
-        resolved = load_bias + symbol.value;
-      } else if (symbol.binding() == kSymbolBindingWeak) {
-        resolved = 0;
+      } else if (symbol->binding() == kSymbolBindingWeak) {
+        resolved = IsSizeRelocation(type) ? symbol->size : 0;
+      } else if (resolver == nullptr) {
+        unresolved_imports.push_back(
+            {entry.symbol(), type, target, symbol->name});
+        continue;
       } else {
-        const auto reference = ParseImportReference(metadata, symbol.name);
+        const auto reference = ParseImportReference(metadata, symbol->name);
         if (reference.nid.empty()) {
           return RelocationStatus::kEmptyImportSymbol;
         }
         if (!reference.valid) {
           unresolved_imports.push_back(
-              {entry.symbol(), type, target, symbol.name});
+              {entry.symbol(), type, target, symbol->name});
           continue;
         }
         if (reference.library != nullptr) {
@@ -204,24 +261,45 @@ RelocationStatus PlanTable(const std::vector<ElfRelaEntry>& entries,
         }
         if (!resolved.has_value()) {
           unresolved_imports.push_back(
-              {entry.symbol(), type, target, symbol.name});
+              {entry.symbol(), type, target, symbol->name});
           continue;
         }
         if (*resolved == 0) {
           return RelocationStatus::kInvalidResolvedAddress;
         }
         resolved_import = true;
+        if (IsSizeRelocation(type)) {
+          resolved = symbol->size;
+        }
       }
+      if (!resolved.has_value()) {
+        return RelocationStatus::kInvalidSymbolIndex;
+      }
+
       PlannedRelocation relocation;
       relocation.address = target;
-      const auto addend = type == kRelocationAbsolute64
-                              ? std::bit_cast<std::uint64_t>(entry.addend)
-                              : 0;
-      const auto value = *resolved + addend;
-      for (std::size_t index = 0; index < relocation.value.size(); ++index) {
-        relocation.value[index] =
-            static_cast<std::byte>((value >> (index * 8U)) & 0xffU);
+      relocation.size = write_size;
+      const auto addend =
+          type == kRelocationGlobDat || type == kRelocationJumpSlot
+              ? 0
+              : std::bit_cast<std::uint64_t>(entry.addend);
+      auto value = *resolved + addend;
+      if (IsPcRelativeRelocation(type)) {
+        value -= target;
       }
+      if (type == kRelocationPc32 || type == kRelocationPlt32 ||
+          type == kRelocationSigned32) {
+        const auto signed_value = std::bit_cast<std::int64_t>(value);
+        if (signed_value < std::numeric_limits<std::int32_t>::min() ||
+            signed_value > std::numeric_limits<std::int32_t>::max()) {
+          return RelocationStatus::kRelocationValueOverflow;
+        }
+      } else if ((type == kRelocationUnsigned32 ||
+                  type == kRelocationSize32) &&
+                 value > std::numeric_limits<std::uint32_t>::max()) {
+        return RelocationStatus::kRelocationValueOverflow;
+      }
+      EncodeLittleEndian(value, relocation);
       planned.push_back(relocation);
       if (resolved_import) {
         ++resolved_import_count;
@@ -233,10 +311,7 @@ RelocationStatus PlanTable(const std::vector<ElfRelaEntry>& entries,
     relocation.address = target;
     const auto value =
         load_bias + std::bit_cast<std::uint64_t>(entry.addend);
-    for (std::size_t index = 0; index < relocation.value.size(); ++index) {
-      relocation.value[index] =
-          static_cast<std::byte>((value >> (index * 8U)) & 0xffU);
-    }
+    EncodeLittleEndian(value, relocation);
     planned.push_back(relocation);
   }
   return RelocationStatus::kOk;
@@ -274,7 +349,9 @@ RelocationResult ApplyRelocationsInternal(const ElfMetadata& metadata,
 
   std::size_t applied_count = 0;
   for (const auto& relocation : planned) {
-    if (!memory.Initialize(relocation.address, relocation.value)) {
+    if (!memory.Initialize(
+            relocation.address,
+            std::span(relocation.value).first(relocation.size))) {
       return {RelocationStatus::kWriteFailed, applied_count,
               unresolved_imports.size(), resolved_import_count,
               std::move(unresolved_imports)};
@@ -323,6 +400,8 @@ std::string_view RelocationStatusName(RelocationStatus status) noexcept {
       return "invalid-resolved-address";
     case RelocationStatus::kMissingTlsModuleId:
       return "missing-tls-module-id";
+    case RelocationStatus::kRelocationValueOverflow:
+      return "relocation-value-overflow";
   }
   return "unknown";
 }

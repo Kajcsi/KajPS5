@@ -28,6 +28,7 @@ enum class RelocationStatus {
   kEmptyImportSymbol,
   kInvalidResolvedAddress,
   kMissingTlsModuleId,
+  kRelocationValueOverflow,
 };
 
 struct UnresolvedImport {

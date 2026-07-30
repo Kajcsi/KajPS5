@@ -174,6 +174,8 @@ int main() {
         "relative relocation accepted a symbol");
 
   auto unresolved_import = loaded.metadata;
+  unresolved_import.dynamic_info.symbols.resize(2);
+  unresolved_import.dynamic_info.symbols[1].name = "missing";
   unresolved_import.dynamic_info.relocations.push_back(
       {kTargetAddress, (std::uint64_t{1} << 32U) | 6U, 0});
   const auto unresolved =
@@ -190,12 +192,12 @@ int main() {
   Check(static_cast<bool>(transactional_load),
         "transactional relocation ELF did not load");
   auto unsupported = transactional_load.metadata;
-  unsupported.dynamic_info.relocations.push_back({kTargetAddress, 2, 0});
+  unsupported.dynamic_info.relocations.push_back({kTargetAddress, 5, 0});
   const auto unsupported_result = kajps5::loader::ApplyRelativeRelocations(
       unsupported, transactional_memory);
   Check(unsupported_result.status ==
                 kajps5::loader::RelocationStatus::kUnsupportedRelocation &&
-            unsupported_result.unsupported_relocation_type == 2,
+            unsupported_result.unsupported_relocation_type == 5,
         "unsupported relocation was accepted");
   std::array<std::byte, 8> unchanged{};
   Check(transactional_memory.Read(kTargetAddress, unchanged) &&

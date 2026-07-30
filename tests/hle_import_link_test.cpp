@@ -118,7 +118,7 @@ int main() {
         "invalid import symbol index was accepted");
 
   auto unsupported = metadata;
-  unsupported.dynamic_info.plt_relocations.push_back({0x1000, 2, 0});
+  unsupported.dynamic_info.plt_relocations.push_back({0x1000, 5, 0});
   GuestMemory transactional_memory(0x1000, 16);
   Check(ApplyRelocations(unsupported, transactional_memory, registry).status ==
             RelocationStatus::kUnsupportedRelocation,
@@ -161,6 +161,49 @@ int main() {
             absolute_memory.Read(0x4000, absolute_value) &&
             absolute_value == expected_absolute_value,
         "absolute import relocation did not apply its addend");
+
+  ImportRegistry near_registry;
+  Check(near_registry.Register("libkernel", "open", 0x4800) ==
+            ImportRegistryStatus::kOk,
+        "near import registration failed");
+  auto pc_import = MakeImportMetadata();
+  pc_import.dynamic_info.relocations = {
+      {0x4000, (std::uint64_t{1} << 32U) | 2U, -4}};
+  pc_import.dynamic_info.plt_relocations.clear();
+  GuestMemory pc_memory(0x4000, 4);
+  const auto pc_linked =
+      ApplyRelocations(pc_import, pc_memory, near_registry);
+  std::array<std::byte, 4> pc_value{};
+  const std::array expected_pc_value = {
+      std::byte{0xfc}, std::byte{0x07}, std::byte{0}, std::byte{0}};
+  Check(pc_linked && pc_linked.applied_count == 1 &&
+            pc_linked.resolved_import_count == 1 &&
+            pc_memory.Read(0x4000, pc_value) &&
+            pc_value == expected_pc_value,
+        "PC32 import relocation did not apply S + A - P");
+
+  auto size_import = MakeImportMetadata();
+  size_import.dynamic_info.symbols[1].size = 0x28;
+  size_import.dynamic_info.relocations = {
+      {0x5000, (std::uint64_t{1} << 32U) | 32U, 2}};
+  size_import.dynamic_info.plt_relocations.clear();
+  GuestMemory size_memory(0x5000, 4);
+  const auto size_linked =
+      ApplyRelocations(size_import, size_memory, near_registry);
+  std::array<std::byte, 4> size_value{};
+  const std::array expected_size_value = {
+      std::byte{0x2a}, std::byte{0}, std::byte{0}, std::byte{0}};
+  Check(size_linked && size_linked.applied_count == 1 &&
+            size_linked.resolved_import_count == 1 &&
+            size_memory.Read(0x5000, size_value) &&
+            size_value == expected_size_value,
+        "SIZE32 import relocation did not use the symbol size");
+  GuestMemory unresolved_size_memory(0x5000, 4);
+  const auto unresolved_size = kajps5::loader::ApplyRelativeRelocations(
+      size_import, unresolved_size_memory);
+  Check(unresolved_size && unresolved_size.applied_count == 0 &&
+            unresolved_size.unresolved_import_count == 1,
+        "unresolved SIZE32 import was not preserved");
 
   kajps5::loader::ElfMetadata defined_symbol;
   defined_symbol.dynamic_info.symbols.resize(2);

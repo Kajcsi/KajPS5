@@ -23,7 +23,8 @@ in `src/loader/elf.cpp`, `src/loader/relocator.cpp`,
 `src/loader/launch_metadata.cpp`, `src/loader/lifecycle_plan.cpp`,
 `src/loader/module_plan.cpp`, `tests/elf_dynamic_test.cpp`,
 `tests/elf_sce_dynamic_test.cpp`, `tests/elf_relocation_test.cpp`,
-`tests/elf_symbol_test.cpp`, `tests/launch_metadata_test.cpp`,
+`tests/relocation_kinds_test.cpp`, `tests/elf_symbol_test.cpp`,
+`tests/launch_metadata_test.cpp`,
 `tests/lifecycle_plan_test.cpp`,
 `tests/module_plan_test.cpp`, and `tests/self_loader_test.cpp` was based on
 behavior observed in the pinned KytyPS5 and SharpEmu loader files. The PS5
@@ -39,6 +40,9 @@ initializer discovery, and handling of already-dumped payloads. Dynamic
 startup and shutdown tags and arrays follow KytyPS5's runtime-linker model.
 The lifecycle planner combines KytyPS5's direct module hooks with SharpEmu's
 checked array discovery and duplicate suppression.
+The relocation planner adapts SharpEmu's checked formulas and write widths for
+PC-relative, 32-bit, symbol-size, and `RELATIVE64` relocations. A narrow value
+must fit its signed or unsigned target before the planner writes guest memory.
 
 The reviewed sources are KytyPS5 `src/loader/elf.h` and
 `src/loader/runtimeLinker.cpp` at commit

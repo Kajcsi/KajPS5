@@ -18,6 +18,7 @@
 - [x] Resolve checked standard ELF dynamic strings.
 - [x] Validate standard x86-64 `RELA` metadata and targets.
 - [x] Apply checked relative relocations without resolving imports.
+- [x] Apply checked PC-relative, narrow, size, and `RELATIVE64` relocations.
 - [x] Validate standard dynamic symbol names through `DT_HASH`.
 - [x] Parse checked PS5 dynlib-data tables and module and library identities.
 - [x] Parse checked SELF/FSELF containers and resolve their ELF payloads.
