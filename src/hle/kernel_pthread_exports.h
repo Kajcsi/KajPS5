@@ -66,6 +66,55 @@ inline constexpr auto kKernelPthreadAttrGetstacksizeName =
     "scePthreadAttrGetstacksize";
 inline constexpr auto kKernelPthreadAttrGetstacksizeNid = "-fA+7ZlGDQs";
 
+inline constexpr auto kPosixPthreadMutexattrInitName =
+    "pthread_mutexattr_init";
+inline constexpr auto kPosixPthreadMutexattrInitNid = "dQHWEsJtoE4";
+inline constexpr auto kKernelPthreadMutexattrInitName =
+    "scePthreadMutexattrInit";
+inline constexpr auto kKernelPthreadMutexattrInitNid = "F8bUHwAG284";
+inline constexpr auto kPosixPthreadMutexattrDestroyName =
+    "pthread_mutexattr_destroy";
+inline constexpr auto kPosixPthreadMutexattrDestroyNid = "HF7lK46xzjY";
+inline constexpr auto kKernelPthreadMutexattrDestroyName =
+    "scePthreadMutexattrDestroy";
+inline constexpr auto kKernelPthreadMutexattrDestroyNid = "smWEktiyyG0";
+inline constexpr auto kPosixPthreadMutexattrSettypeName =
+    "pthread_mutexattr_settype";
+inline constexpr auto kPosixPthreadMutexattrSettypeNid = "mDmgMOGVUqg";
+inline constexpr auto kKernelPthreadMutexattrSettypeName =
+    "scePthreadMutexattrSettype";
+inline constexpr auto kKernelPthreadMutexattrSettypeNid = "iMp8QpE+XO4";
+inline constexpr auto kPosixPthreadMutexattrSetprotocolName =
+    "pthread_mutexattr_setprotocol";
+inline constexpr auto kPosixPthreadMutexattrSetprotocolNid = "5txKfcMUAok";
+inline constexpr auto kKernelPthreadMutexattrSetprotocolName =
+    "scePthreadMutexattrSetprotocol";
+inline constexpr auto kKernelPthreadMutexattrSetprotocolNid = "1FGvU0i9saQ";
+
+inline constexpr auto kPosixPthreadMutexInitName = "pthread_mutex_init";
+inline constexpr auto kPosixPthreadMutexInitNid = "ttHNfU+qDBU";
+inline constexpr auto kKernelPthreadMutexInitName = "scePthreadMutexInit";
+inline constexpr auto kKernelPthreadMutexInitNid = "cmo1RIYva9o";
+inline constexpr auto kPosixPthreadMutexDestroyName = "pthread_mutex_destroy";
+inline constexpr auto kPosixPthreadMutexDestroyNid = "ltCfaGr2JGE";
+inline constexpr auto kKernelPthreadMutexDestroyName =
+    "scePthreadMutexDestroy";
+inline constexpr auto kKernelPthreadMutexDestroyNid = "2Of0f+3mhhE";
+inline constexpr auto kPosixPthreadMutexLockName = "pthread_mutex_lock";
+inline constexpr auto kPosixPthreadMutexLockNid = "7H0iTOciTLo";
+inline constexpr auto kKernelPthreadMutexLockName = "scePthreadMutexLock";
+inline constexpr auto kKernelPthreadMutexLockNid = "9UK1vLZQft4";
+inline constexpr auto kPosixPthreadMutexTrylockName =
+    "pthread_mutex_trylock";
+inline constexpr auto kPosixPthreadMutexTrylockNid = "K-jXhbt2gn4";
+inline constexpr auto kKernelPthreadMutexTrylockName =
+    "scePthreadMutexTrylock";
+inline constexpr auto kKernelPthreadMutexTrylockNid = "upoVrzMHFeE";
+inline constexpr auto kPosixPthreadMutexUnlockName = "pthread_mutex_unlock";
+inline constexpr auto kPosixPthreadMutexUnlockNid = "2Z+PpY6CaJg";
+inline constexpr auto kKernelPthreadMutexUnlockName = "scePthreadMutexUnlock";
+inline constexpr auto kKernelPthreadMutexUnlockNid = "tn3VlD0hG60";
+
 inline constexpr auto kPosixPthreadKeyCreateName = "pthread_key_create";
 inline constexpr auto kPosixPthreadKeyCreateNid = "mqULNdimTn0";
 inline constexpr auto kKernelPthreadKeyCreateName = "scePthreadKeyCreate";

@@ -49,6 +49,8 @@
       thread identity and yielding.
 - [x] Preserve pthread entry points and arguments across checked create, join,
       and exit calls.
+- [x] Add checked pthread mutex attributes, static initialization, recursive
+      ownership, FIFO handoff, and exit cleanup.
 - [x] Add deterministic library-scoped HLE import lookup.
 - [x] Connect checked import lookup to standard relocation targets.
 - [x] Resolve scoped PS5 NID symbols through parsed module and library IDs.

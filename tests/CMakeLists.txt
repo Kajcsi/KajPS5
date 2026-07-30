@@ -211,6 +211,12 @@ kajps5_deploy_msvc_asan_runtime(kajps5_kernel_scheduler_test)
 
 add_test(NAME kajps5_kernel_scheduler COMMAND kajps5_kernel_scheduler_test)
 
+add_executable(kajps5_kernel_pthread_test kernel_pthread_test.cpp)
+target_link_libraries(kajps5_kernel_pthread_test PRIVATE kajps5_core)
+kajps5_deploy_msvc_asan_runtime(kajps5_kernel_pthread_test)
+
+add_test(NAME kajps5_kernel_pthread COMMAND kajps5_kernel_pthread_test)
+
 add_executable(kajps5_kernel_event_wait_test kernel_event_wait_test.cpp)
 target_link_libraries(kajps5_kernel_event_wait_test PRIVATE kajps5_core)
 kajps5_deploy_msvc_asan_runtime(kajps5_kernel_event_wait_test)

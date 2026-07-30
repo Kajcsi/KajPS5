@@ -4,6 +4,7 @@
 
 #include "hle/kernel_pthread_exports.h"
 
+#include <bit>
 #include <cstdint>
 #include <utility>
 #include <vector>
@@ -308,6 +309,222 @@ HleContextStatus PthreadAttrGetstacksize(HleCallContext& context,
   return HleContextStatus::kOk;
 }
 
+std::int32_t SignedArgument(const HleCallContext& context,
+                            std::size_t index) noexcept {
+  return std::bit_cast<std::int32_t>(
+      static_cast<std::uint32_t>(context.Argument(index).value_or(0)));
+}
+
+bool ReadOpaqueHandle(HleCallContext& context, std::uint64_t address,
+                      bool posix_errors, std::uint64_t& handle) {
+  if (address == 0) {
+    SetSignedResult(context, InvalidArgument(posix_errors));
+    return false;
+  }
+  if (context.ReadUInt64(address, handle) != HleContextStatus::kOk) {
+    SetSignedResult(context, MemoryFault(posix_errors));
+    return false;
+  }
+  return true;
+}
+
+HleContextStatus PthreadMutexattrInit(HleCallContext& context,
+                                      kernel::PthreadService& pthreads,
+                                      bool posix_errors) {
+  const auto output_address = context.Argument(0).value_or(0);
+  if (output_address == 0) {
+    SetSignedResult(context, InvalidArgument(posix_errors));
+    return HleContextStatus::kOk;
+  }
+  if (!context.CanWriteMemory(output_address, sizeof(std::uint64_t))) {
+    SetSignedResult(context, MemoryFault(posix_errors));
+    return HleContextStatus::kOk;
+  }
+  const auto created = pthreads.CreateMutexAttribute();
+  if (!created) {
+    SetSignedResult(context, posix_errors ? kPosixErrorNoMemory
+                                          : kKernelHleErrorNoMemory);
+    return HleContextStatus::kOk;
+  }
+  if (context.WriteUInt64(output_address, created.handle) !=
+      HleContextStatus::kOk) {
+    (void)pthreads.DestroyMutexAttribute(created.handle);
+    SetSignedResult(context, MemoryFault(posix_errors));
+    return HleContextStatus::kOk;
+  }
+  context.SetReturn(0);
+  return HleContextStatus::kOk;
+}
+
+HleContextStatus PthreadMutexattrDestroy(HleCallContext& context,
+                                         kernel::PthreadService& pthreads,
+                                         bool posix_errors) {
+  const auto address = context.Argument(0).value_or(0);
+  if (address == 0) {
+    SetSignedResult(context, InvalidArgument(posix_errors));
+    return HleContextStatus::kOk;
+  }
+  if (!context.CanWriteMemory(address, sizeof(std::uint64_t))) {
+    SetSignedResult(context, MemoryFault(posix_errors));
+    return HleContextStatus::kOk;
+  }
+  std::uint64_t handle = 0;
+  if (!ReadOpaqueHandle(context, address, posix_errors, handle)) {
+    return HleContextStatus::kOk;
+  }
+  const auto status = pthreads.DestroyMutexAttribute(handle);
+  if (status != kernel::KernelStatus::kOk) {
+    SetSignedResult(context, PthreadStatusResult(status, posix_errors));
+    return HleContextStatus::kOk;
+  }
+  if (context.WriteUInt64(address, 0) != HleContextStatus::kOk) {
+    SetSignedResult(context, MemoryFault(posix_errors));
+    return HleContextStatus::kOk;
+  }
+  context.SetReturn(0);
+  return HleContextStatus::kOk;
+}
+
+HleContextStatus PthreadMutexattrSet(HleCallContext& context,
+                                     kernel::PthreadService& pthreads,
+                                     bool posix_errors, bool set_protocol) {
+  std::uint64_t handle = 0;
+  if (!ReadOpaqueHandle(context, context.Argument(0).value_or(0),
+                        posix_errors, handle)) {
+    return HleContextStatus::kOk;
+  }
+  const auto value = SignedArgument(context, 1);
+  const auto status =
+      set_protocol ? pthreads.SetMutexAttributeProtocol(handle, value)
+                   : pthreads.SetMutexAttributeType(handle, value);
+  SetSignedResult(context, PthreadStatusResult(status, posix_errors));
+  return HleContextStatus::kOk;
+}
+
+HleContextStatus PthreadMutexInit(HleCallContext& context,
+                                  kernel::PthreadService& pthreads,
+                                  bool posix_errors) {
+  const auto output_address = context.Argument(0).value_or(0);
+  const auto attribute_address = context.Argument(1).value_or(0);
+  if (output_address == 0) {
+    SetSignedResult(context, InvalidArgument(posix_errors));
+    return HleContextStatus::kOk;
+  }
+  if (!context.CanWriteMemory(output_address, sizeof(std::uint64_t))) {
+    SetSignedResult(context, MemoryFault(posix_errors));
+    return HleContextStatus::kOk;
+  }
+  std::uint64_t attribute_handle = 0;
+  if (attribute_address != 0 &&
+      context.ReadUInt64(attribute_address, attribute_handle) !=
+          HleContextStatus::kOk) {
+    SetSignedResult(context, MemoryFault(posix_errors));
+    return HleContextStatus::kOk;
+  }
+  const auto created = pthreads.CreateMutex(attribute_handle);
+  if (!created) {
+    SetSignedResult(context, PthreadStatusResult(created.status, posix_errors));
+    return HleContextStatus::kOk;
+  }
+  if (context.WriteUInt64(output_address, created.handle) !=
+      HleContextStatus::kOk) {
+    (void)pthreads.DestroyMutex(created.handle);
+    SetSignedResult(context, MemoryFault(posix_errors));
+    return HleContextStatus::kOk;
+  }
+  context.SetReturn(0);
+  return HleContextStatus::kOk;
+}
+
+HleContextStatus PthreadMutexDestroy(HleCallContext& context,
+                                     kernel::PthreadService& pthreads,
+                                     bool posix_errors) {
+  const auto address = context.Argument(0).value_or(0);
+  if (address == 0) {
+    SetSignedResult(context, InvalidArgument(posix_errors));
+    return HleContextStatus::kOk;
+  }
+  if (!context.CanWriteMemory(address, sizeof(std::uint64_t))) {
+    SetSignedResult(context, MemoryFault(posix_errors));
+    return HleContextStatus::kOk;
+  }
+  std::uint64_t handle = 0;
+  if (!ReadOpaqueHandle(context, address, posix_errors, handle)) {
+    return HleContextStatus::kOk;
+  }
+  const auto status = pthreads.DestroyMutex(handle);
+  if (status != kernel::KernelStatus::kOk) {
+    SetSignedResult(context, PthreadStatusResult(status, posix_errors));
+    return HleContextStatus::kOk;
+  }
+  if (context.WriteUInt64(address, 0) != HleContextStatus::kOk) {
+    SetSignedResult(context, MemoryFault(posix_errors));
+    return HleContextStatus::kOk;
+  }
+  context.SetReturn(0);
+  return HleContextStatus::kOk;
+}
+
+bool ResolveMutex(HleCallContext& context, kernel::PthreadService& pthreads,
+                  bool posix_errors, std::uint64_t& handle) {
+  const auto address = context.Argument(0).value_or(0);
+  if (!ReadOpaqueHandle(context, address, posix_errors, handle)) {
+    return false;
+  }
+  if (handle != 0 && handle != 1) {
+    return true;
+  }
+  if (!context.CanWriteMemory(address, sizeof(std::uint64_t))) {
+    SetSignedResult(context, MemoryFault(posix_errors));
+    return false;
+  }
+  const auto static_type =
+      handle == 1 ? kernel::kPthreadMutexAdaptive
+                  : kernel::kPthreadMutexErrorCheck;
+  const auto created = pthreads.CreateMutex(0, static_type);
+  if (!created) {
+    SetSignedResult(context, PthreadStatusResult(created.status, posix_errors));
+    return false;
+  }
+  handle = created.handle;
+  if (context.WriteUInt64(address, handle) != HleContextStatus::kOk) {
+    (void)pthreads.DestroyMutex(handle);
+    SetSignedResult(context, MemoryFault(posix_errors));
+    return false;
+  }
+  return true;
+}
+
+HleContextStatus PthreadMutexLock(HleCallContext& context,
+                                  kernel::PthreadService& pthreads,
+                                  bool posix_errors, bool try_only) {
+  std::uint64_t handle = 0;
+  if (!ResolveMutex(context, pthreads, posix_errors, handle)) {
+    return HleContextStatus::kOk;
+  }
+  const auto status = pthreads.LockMutex(handle, try_only);
+  if (status == kernel::KernelStatus::kInvalidArgument && !try_only) {
+    SetSignedResult(context, posix_errors ? kPosixErrorDeadlock
+                                          : kKernelHleErrorDeadlock);
+  } else {
+    SetSignedResult(context, PthreadStatusResult(status, posix_errors));
+  }
+  return HleContextStatus::kOk;
+}
+
+HleContextStatus PthreadMutexUnlock(HleCallContext& context,
+                                    kernel::PthreadService& pthreads,
+                                    bool posix_errors) {
+  std::uint64_t handle = 0;
+  if (!ResolveMutex(context, pthreads, posix_errors, handle)) {
+    return HleContextStatus::kOk;
+  }
+  SetSignedResult(context,
+                  PthreadStatusResult(pthreads.UnlockMutex(handle),
+                                      posix_errors));
+  return HleContextStatus::kOk;
+}
+
 HleContextStatus PthreadKeyCreate(HleCallContext& context,
                                   kernel::PthreadService& pthreads,
                                   bool posix_errors) {
@@ -388,7 +605,7 @@ std::vector<HleExportDefinition> detail::MakeKernelPthreadExports(
   auto* const pthread_view = &pthreads;
   auto* const scheduler_view = &scheduler;
   std::vector<HleExportDefinition> exports;
-  exports.reserve(60);
+  exports.reserve(96);
 
   AddAliases(exports, kPosixPthreadSelfName, kPosixPthreadSelfNid,
              [scheduler_view](HleCallContext& context) {
@@ -484,6 +701,98 @@ std::vector<HleExportDefinition> detail::MakeKernelPthreadExports(
              kKernelPthreadAttrGetstacksizeNid,
              [pthread_view](HleCallContext& context) {
                return PthreadAttrGetstacksize(context, *pthread_view, false);
+             });
+
+  AddAliases(exports, kPosixPthreadMutexattrInitName,
+             kPosixPthreadMutexattrInitNid,
+             [pthread_view](HleCallContext& context) {
+               return PthreadMutexattrInit(context, *pthread_view, true);
+             });
+  AddAliases(exports, kKernelPthreadMutexattrInitName,
+             kKernelPthreadMutexattrInitNid,
+             [pthread_view](HleCallContext& context) {
+               return PthreadMutexattrInit(context, *pthread_view, false);
+             });
+  AddAliases(exports, kPosixPthreadMutexattrDestroyName,
+             kPosixPthreadMutexattrDestroyNid,
+             [pthread_view](HleCallContext& context) {
+               return PthreadMutexattrDestroy(context, *pthread_view, true);
+             });
+  AddAliases(exports, kKernelPthreadMutexattrDestroyName,
+             kKernelPthreadMutexattrDestroyNid,
+             [pthread_view](HleCallContext& context) {
+               return PthreadMutexattrDestroy(context, *pthread_view, false);
+             });
+  AddAliases(exports, kPosixPthreadMutexattrSettypeName,
+             kPosixPthreadMutexattrSettypeNid,
+             [pthread_view](HleCallContext& context) {
+               return PthreadMutexattrSet(context, *pthread_view, true, false);
+             });
+  AddAliases(exports, kKernelPthreadMutexattrSettypeName,
+             kKernelPthreadMutexattrSettypeNid,
+             [pthread_view](HleCallContext& context) {
+               return PthreadMutexattrSet(context, *pthread_view, false,
+                                          false);
+             });
+  AddAliases(exports, kPosixPthreadMutexattrSetprotocolName,
+             kPosixPthreadMutexattrSetprotocolNid,
+             [pthread_view](HleCallContext& context) {
+               return PthreadMutexattrSet(context, *pthread_view, true, true);
+             });
+  AddAliases(exports, kKernelPthreadMutexattrSetprotocolName,
+             kKernelPthreadMutexattrSetprotocolNid,
+             [pthread_view](HleCallContext& context) {
+               return PthreadMutexattrSet(context, *pthread_view, false, true);
+             });
+  AddAliases(exports, kPosixPthreadMutexInitName,
+             kPosixPthreadMutexInitNid,
+             [pthread_view](HleCallContext& context) {
+               return PthreadMutexInit(context, *pthread_view, true);
+             });
+  AddAliases(exports, kKernelPthreadMutexInitName,
+             kKernelPthreadMutexInitNid,
+             [pthread_view](HleCallContext& context) {
+               return PthreadMutexInit(context, *pthread_view, false);
+             });
+  AddAliases(exports, kPosixPthreadMutexDestroyName,
+             kPosixPthreadMutexDestroyNid,
+             [pthread_view](HleCallContext& context) {
+               return PthreadMutexDestroy(context, *pthread_view, true);
+             });
+  AddAliases(exports, kKernelPthreadMutexDestroyName,
+             kKernelPthreadMutexDestroyNid,
+             [pthread_view](HleCallContext& context) {
+               return PthreadMutexDestroy(context, *pthread_view, false);
+             });
+  AddAliases(exports, kPosixPthreadMutexLockName,
+             kPosixPthreadMutexLockNid,
+             [pthread_view](HleCallContext& context) {
+               return PthreadMutexLock(context, *pthread_view, true, false);
+             });
+  AddAliases(exports, kKernelPthreadMutexLockName,
+             kKernelPthreadMutexLockNid,
+             [pthread_view](HleCallContext& context) {
+               return PthreadMutexLock(context, *pthread_view, false, false);
+             });
+  AddAliases(exports, kPosixPthreadMutexTrylockName,
+             kPosixPthreadMutexTrylockNid,
+             [pthread_view](HleCallContext& context) {
+               return PthreadMutexLock(context, *pthread_view, true, true);
+             });
+  AddAliases(exports, kKernelPthreadMutexTrylockName,
+             kKernelPthreadMutexTrylockNid,
+             [pthread_view](HleCallContext& context) {
+               return PthreadMutexLock(context, *pthread_view, false, true);
+             });
+  AddAliases(exports, kPosixPthreadMutexUnlockName,
+             kPosixPthreadMutexUnlockNid,
+             [pthread_view](HleCallContext& context) {
+               return PthreadMutexUnlock(context, *pthread_view, true);
+             });
+  AddAliases(exports, kKernelPthreadMutexUnlockName,
+             kKernelPthreadMutexUnlockNid,
+             [pthread_view](HleCallContext& context) {
+               return PthreadMutexUnlock(context, *pthread_view, false);
              });
 
   AddAliases(exports, kPosixPthreadKeyCreateName, kPosixPthreadKeyCreateNid,

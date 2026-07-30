@@ -176,7 +176,10 @@ Synthetic guest attribute handles, checked guest writes, and guest-thread TLS
 isolation adapt SharpEmu behavior. Thread creation keeps KytyPS5's entry,
 argument, attribute, and return-value model while adapting SharpEmu's checked
 guest output and shared-scheduler start, join, and exit flow. The SharpEmu
-files state:
+mutex behavior also supplies checked static initialization, direct waiter
+handoff, distinct type behavior, and abandoned-owner cleanup. KytyPS5 supplies
+the mutex attribute defaults, accepted types and protocols, guest ABI, and
+POSIX error mapping. The SharpEmu files state:
 
 `Copyright (C) 2026 SharpEmu Emulator Project`
 

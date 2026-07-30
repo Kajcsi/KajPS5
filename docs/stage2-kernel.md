@@ -59,6 +59,13 @@ The tests capture the behavior below.
   Pthread exit preserves the guest return value and wakes all joiners. POSIX
   handlers return POSIX pthread errors; `scePthread` handlers return kernel
   errors.
+- Pthread mutexes use guest-visible synthetic handles and guest scheduler
+  handles for ownership. Error-checking, recursive, normal, and adaptive types
+  have separate relock behavior. Protocol values are checked before mutation.
+- A zero or adaptive static initializer creates a mutex on first use. A
+  contended lock blocks through the shared scheduler. Unlock grants ownership
+  to the first waiter before wakeup, and thread exit releases owned mutexes so
+  a stopped worker cannot strand later work.
 - Setting an event flag uses bitwise OR. Clearing retains the bits selected by
   the supplied mask. Poll supports all-bit and any-bit conditions and can clear
   all bits or only the requested pattern after returning the observed value.
@@ -130,7 +137,7 @@ The tests capture the behavior below.
   trigger, and removal by name and NID.
 - Blocking wait exports remain deferred until the runtime can save and resume
   a guest call continuation. A live pthread join uses the same temporary
-  recheck contract.
+  recheck contract, as does a contended pthread mutex lock.
 
 KajPS5 implements this behavior through its own C++ interfaces. It does not
 copy an upstream executor, continuation system, ownership model, or source

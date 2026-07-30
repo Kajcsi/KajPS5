@@ -56,7 +56,7 @@ int main() {
   Check(kajps5::hle::RegisterKernelPthreadExports(
             registry, runtime.pthreads(), runtime.scheduler()) ==
             ExportRegistryStatus::kOk &&
-            registry.size() == 60,
+            registry.size() == 96,
         "pthread exports did not register atomically");
 
   GuestMemory memory(0x1000, 0x4000);
@@ -340,6 +340,178 @@ int main() {
             Dispatch(lifecycle_registry,
                      kajps5::hle::kPosixPthreadJoinNid, stale_join) == 3,
         "pthread_join returned the wrong stale-thread error");
+
+  KernelRuntime mutex_runtime;
+  ExportRegistry mutex_registry;
+  Check(kajps5::hle::RegisterKernelPthreadExports(
+            mutex_registry, mutex_runtime.pthreads(),
+            mutex_runtime.scheduler()) == ExportRegistryStatus::kOk,
+        "pthread mutex exports did not register");
+  const auto mutex_owner =
+      mutex_runtime.scheduler().CreateThread("mutex-owner", 700);
+  const auto mutex_waiter =
+      mutex_runtime.scheduler().CreateThread("mutex-waiter", 700);
+  Check(mutex_owner && mutex_waiter &&
+            mutex_runtime.scheduler().SelectNext() == mutex_owner.handle,
+        "pthread mutex scheduler setup failed");
+
+  HleCallContext mutex_attr_init(memory);
+  Check(mutex_attr_init.SetRegister(HleRegister::kRdi, 0x1300) &&
+            Dispatch(mutex_registry,
+                     kajps5::hle::kPosixPthreadMutexattrInitNid,
+                     mutex_attr_init) == 0,
+        "pthread mutex attribute initialization failed");
+  HleCallContext mutex_attr_type(memory);
+  Check(mutex_attr_type.SetRegister(HleRegister::kRdi, 0x1300) &&
+            mutex_attr_type.SetRegister(
+                HleRegister::kRsi,
+                kajps5::kernel::kPthreadMutexRecursive) &&
+            Dispatch(mutex_registry,
+                     kajps5::hle::kKernelPthreadMutexattrSettypeNid,
+                     mutex_attr_type) == 0,
+        "pthread mutex type setup failed");
+  HleCallContext invalid_mutex_protocol(memory);
+  Check(invalid_mutex_protocol.SetRegister(HleRegister::kRdi, 0x1300) &&
+            invalid_mutex_protocol.SetRegister(HleRegister::kRsi, 3) &&
+            Dispatch(mutex_registry,
+                     kajps5::hle::kPosixPthreadMutexattrSetprotocolNid,
+                     invalid_mutex_protocol) == 22,
+        "pthread accepted an invalid mutex protocol");
+
+  HleCallContext mutex_init(memory);
+  Check(mutex_init.SetRegister(HleRegister::kRdi, 0x1310) &&
+            mutex_init.SetRegister(HleRegister::kRsi, 0x1300) &&
+            Dispatch(mutex_registry,
+                     kajps5::hle::kPosixPthreadMutexInitNid,
+                     mutex_init) == 0,
+        "pthread mutex initialization failed");
+  std::uint64_t mutex_handle = 0;
+  const auto mutex_handle_read =
+      mutex_init.ReadUInt64(0x1310, mutex_handle) == HleContextStatus::kOk;
+  const auto initialized_mutex =
+      mutex_runtime.pthreads().GetMutex(mutex_handle);
+  Check(mutex_handle_read && mutex_handle != 0 && initialized_mutex &&
+            initialized_mutex->type ==
+                kajps5::kernel::kPthreadMutexRecursive,
+        "pthread mutex did not use its guest attribute");
+
+  HleCallContext mutex_lock(memory);
+  Check(mutex_lock.SetRegister(HleRegister::kRdi, 0x1310) &&
+            Dispatch(mutex_registry,
+                     kajps5::hle::kPosixPthreadMutexLockNid,
+                     mutex_lock) == 0,
+        "pthread mutex lock failed");
+  HleCallContext mutex_relock(memory);
+  const auto relock_result =
+      mutex_relock.SetRegister(HleRegister::kRdi, 0x1310) &&
+      Dispatch(mutex_registry, kajps5::hle::kKernelPthreadMutexLockNid,
+               mutex_relock) == 0;
+  const auto relocked_mutex = mutex_runtime.pthreads().GetMutex(mutex_handle);
+  Check(relock_result && relocked_mutex &&
+            relocked_mutex->recursion_count == 2,
+        "recursive pthread mutex lock failed");
+  HleCallContext busy_mutex_destroy(memory);
+  Check(busy_mutex_destroy.SetRegister(HleRegister::kRdi, 0x1310) &&
+            Dispatch(mutex_registry,
+                     kajps5::hle::kPosixPthreadMutexDestroyNid,
+                     busy_mutex_destroy) == 16,
+        "pthread destroyed an owned mutex");
+  for (int index = 0; index < 2; ++index) {
+    HleCallContext mutex_unlock(memory);
+    Check(mutex_unlock.SetRegister(HleRegister::kRdi, 0x1310) &&
+              Dispatch(mutex_registry,
+                       kajps5::hle::kPosixPthreadMutexUnlockNid,
+                       mutex_unlock) == 0,
+          "recursive pthread mutex unlock failed");
+  }
+  HleCallContext mutex_destroy(memory);
+  Check(mutex_destroy.SetRegister(HleRegister::kRdi, 0x1310) &&
+            Dispatch(mutex_registry,
+                     kajps5::hle::kKernelPthreadMutexDestroyNid,
+                     mutex_destroy) == 0 &&
+            mutex_destroy.ReadUInt64(0x1310, mutex_handle) ==
+                HleContextStatus::kOk &&
+            mutex_handle == 0,
+        "pthread mutex destruction did not clear its guest handle");
+
+  HleCallContext static_setup(memory);
+  Check(static_setup.WriteUInt64(0x1320, 0) == HleContextStatus::kOk,
+        "static pthread mutex setup failed");
+  HleCallContext static_lock(memory);
+  Check(static_lock.SetRegister(HleRegister::kRdi, 0x1320) &&
+            Dispatch(mutex_registry,
+                     kajps5::hle::kPosixPthreadMutexLockNid,
+                     static_lock) == 0 &&
+            static_lock.ReadUInt64(0x1320, mutex_handle) ==
+                HleContextStatus::kOk &&
+            mutex_handle != 0,
+        "static pthread mutex was not initialized on first use");
+  HleCallContext static_relock(memory);
+  Check(static_relock.SetRegister(HleRegister::kRdi, 0x1320) &&
+            Dispatch(mutex_registry,
+                     kajps5::hle::kPosixPthreadMutexLockNid,
+                     static_relock) == 11,
+        "error-checking pthread mutex did not reject a self lock");
+  Check(mutex_runtime.scheduler().YieldCurrent() &&
+            mutex_runtime.scheduler().SelectNext() == mutex_waiter.handle,
+        "pthread mutex contention setup failed");
+  HleCallContext blocked_lock(memory);
+  Check(blocked_lock.SetRegister(HleRegister::kRdi, 0x1320) &&
+            Dispatch(mutex_registry,
+                     kajps5::hle::kPosixPthreadMutexLockNid,
+                     blocked_lock) == 16,
+        "contended pthread mutex did not block");
+  Check(mutex_runtime.scheduler().SelectNext() == mutex_owner.handle,
+        "pthread mutex owner did not resume");
+  HleCallContext owner_unlock(memory);
+  Check(owner_unlock.SetRegister(HleRegister::kRdi, 0x1320) &&
+            Dispatch(mutex_registry,
+                     kajps5::hle::kKernelPthreadMutexUnlockNid,
+                     owner_unlock) == 0 &&
+            mutex_runtime.pthreads().ExitCurrent(0),
+        "pthread mutex owner did not wake its waiter");
+  Check(mutex_runtime.scheduler().SelectNext() == mutex_waiter.handle,
+        "pthread mutex waiter was not woken");
+  HleCallContext resumed_lock(memory);
+  Check(resumed_lock.SetRegister(HleRegister::kRdi, 0x1320) &&
+            Dispatch(mutex_registry,
+                     kajps5::hle::kPosixPthreadMutexLockNid,
+                     resumed_lock) == 0,
+        "woken pthread mutex call did not complete");
+  HleCallContext waiter_unlock(memory);
+  Check(waiter_unlock.SetRegister(HleRegister::kRdi, 0x1320) &&
+            Dispatch(mutex_registry,
+                     kajps5::hle::kPosixPthreadMutexUnlockNid,
+                     waiter_unlock) == 0,
+        "pthread mutex waiter could not unlock");
+
+  HleCallContext adaptive_setup(memory);
+  Check(adaptive_setup.WriteUInt64(0x1330, 1) == HleContextStatus::kOk,
+        "adaptive pthread mutex setup failed");
+  HleCallContext adaptive_lock(memory);
+  Check(adaptive_lock.SetRegister(HleRegister::kRdi, 0x1330) &&
+            Dispatch(mutex_registry,
+                     kajps5::hle::kKernelPthreadMutexLockNid,
+                     adaptive_lock) == 0,
+        "adaptive pthread mutex lock failed");
+  HleCallContext adaptive_relock(memory);
+  Check(adaptive_relock.SetRegister(HleRegister::kRdi, 0x1330) &&
+            Dispatch(mutex_registry,
+                     kajps5::hle::kKernelPthreadMutexLockNid,
+                     adaptive_relock) == 0,
+        "adaptive pthread mutex duplicate lock was not idempotent");
+  HleCallContext adaptive_trylock(memory);
+  Check(adaptive_trylock.SetRegister(HleRegister::kRdi, 0x1330) &&
+            Dispatch(mutex_registry,
+                     kajps5::hle::kPosixPthreadMutexTrylockNid,
+                     adaptive_trylock) == 16,
+        "adaptive pthread mutex trylock ignored ownership");
+  HleCallContext adaptive_unlock(memory);
+  Check(adaptive_unlock.SetRegister(HleRegister::kRdi, 0x1330) &&
+            Dispatch(mutex_registry,
+                     kajps5::hle::kKernelPthreadMutexUnlockNid,
+                     adaptive_unlock) == 0,
+        "adaptive pthread mutex needed more than one matching unlock");
 
   return failures == 0 ? 0 : 1;
 }
