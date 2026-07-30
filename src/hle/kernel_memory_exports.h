@@ -49,6 +49,13 @@ inline constexpr auto kKernelReleaseDirectMemoryNid = "MBuItvba6z8";
 inline constexpr auto kKernelCheckedReleaseDirectMemoryName =
     "sceKernelCheckedReleaseDirectMemory";
 inline constexpr auto kKernelCheckedReleaseDirectMemoryNid = "hwVSPCmp5tM";
+inline constexpr auto kKernelMapDirectMemoryName = "sceKernelMapDirectMemory";
+inline constexpr auto kKernelMapDirectMemoryNid = "L-Q3LEjIbgA";
+inline constexpr auto kKernelMapDirectMemory2Name = "sceKernelMapDirectMemory2";
+inline constexpr auto kKernelMapDirectMemory2Nid = "BQQniolj9tQ";
+inline constexpr auto kKernelMapNamedDirectMemoryName =
+    "sceKernelMapNamedDirectMemory";
+inline constexpr auto kKernelMapNamedDirectMemoryNid = "NcaWUxfMNIQ";
 inline constexpr auto kPosixMunmapName = "munmap";
 inline constexpr auto kPosixMunmapNid = "UqDGjXA5yUM";
 inline constexpr auto kPosixGetPageSizeName = "getpagesize";

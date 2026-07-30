@@ -79,9 +79,12 @@ references, KytyPS5's page, flag, protection, and name checks, and SharpEmu's
 checked first-fit address search. The direct-memory range service in
 `src/kernel/direct_memory.cpp` uses KytyPS5's physical-memory size, first-fit
 allocation, largest-gap query, and partial-release rules. Its fragmentation
-tests also adapt SharpEmu's checked split and coalesce behavior. The protection
-query uses KytyPS5's exclusive range end. No memory-export or allocator source
-was copied.
+tests also adapt SharpEmu's checked split and coalesce behavior. Direct guest
+mappings use the three names, NIDs, signatures, allocation checks, and name
+limits confirmed by KytyPS5. They adapt SharpEmu's checked guest reservation,
+hinted first-fit search, and seventh-argument stack read. The protection query
+uses KytyPS5's exclusive range end. No memory-export or allocator source was
+copied.
 
 ## Native execution, imports, and HLE
 

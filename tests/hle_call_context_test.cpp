@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
+#include <limits>
 #include <string>
 
 #include "core/memory/guest_memory.h"
@@ -43,7 +44,16 @@ int main() {
           "System V argument order is incorrect");
   }
   Check(!context.Argument(argument_registers.size()).has_value(),
-        "out-of-range argument was accepted");
+        "unmapped stack argument was accepted");
+  Check(context.WriteUInt64(0x1028, 7) == HleContextStatus::kOk &&
+            context.WriteUInt64(0x1030, 8) == HleContextStatus::kOk &&
+            context.SetRegister(HleRegister::kRsp, 0x1020) &&
+            context.Argument(6).value_or(0) == 7 &&
+            context.Argument(7).value_or(0) == 8,
+        "System V stack argument order is incorrect");
+  Check(!context.Argument(std::numeric_limits<std::size_t>::max())
+             .has_value(),
+        "overflowing stack argument was accepted");
   Check(!context.SetRegister(static_cast<HleRegister>(255), 1) &&
             !context.GetRegister(static_cast<HleRegister>(255)).has_value(),
         "invalid register was accepted");

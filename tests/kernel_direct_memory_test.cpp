@@ -38,6 +38,29 @@ int main() {
   Check(first && first.address == 0 && second && second.address == 0xc000 &&
             memory.allocation_count() == 2,
         "first-fit direct-memory allocation failed");
+  Check(memory.RegisterMapping(0x200000, 0, 0xc000) ==
+                KernelStatus::kOk &&
+            memory.RegisterMapping(0x300000, 0, 0x4000) ==
+                KernelStatus::kOk &&
+            memory.mapping_count() == 2,
+        "direct-memory aliases were not recorded");
+  Check(memory.RegisterMapping(0x208000, 0, 0x4000) ==
+                KernelStatus::kBusy &&
+            memory.RegisterMapping(0x400000, 0x10000, 0x4000) ==
+                KernelStatus::kNotFound &&
+            memory.Release(0, 0x4000) == KernelStatus::kBusy,
+        "direct-memory alias checks accepted an unsafe operation");
+  memory.UnregisterMappings(0x204000, 0x4000);
+  Check(memory.mapping_count() == 3 &&
+            memory.Release(0, 0x4000) == KernelStatus::kBusy,
+        "partial alias removal did not split the mapping");
+  memory.UnregisterMappings(0x200000, 0xc000);
+  Check(memory.mapping_count() == 1 &&
+            memory.Release(0, 0x4000) == KernelStatus::kBusy,
+        "alias removal changed an independent mapping");
+  memory.UnregisterMappings(0x300000, 0x4000);
+  Check(memory.mapping_count() == 0,
+        "direct-memory aliases were not fully removed");
   Check(memory.Release(0x4000, 0x4000) == KernelStatus::kOk &&
             memory.ContainsAllocatedRange(0, 0x4000) &&
             !memory.ContainsAllocatedRange(0x4000, 0x4000) &&

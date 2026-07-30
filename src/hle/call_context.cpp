@@ -64,10 +64,28 @@ std::optional<std::uint64_t> HleCallContext::GetRegister(
 
 std::optional<std::uint64_t> HleCallContext::Argument(
     std::size_t index) const noexcept {
-  if (index >= kArgumentRegisters.size()) {
+  if (index < kArgumentRegisters.size()) {
+    return GetRegister(kArgumentRegisters[index]);
+  }
+
+  const auto stack_pointer = GetRegister(HleRegister::kRsp).value_or(0);
+  const auto stack_index = index - kArgumentRegisters.size();
+  constexpr auto kStackSlotSize = sizeof(std::uint64_t);
+  constexpr auto kReturnAddressSize = sizeof(std::uint64_t);
+  if (stack_index >
+      (std::numeric_limits<std::uint64_t>::max() - kReturnAddressSize) /
+          kStackSlotSize) {
     return std::nullopt;
   }
-  return GetRegister(kArgumentRegisters[index]);
+  const auto offset = kReturnAddressSize + stack_index * kStackSlotSize;
+  if (stack_pointer == 0 ||
+      offset > std::numeric_limits<std::uint64_t>::max() - stack_pointer) {
+    return std::nullopt;
+  }
+  std::uint64_t value = 0;
+  return ReadUInt64(stack_pointer + offset, value) == HleContextStatus::kOk
+             ? std::optional<std::uint64_t>(value)
+             : std::nullopt;
 }
 
 void HleCallContext::SetReturn(std::uint64_t value) noexcept {

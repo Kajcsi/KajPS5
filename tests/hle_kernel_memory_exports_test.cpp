@@ -56,7 +56,7 @@ int main() {
   ExportRegistry registry;
   Check(kajps5::hle::RegisterKernelMemoryExports(registry, direct_memory) ==
             ExportRegistryStatus::kOk &&
-            registry.size() == 30,
+            registry.size() == 36,
         "memory exports did not register atomically");
 
   HleCallContext page_size_context(memory);
@@ -178,6 +178,236 @@ int main() {
                  missing_release_context) ==
             KernelResult(kajps5::hle::kKernelHleErrorPermissionDenied),
         "unknown direct-memory release returned the wrong error");
+
+  GuestMemory direct_guest(0x10000, 0x50000,
+                           GuestMemoryProtection::kNone);
+  Check(direct_guest.Map(
+            0x10000, 0x4000,
+            GuestMemoryProtection::kRead | GuestMemoryProtection::kWrite),
+        "direct-memory control page setup failed");
+  HleCallContext direct_map_context(direct_guest);
+  Check(direct_map_context.WriteUInt64(0x10000, 0x20000) ==
+                kajps5::hle::HleContextStatus::kOk &&
+            direct_map_context.SetRegister(HleRegister::kRdi, 0x10000) &&
+            direct_map_context.SetRegister(HleRegister::kRsi, 0x4000) &&
+            direct_map_context.SetRegister(
+                HleRegister::kRdx,
+                kajps5::hle::kKernelProtectionCpuRead |
+                    kajps5::hle::kKernelProtectionCpuWrite) &&
+            direct_map_context.SetRegister(HleRegister::kRcx,
+                                           kajps5::hle::kKernelMapFixed) &&
+            direct_map_context.SetRegister(HleRegister::kR8, 0) &&
+            direct_map_context.SetRegister(HleRegister::kR9, 0x4000),
+        "fixed direct-memory map setup failed");
+  std::uint64_t direct_mapped_address = 0;
+  Check(Dispatch(registry, kajps5::hle::kKernelMapDirectMemoryNid,
+                 direct_map_context) == 0 &&
+            direct_map_context.ReadUInt64(0x10000, direct_mapped_address) ==
+                kajps5::hle::HleContextStatus::kOk &&
+            direct_mapped_address == 0x20000 &&
+            direct_guest.CanAccess(
+                0x20000, 0x4000,
+                GuestMemoryProtection::kRead |
+                    GuestMemoryProtection::kWrite) &&
+            direct_memory.mapping_count() == 1,
+        "fixed direct-memory map returned the wrong range");
+
+  HleCallContext direct_collision_context(direct_guest);
+  Check(direct_collision_context.WriteUInt64(0x10008, 0x20000) ==
+                kajps5::hle::HleContextStatus::kOk &&
+            direct_collision_context.SetRegister(HleRegister::kRdi,
+                                                 0x10008) &&
+            direct_collision_context.SetRegister(HleRegister::kRsi,
+                                                 0x4000) &&
+            direct_collision_context.SetRegister(
+                HleRegister::kRdx,
+                kajps5::hle::kKernelProtectionCpuRead) &&
+            direct_collision_context.SetRegister(
+                HleRegister::kRcx,
+                kajps5::hle::kKernelMapFixed |
+                    kajps5::hle::kKernelMapNoOverwrite) &&
+            direct_collision_context.SetRegister(HleRegister::kR8, 0) &&
+            direct_collision_context.SetRegister(HleRegister::kR9, 0x4000),
+        "direct-memory collision setup failed");
+  Check(Dispatch(registry, kajps5::hle::kKernelMapDirectMemoryName,
+                 direct_collision_context) ==
+                KernelResult(kajps5::hle::kKernelHleErrorNoMemory) &&
+            direct_memory.mapping_count() == 1,
+        "fixed direct-memory map replaced an existing range");
+
+  HleCallContext direct_map2_context(direct_guest);
+  Check(direct_map2_context.WriteUInt64(0x10010, 0) ==
+                kajps5::hle::HleContextStatus::kOk &&
+            direct_map2_context.WriteUInt64(0x10108, 0x8000) ==
+                kajps5::hle::HleContextStatus::kOk &&
+            direct_map2_context.SetRegister(HleRegister::kRsp, 0x10100) &&
+            direct_map2_context.SetRegister(HleRegister::kRdi, 0x10010) &&
+            direct_map2_context.SetRegister(HleRegister::kRsi, 0x4000) &&
+            direct_map2_context.SetRegister(HleRegister::kRdx, 7) &&
+            direct_map2_context.SetRegister(
+                HleRegister::kRcx,
+                kajps5::hle::kKernelProtectionCpuRead) &&
+            direct_map2_context.SetRegister(HleRegister::kR8, 0) &&
+            direct_map2_context.SetRegister(HleRegister::kR9, 0x8000),
+        "direct-memory v2 setup failed");
+  Check(Dispatch(registry, kajps5::hle::kKernelMapDirectMemory2Nid,
+                 direct_map2_context) == 0 &&
+            direct_map2_context.ReadUInt64(0x10010, direct_mapped_address) ==
+                kajps5::hle::HleContextStatus::kOk &&
+            direct_mapped_address == 0x18000 &&
+            direct_memory.mapping_count() == 2,
+        "direct-memory v2 did not read its stack alignment");
+
+  const std::array direct_name = {
+      std::byte{'v'}, std::byte{'i'}, std::byte{'d'}, std::byte{'e'},
+      std::byte{'o'}, std::byte{0}};
+  Check(direct_guest.Write(0x10200, direct_name),
+        "direct-memory name setup failed");
+  HleCallContext named_direct_context(direct_guest);
+  Check(named_direct_context.WriteUInt64(0x10018, 0x30000) ==
+                kajps5::hle::HleContextStatus::kOk &&
+            named_direct_context.WriteUInt64(0x10128, 0x10200) ==
+                kajps5::hle::HleContextStatus::kOk &&
+            named_direct_context.SetRegister(HleRegister::kRsp, 0x10120) &&
+            named_direct_context.SetRegister(HleRegister::kRdi, 0x10018) &&
+            named_direct_context.SetRegister(HleRegister::kRsi, 0x4000) &&
+            named_direct_context.SetRegister(
+                HleRegister::kRdx,
+                kajps5::hle::kKernelProtectionGpuRead) &&
+            named_direct_context.SetRegister(HleRegister::kRcx, 0) &&
+            named_direct_context.SetRegister(HleRegister::kR8, 0) &&
+            named_direct_context.SetRegister(HleRegister::kR9, 0x4000),
+        "named direct-memory map setup failed");
+  Check(Dispatch(registry,
+                 kajps5::hle::kKernelMapNamedDirectMemoryNid,
+                 named_direct_context) == 0 &&
+            named_direct_context.ReadUInt64(0x10018,
+                                            direct_mapped_address) ==
+                kajps5::hle::HleContextStatus::kOk &&
+            direct_mapped_address == 0x30000 &&
+            direct_guest.IsMapped(0x30000, 0x4000) &&
+            !direct_guest.CanAccess(0x30000, 1,
+                                    GuestMemoryProtection::kRead) &&
+            direct_memory.mapping_count() == 3,
+        "named direct-memory map returned the wrong range");
+
+  std::array<std::byte, 32> long_direct_name{};
+  long_direct_name.fill(std::byte{'x'});
+  Check(direct_guest.Write(0x10300, long_direct_name),
+        "long direct-memory name setup failed");
+  HleCallContext long_direct_name_context(direct_guest);
+  Check(long_direct_name_context.WriteUInt64(0x10020, 0x38000) ==
+                kajps5::hle::HleContextStatus::kOk &&
+            long_direct_name_context.WriteUInt64(0x10148, 0x10300) ==
+                kajps5::hle::HleContextStatus::kOk &&
+            long_direct_name_context.SetRegister(HleRegister::kRsp,
+                                                 0x10140) &&
+            long_direct_name_context.SetRegister(HleRegister::kRdi,
+                                                 0x10020) &&
+            long_direct_name_context.SetRegister(HleRegister::kRsi,
+                                                 0x4000) &&
+            long_direct_name_context.SetRegister(HleRegister::kRdx, 0) &&
+            long_direct_name_context.SetRegister(HleRegister::kR8, 0) &&
+            long_direct_name_context.SetRegister(HleRegister::kR9, 0x4000),
+        "long direct-memory name dispatch setup failed");
+  Check(Dispatch(registry,
+                 kajps5::hle::kKernelMapNamedDirectMemoryName,
+                 long_direct_name_context) ==
+                KernelResult(kajps5::hle::kKernelHleErrorNameTooLong) &&
+            !direct_guest.IsMapped(0x38000, 1) &&
+            direct_memory.mapping_count() == 3,
+        "overlong direct-memory name changed mappings");
+
+  HleCallContext unallocated_direct_context(direct_guest);
+  Check(unallocated_direct_context.WriteUInt64(0x10028, 0x38000) ==
+                kajps5::hle::HleContextStatus::kOk &&
+            unallocated_direct_context.SetRegister(HleRegister::kRdi,
+                                                   0x10028) &&
+            unallocated_direct_context.SetRegister(HleRegister::kRsi,
+                                                   0x4000) &&
+            unallocated_direct_context.SetRegister(HleRegister::kRdx, 0) &&
+            unallocated_direct_context.SetRegister(
+                HleRegister::kRcx, kajps5::hle::kKernelMapFixed) &&
+            unallocated_direct_context.SetRegister(HleRegister::kR8,
+                                                   0x4000) &&
+            unallocated_direct_context.SetRegister(HleRegister::kR9,
+                                                   0x4000),
+        "unallocated direct-memory map setup failed");
+  Check(Dispatch(registry, kajps5::hle::kKernelMapDirectMemoryNid,
+                 unallocated_direct_context) ==
+                KernelResult(kajps5::hle::kKernelHleErrorNoMemory) &&
+            !direct_guest.IsMapped(0x38000, 1) &&
+            direct_memory.mapping_count() == 3,
+        "unallocated direct-memory range changed guest mappings");
+
+  HleCallContext direct_output_fault_context(direct_guest);
+  Check(direct_output_fault_context.SetRegister(HleRegister::kRdi,
+                                                0x14000) &&
+            direct_output_fault_context.SetRegister(HleRegister::kRsi,
+                                                    0x4000) &&
+            direct_output_fault_context.SetRegister(HleRegister::kRdx, 0) &&
+            direct_output_fault_context.SetRegister(HleRegister::kR8, 0) &&
+            direct_output_fault_context.SetRegister(HleRegister::kR9,
+                                                    0x4000),
+        "direct-memory output fault setup failed");
+  Check(Dispatch(registry, kajps5::hle::kKernelMapDirectMemoryNid,
+                 direct_output_fault_context) ==
+                KernelResult(kajps5::hle::kKernelHleErrorFault) &&
+            direct_memory.mapping_count() == 3,
+        "invalid direct-memory output changed mappings");
+
+  HleCallContext invalid_direct_alignment_context(direct_guest);
+  Check(invalid_direct_alignment_context.WriteUInt64(0x10030, 0x40000) ==
+                kajps5::hle::HleContextStatus::kOk &&
+            invalid_direct_alignment_context.WriteUInt64(0x10168, 0x6000) ==
+                kajps5::hle::HleContextStatus::kOk &&
+            invalid_direct_alignment_context.SetRegister(HleRegister::kRsp,
+                                                         0x10160) &&
+            invalid_direct_alignment_context.SetRegister(HleRegister::kRdi,
+                                                         0x10030) &&
+            invalid_direct_alignment_context.SetRegister(HleRegister::kRsi,
+                                                         0x4000) &&
+            invalid_direct_alignment_context.SetRegister(HleRegister::kRdx,
+                                                         1) &&
+            invalid_direct_alignment_context.SetRegister(HleRegister::kRcx,
+                                                         0) &&
+            invalid_direct_alignment_context.SetRegister(HleRegister::kR8,
+                                                         0) &&
+            invalid_direct_alignment_context.SetRegister(HleRegister::kR9,
+                                                         0x8000),
+        "invalid direct-memory alignment setup failed");
+  Check(Dispatch(registry, kajps5::hle::kKernelMapDirectMemory2Name,
+                 invalid_direct_alignment_context) ==
+                KernelResult(kajps5::hle::kKernelHleErrorInvalidArgument) &&
+            !direct_guest.IsMapped(0x40000, 1) &&
+            direct_memory.mapping_count() == 3,
+        "invalid direct-memory alignment changed mappings");
+
+  HleCallContext mapped_release_context(direct_guest);
+  Check(mapped_release_context.SetRegister(HleRegister::kRsi, 0x4000),
+        "mapped direct-memory release setup failed");
+  Check(Dispatch(registry, kajps5::hle::kKernelReleaseDirectMemoryName,
+                 mapped_release_context) ==
+            KernelResult(kajps5::hle::kKernelHleErrorBusy),
+        "mapped direct memory was released");
+
+  for (const auto address : {0x20000ULL, 0x18000ULL, 0x30000ULL}) {
+    HleCallContext direct_unmap_context(direct_guest);
+    Check(direct_unmap_context.SetRegister(HleRegister::kRdi, address) &&
+              direct_unmap_context.SetRegister(HleRegister::kRsi, 0x4000) &&
+              Dispatch(registry, kajps5::hle::kKernelMunmapName,
+                       direct_unmap_context) == 0,
+          "direct-memory alias could not be unmapped");
+  }
+  Check(direct_memory.mapping_count() == 0,
+        "direct-memory unmap left stale aliases");
+  HleCallContext released_direct_context(direct_guest);
+  Check(released_direct_context.SetRegister(HleRegister::kRsi, 0x4000) &&
+            Dispatch(registry,
+                     kajps5::hle::kKernelReleaseDirectMemoryNid,
+                     released_direct_context) == 0 &&
+            !direct_memory.ContainsAllocatedRange(0, 0x4000),
+        "unmapped direct memory could not be released");
 
   GuestMemory flexible_memory(0x10000, 0x20000,
                               GuestMemoryProtection::kNone);
@@ -495,7 +725,7 @@ int main() {
 
   Check(kajps5::hle::RegisterKernelMemoryExports(registry, direct_memory) ==
             ExportRegistryStatus::kAlreadyExists &&
-            registry.size() == 30,
+            registry.size() == 36,
         "duplicate memory export batch changed the registry");
   return failures == 0 ? 0 : 1;
 }

@@ -78,4 +78,14 @@ allocation, and checked or unchecked release use that shared allocator.
 Allocation is first fit inside the requested physical range. Availability
 returns the largest aligned gap. Partial release splits an allocation and
 adjacent free ranges coalesce. Invalid output pointers cannot consume a range.
-Direct-memory aliases into the guest address space are not implemented yet.
+The three direct-map variants check the physical allocation, protection,
+flags, alignment, output pointer, and optional 31-byte name before they map a
+guest range. Fixed maps never replace an existing range. Nonfixed maps use a
+hinted first-fit search, and seventh arguments are read from the checked guest
+stack. `munmap` removes direct-alias records, and a physical allocation cannot
+be released while an alias remains.
+
+Direct mappings currently reserve independent guest bytes. Two aliases of the
+same physical range do not share their contents yet, and the v2 memory type is
+not applied per mapping. A later backing-store layer must add that behavior
+without creating a second guest-memory owner.

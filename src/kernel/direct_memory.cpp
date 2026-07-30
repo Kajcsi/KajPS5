@@ -112,6 +112,9 @@ KernelStatus DirectMemoryService::Release(std::uint64_t start,
   }
 
   std::lock_guard lock(mutex_);
+  if (HasMappedPhysicalOverlapLocked(start, length)) {
+    return KernelStatus::kBusy;
+  }
   auto owner = allocations_.upper_bound(start);
   if (owner == allocations_.begin()) {
     return KernelStatus::kNotFound;
@@ -150,6 +153,87 @@ bool DirectMemoryService::ContainsAllocatedRange(
     return false;
   }
   std::lock_guard lock(mutex_);
+  return ContainsAllocatedRangeLocked(start, length);
+}
+
+KernelStatus DirectMemoryService::RegisterMapping(
+    std::uint64_t guest_address, std::uint64_t physical_address,
+    std::uint64_t length) {
+  if (guest_address == 0 || length == 0 ||
+      length > std::numeric_limits<std::uint64_t>::max() - guest_address ||
+      physical_address >= kDirectMemorySize ||
+      length > kDirectMemorySize - physical_address) {
+    return KernelStatus::kInvalidArgument;
+  }
+
+  std::lock_guard lock(mutex_);
+  if (!ContainsAllocatedRangeLocked(physical_address, length)) {
+    return KernelStatus::kNotFound;
+  }
+  if (mappings_.size() >= kMaximumDirectMemoryMappings) {
+    return KernelStatus::kNoResources;
+  }
+  const auto guest_end = guest_address + length;
+  for (const auto& mapping : mappings_) {
+    const auto mapping_end = mapping.guest_address + mapping.size;
+    if (guest_address < mapping_end && mapping.guest_address < guest_end) {
+      return KernelStatus::kBusy;
+    }
+  }
+  mappings_.push_back({guest_address, physical_address, length});
+  return KernelStatus::kOk;
+}
+
+void DirectMemoryService::UnregisterMappings(std::uint64_t guest_address,
+                                             std::uint64_t length) {
+  if (length == 0 ||
+      length > std::numeric_limits<std::uint64_t>::max() - guest_address) {
+    return;
+  }
+
+  const auto guest_end = guest_address + length;
+  std::lock_guard lock(mutex_);
+  for (std::size_t index = 0; index < mappings_.size();) {
+    auto& mapping = mappings_[index];
+    const auto mapping_end = mapping.guest_address + mapping.size;
+    const auto overlap_start = std::max(guest_address, mapping.guest_address);
+    const auto overlap_end = std::min(guest_end, mapping_end);
+    if (overlap_start >= overlap_end) {
+      ++index;
+      continue;
+    }
+
+    if (overlap_start == mapping.guest_address && overlap_end == mapping_end) {
+      mappings_.erase(mappings_.begin() + static_cast<std::ptrdiff_t>(index));
+      continue;
+    }
+    if (overlap_start == mapping.guest_address) {
+      const auto removed = overlap_end - mapping.guest_address;
+      mapping.guest_address = overlap_end;
+      mapping.physical_address += removed;
+      mapping.size -= removed;
+      ++index;
+      continue;
+    }
+    if (overlap_end == mapping_end) {
+      mapping.size = overlap_start - mapping.guest_address;
+      ++index;
+      continue;
+    }
+
+    const DirectMemoryMapping suffix{
+        overlap_end,
+        mapping.physical_address + overlap_end - mapping.guest_address,
+        mapping_end - overlap_end};
+    mapping.size = overlap_start - mapping.guest_address;
+    mappings_.insert(mappings_.begin() + static_cast<std::ptrdiff_t>(index + 1),
+                     suffix);
+    index += 2;
+  }
+}
+
+bool DirectMemoryService::ContainsAllocatedRangeLocked(
+    std::uint64_t start, std::uint64_t length) const noexcept {
   auto owner = allocations_.upper_bound(start);
   if (owner == allocations_.begin()) {
     return false;
@@ -159,9 +243,26 @@ bool DirectMemoryService::ContainsAllocatedRange(
          length <= owner->first + owner->second.size - start;
 }
 
+bool DirectMemoryService::HasMappedPhysicalOverlapLocked(
+    std::uint64_t start, std::uint64_t length) const noexcept {
+  const auto end = start + length;
+  for (const auto& mapping : mappings_) {
+    const auto mapping_end = mapping.physical_address + mapping.size;
+    if (start < mapping_end && mapping.physical_address < end) {
+      return true;
+    }
+  }
+  return false;
+}
+
 std::size_t DirectMemoryService::allocation_count() const {
   std::lock_guard lock(mutex_);
   return allocations_.size();
+}
+
+std::size_t DirectMemoryService::mapping_count() const {
+  std::lock_guard lock(mutex_);
+  return mappings_.size();
 }
 
 void DirectMemoryService::ConsumeFreeRange(
