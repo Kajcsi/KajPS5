@@ -116,7 +116,11 @@ entry point must be inside an executable load segment. Only one SCE process
 parameter segment and one TLS segment are accepted. Process parameters must be
 inside loaded memory. The initialized TLS bytes must be loaded, while the
 larger zero-filled TLS area remains per-thread storage and does not need its
-own file-backed load range.
+own file-backed load range. The loader also records `DT_INIT`, `DT_FINI`, and
+the pre-initializer, initializer, and finalizer arrays. Function addresses must
+be executable. Array storage must be loaded, complete, and made of 64-bit
+entries. This prepares the data needed to build the call order without
+executing guest code.
 
 The module planner accepts already-parsed module descriptions. It matches file
 and shared-object names without case sensitivity, starts available dependencies

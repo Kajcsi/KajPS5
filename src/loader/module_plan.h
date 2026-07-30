@@ -13,6 +13,8 @@
 
 namespace kajps5::loader {
 
+struct ElfMetadata;
+
 inline constexpr std::size_t kMaximumPlannedModules = 4096;
 inline constexpr std::size_t kMaximumPlannedDependencies = 65536;
 
@@ -48,6 +50,8 @@ struct ModuleStartPlanResult {
 
 [[nodiscard]] ModuleStartPlanResult BuildModuleStartPlan(
     const std::vector<ModuleDependencyInput>& modules);
+[[nodiscard]] ModuleDependencyInput MakeModuleDependencyInput(
+    std::string file_name, const ElfMetadata& metadata);
 [[nodiscard]] std::string_view ModulePlanStatusName(
     ModulePlanStatus status) noexcept;
 

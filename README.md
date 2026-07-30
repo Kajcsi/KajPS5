@@ -26,7 +26,8 @@ The current core includes:
   `RELA` relocations, and symbols before it changes guest memory. It preserves
   each `PT_LOAD` segment's read, write, and execute flags. The inspection path
   also plans relocations, reports unresolved imports, and validates the entry
-  point, process parameters, and TLS template without running code.
+  point, process parameters, TLS template, and module startup and shutdown
+  metadata without running code.
 - Library-scoped PS5 NID import linking and HLE dispatch, with bounded
   diagnostics for unresolved symbols, deterministic dependency order for
   supplied modules, and checked guest register and memory access.

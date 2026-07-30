@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 
+#include "loader/elf.h"
 #include "loader/module_plan.h"
 
 namespace {
@@ -69,6 +70,26 @@ int main() {
   Check(BuildModuleStartPlan({Module("")}).status ==
             ModulePlanStatus::kInvalidModuleName,
         "empty module name was accepted");
+
+  kajps5::loader::ElfMetadata parsed_metadata;
+  parsed_metadata.dynamic_info.shared_object_name = "parsed.prx";
+  parsed_metadata.dynamic_info.needed_libraries = {"dependency.prx"};
+  parsed_metadata.dynamic_info.init_array_address = 0x1000;
+  parsed_metadata.dynamic_info.init_array_size = 8;
+  const auto parsed_input = kajps5::loader::MakeModuleDependencyInput(
+      "path/parsed.bin", parsed_metadata);
+  Check(parsed_input.file_name == "path/parsed.bin" &&
+            parsed_input.shared_object_name == "parsed.prx" &&
+            parsed_input.needed_libraries ==
+                std::vector<std::string>({"dependency.prx"}) &&
+            parsed_input.has_initializer,
+        "parsed ELF metadata did not produce a module dependency input");
+
+  parsed_metadata.dynamic_info.init_array_address.reset();
+  const auto incomplete_input = kajps5::loader::MakeModuleDependencyInput(
+      "path/incomplete.bin", parsed_metadata);
+  Check(!incomplete_input.has_initializer,
+        "incomplete initializer metadata marked a module for startup");
 
   std::vector<kajps5::loader::ModuleDependencyInput> too_many(
       kajps5::loader::kMaximumPlannedModules + 1);

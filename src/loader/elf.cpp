@@ -46,9 +46,17 @@ constexpr std::int64_t kDynamicTagRelaSize = 8;
 constexpr std::int64_t kDynamicTagRelaEntrySize = 9;
 constexpr std::int64_t kDynamicTagStringTableSize = 10;
 constexpr std::int64_t kDynamicTagSymbolEntrySize = 11;
+constexpr std::int64_t kDynamicTagInit = 12;
+constexpr std::int64_t kDynamicTagFini = 13;
 constexpr std::int64_t kDynamicTagSharedObjectName = 14;
 constexpr std::int64_t kDynamicTagPltRelocationFormat = 20;
 constexpr std::int64_t kDynamicTagJumpRelocation = 23;
+constexpr std::int64_t kDynamicTagInitArray = 25;
+constexpr std::int64_t kDynamicTagFiniArray = 26;
+constexpr std::int64_t kDynamicTagInitArraySize = 27;
+constexpr std::int64_t kDynamicTagFiniArraySize = 28;
+constexpr std::int64_t kDynamicTagPreinitArray = 32;
+constexpr std::int64_t kDynamicTagPreinitArraySize = 33;
 constexpr std::int64_t kDynamicTagSceExportLibrary = 0x61000013;
 constexpr std::int64_t kDynamicTagSceImportLibrary = 0x61000015;
 constexpr std::int64_t kDynamicTagSceJumpRelocation = 0x61000029;
@@ -205,6 +213,25 @@ const ElfDynamicEntry* FindDynamicEntry(
       metadata.dynamic_entries.begin(), metadata.dynamic_entries.end(),
       [tag](const ElfDynamicEntry& candidate) { return candidate.tag == tag; });
   return entry == metadata.dynamic_entries.end() ? nullptr : &*entry;
+}
+
+void ParseDynamicLifecycleMetadata(ElfMetadata& metadata) {
+  const auto store = [&metadata](std::int64_t tag,
+                                 std::optional<std::uint64_t>& destination) {
+    if (const auto* entry = FindDynamicEntry(metadata, tag); entry != nullptr) {
+      destination = entry->value;
+    }
+  };
+  store(kDynamicTagInit, metadata.dynamic_info.init_function);
+  store(kDynamicTagFini, metadata.dynamic_info.fini_function);
+  store(kDynamicTagPreinitArray,
+        metadata.dynamic_info.preinit_array_address);
+  store(kDynamicTagPreinitArraySize,
+        metadata.dynamic_info.preinit_array_size);
+  store(kDynamicTagInitArray, metadata.dynamic_info.init_array_address);
+  store(kDynamicTagInitArraySize, metadata.dynamic_info.init_array_size);
+  store(kDynamicTagFiniArray, metadata.dynamic_info.fini_array_address);
+  store(kDynamicTagFiniArraySize, metadata.dynamic_info.fini_array_size);
 }
 
 bool HasDynamicEntry(const ElfMetadata& metadata,
@@ -1110,6 +1137,7 @@ ElfParseResult ParseElf64WithLayout(std::span<const std::byte> image,
     if (!terminated) {
       return ParseFailure(ElfError::kUnterminatedDynamicTable);
     }
+    ParseDynamicLifecycleMetadata(metadata);
     auto decoded_string_budget = CalculateDecodedStringBudget(image.size());
     if (const auto error =
             ParseDynamicStrings(image, metadata, decoded_string_budget);

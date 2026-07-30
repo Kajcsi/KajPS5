@@ -150,6 +150,14 @@ struct ElfDynamicInfo {
   std::vector<ElfRelaEntry> relocations;
   std::vector<ElfRelaEntry> plt_relocations;
   std::vector<ElfSymbol> symbols;
+  std::optional<std::uint64_t> init_function;
+  std::optional<std::uint64_t> fini_function;
+  std::optional<std::uint64_t> preinit_array_address;
+  std::optional<std::uint64_t> preinit_array_size;
+  std::optional<std::uint64_t> init_array_address;
+  std::optional<std::uint64_t> init_array_size;
+  std::optional<std::uint64_t> fini_array_address;
+  std::optional<std::uint64_t> fini_array_size;
 };
 
 struct ElfMetadata {

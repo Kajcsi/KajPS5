@@ -41,6 +41,14 @@ constexpr std::int64_t kTagSceStringTable = 0x61000035;
 constexpr std::int64_t kTagSceStringTableSize = 0x61000037;
 constexpr std::int64_t kTagSceSymbolTable = 0x61000039;
 constexpr std::int64_t kTagSceSymbolTableSize = 0x6100003f;
+constexpr std::int64_t kTagInit = 12;
+constexpr std::int64_t kTagFini = 13;
+constexpr std::int64_t kTagInitArray = 25;
+constexpr std::int64_t kTagFiniArray = 26;
+constexpr std::int64_t kTagInitArraySize = 27;
+constexpr std::int64_t kTagFiniArraySize = 28;
+constexpr std::int64_t kTagPreinitArray = 32;
+constexpr std::int64_t kTagPreinitArraySize = 33;
 
 int failures = 0;
 
@@ -192,7 +200,7 @@ std::vector<std::byte> MakeContainedDynamicSelf() {
 
 std::vector<std::byte> MakeLinkedSelf() {
   constexpr std::size_t dynamic_relative = 0x40;
-  constexpr std::size_t dynamic_count = 11;
+  constexpr std::size_t dynamic_count = 19;
   constexpr std::size_t strings_relative = 0x180;
   constexpr std::size_t strings_size = 0x60;
   constexpr std::size_t symbols_relative = 0x240;
@@ -300,7 +308,18 @@ std::vector<std::byte> MakeLinkedSelf() {
                PackModule(0x0040, 1, 2, 1));
   WriteDynamic(image, dynamic, 9, kTagSceImportLibrary,
                PackLibrary(0x1234, 0x0100, 14));
-  WriteDynamic(image, dynamic, 10, 0, 0);
+  WriteDynamic(image, dynamic, 10, kTagInit, kLinkedLoadAddress);
+  WriteDynamic(image, dynamic, 11, kTagFini, kLinkedLoadAddress + 0x20);
+  WriteDynamic(image, dynamic, 12, kTagInitArray,
+               kLinkedLoadAddress + targets_relative);
+  WriteDynamic(image, dynamic, 13, kTagInitArraySize, 8);
+  WriteDynamic(image, dynamic, 14, kTagFiniArray,
+               kLinkedLoadAddress + targets_relative);
+  WriteDynamic(image, dynamic, 15, kTagFiniArraySize, 8);
+  WriteDynamic(image, dynamic, 16, kTagPreinitArray,
+               kLinkedLoadAddress + targets_relative);
+  WriteDynamic(image, dynamic, 17, kTagPreinitArraySize, 8);
+  WriteDynamic(image, dynamic, 18, 0, 0);
 
   const auto strings = kLinkedPayloadOffset + strings_relative;
   WriteString(image, strings, 1, "kernelModule");
@@ -409,7 +428,21 @@ int main() {
             launch.metadata.tls.has_value() &&
             launch.metadata.tls->image_address == kLinkedLoadAddress + 0x340 &&
             launch.metadata.tls->initial_size == 0x10 &&
-            launch.metadata.tls->memory_size == 0x20,
+            launch.metadata.tls->memory_size == 0x20 &&
+            launch.metadata.init_function == kLinkedLoadAddress &&
+            launch.metadata.fini_function == kLinkedLoadAddress + 0x20 &&
+            launch.metadata.preinit_array.has_value() &&
+            launch.metadata.preinit_array->address ==
+                kLinkedLoadAddress + 0x300 &&
+            launch.metadata.preinit_array->entry_count == 1 &&
+            launch.metadata.init_array.has_value() &&
+            launch.metadata.init_array->address ==
+                kLinkedLoadAddress + 0x300 &&
+            launch.metadata.init_array->entry_count == 1 &&
+            launch.metadata.fini_array.has_value() &&
+            launch.metadata.fini_array->address ==
+                kLinkedLoadAddress + 0x300 &&
+            launch.metadata.fini_array->entry_count == 1,
         "synthetic PS5 SELF launch metadata is incorrect");
 
   Check(static_cast<bool>(ParseExecutable64(MakeSelf(0x802))),

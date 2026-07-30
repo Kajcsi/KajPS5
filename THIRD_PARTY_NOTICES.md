@@ -33,7 +33,8 @@ process-parameter, TLS, module-order, and `R_X86_64_DTPMOD64` behavior and
 SharpEmu's split between initialized TLS bytes and per-thread zero fill. It
 adapts SharpEmu's checked TLS module identity, structural SELF checks, checked
 payload fallbacks, mixed standard and SCE dynamic fields, symbol-size fallback,
-and handling of already-dumped payloads.
+initializer discovery, and handling of already-dumped payloads. Dynamic
+startup and shutdown tags and arrays follow KytyPS5's runtime-linker model.
 
 The reviewed sources are KytyPS5 `src/loader/elf.h` and
 `src/loader/runtimeLinker.cpp` at commit

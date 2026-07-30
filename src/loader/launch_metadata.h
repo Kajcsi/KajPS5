@@ -23,6 +23,13 @@ enum class LaunchMetadataStatus {
   kProcessParametersNotMapped,
   kMultipleTlsSegments,
   kTlsNotMapped,
+  kInitFunctionNotExecutable,
+  kFiniFunctionNotExecutable,
+  kIncompletePreinitArray,
+  kIncompleteInitArray,
+  kIncompleteFiniArray,
+  kInvalidFunctionArraySize,
+  kFunctionArrayNotMapped,
 };
 
 struct ExecutableTlsMetadata {
@@ -32,10 +39,20 @@ struct ExecutableTlsMetadata {
   std::uint64_t alignment = 0;
 };
 
+struct ExecutableFunctionArrayMetadata {
+  std::uint64_t address = 0;
+  std::uint64_t entry_count = 0;
+};
+
 struct ExecutableLaunchMetadata {
   std::optional<std::uint64_t> entry_point;
   std::optional<std::uint64_t> process_parameters;
   std::optional<ExecutableTlsMetadata> tls;
+  std::optional<std::uint64_t> init_function;
+  std::optional<std::uint64_t> fini_function;
+  std::optional<ExecutableFunctionArrayMetadata> preinit_array;
+  std::optional<ExecutableFunctionArrayMetadata> init_array;
+  std::optional<ExecutableFunctionArrayMetadata> fini_array;
 };
 
 struct LaunchMetadataResult {

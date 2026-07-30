@@ -48,6 +48,14 @@ kajps5::loader::ElfMetadata MakeLaunchMetadata() {
       kProgramTypeSceProcessParameters, 4, 0x1100, 0x40, 0x40, 8));
   metadata.program_headers.push_back(
       MakeHeader(kProgramTypeTls, 4, 0x1200, 0x20, 0x40, 0x10));
+  metadata.dynamic_info.init_function = 0x1020;
+  metadata.dynamic_info.fini_function = 0x1030;
+  metadata.dynamic_info.preinit_array_address = 0x1300;
+  metadata.dynamic_info.preinit_array_size = 8;
+  metadata.dynamic_info.init_array_address = 0x1310;
+  metadata.dynamic_info.init_array_size = 16;
+  metadata.dynamic_info.fini_array_address = 0x1320;
+  metadata.dynamic_info.fini_array_size = 8;
   return metadata;
 }
 
@@ -65,7 +73,16 @@ int main() {
             valid.metadata.tls->image_address == 0x11200 &&
             valid.metadata.tls->initial_size == 0x20 &&
             valid.metadata.tls->memory_size == 0x40 &&
-            valid.metadata.tls->alignment == 0x10,
+            valid.metadata.tls->alignment == 0x10 &&
+            valid.metadata.init_function == 0x11020 &&
+            valid.metadata.fini_function == 0x11030 &&
+            valid.metadata.preinit_array.has_value() &&
+            valid.metadata.preinit_array->address == 0x11300 &&
+            valid.metadata.preinit_array->entry_count == 1 &&
+            valid.metadata.init_array.has_value() &&
+            valid.metadata.init_array->entry_count == 2 &&
+            valid.metadata.fini_array.has_value() &&
+            valid.metadata.fini_array->entry_count == 1,
         "valid launch metadata was resolved incorrectly");
 
   const std::string expected_trace =
@@ -78,7 +95,20 @@ int main() {
       "launch.tls_address=0x0000000000011200\n"
       "launch.tls_initial_size=32\n"
       "launch.tls_memory_size=64\n"
-      "launch.tls_alignment=16\n";
+      "launch.tls_alignment=16\n"
+      "launch.has_init_function=1\n"
+      "launch.init_function=0x0000000000011020\n"
+      "launch.has_fini_function=1\n"
+      "launch.fini_function=0x0000000000011030\n"
+      "launch.has_preinit_array=1\n"
+      "launch.preinit_array_address=0x0000000000011300\n"
+      "launch.preinit_array_count=1\n"
+      "launch.has_init_array=1\n"
+      "launch.init_array_address=0x0000000000011310\n"
+      "launch.init_array_count=2\n"
+      "launch.has_fini_array=1\n"
+      "launch.fini_array_address=0x0000000000011320\n"
+      "launch.fini_array_count=1\n";
   Check(FormatLaunchMetadataTrace(valid) == expected_trace,
         "stable launch metadata trace changed");
 
@@ -136,11 +166,64 @@ int main() {
             zero_fill.metadata.tls->memory_size == 0x100,
         "TLS zero-fill area was incorrectly required in a load segment");
 
+  auto invalid_init = MakeLaunchMetadata();
+  invalid_init.dynamic_info.init_function = 0x2000;
+  Check(AnalyzeLaunchMetadata(invalid_init).status ==
+            LaunchMetadataStatus::kInitFunctionNotExecutable,
+        "invalid init function was accepted");
+
+  auto invalid_fini = MakeLaunchMetadata();
+  invalid_fini.dynamic_info.fini_function = 0x2000;
+  Check(AnalyzeLaunchMetadata(invalid_fini).status ==
+            LaunchMetadataStatus::kFiniFunctionNotExecutable,
+        "invalid fini function was accepted");
+
+  auto incomplete_preinit = MakeLaunchMetadata();
+  incomplete_preinit.dynamic_info.preinit_array_size.reset();
+  Check(AnalyzeLaunchMetadata(incomplete_preinit).status ==
+            LaunchMetadataStatus::kIncompletePreinitArray,
+        "incomplete preinit array was accepted");
+
+  auto incomplete_init = MakeLaunchMetadata();
+  incomplete_init.dynamic_info.init_array_address.reset();
+  Check(AnalyzeLaunchMetadata(incomplete_init).status ==
+            LaunchMetadataStatus::kIncompleteInitArray,
+        "incomplete init array was accepted");
+
+  auto incomplete_fini = MakeLaunchMetadata();
+  incomplete_fini.dynamic_info.fini_array_size.reset();
+  Check(AnalyzeLaunchMetadata(incomplete_fini).status ==
+            LaunchMetadataStatus::kIncompleteFiniArray,
+        "incomplete fini array was accepted");
+
+  auto invalid_array_size = MakeLaunchMetadata();
+  invalid_array_size.dynamic_info.init_array_size = 7;
+  Check(AnalyzeLaunchMetadata(invalid_array_size).status ==
+            LaunchMetadataStatus::kInvalidFunctionArraySize,
+        "invalid function-array size was accepted");
+
+  auto unmapped_array = MakeLaunchMetadata();
+  unmapped_array.dynamic_info.init_array_address = 0x2000;
+  Check(AnalyzeLaunchMetadata(unmapped_array).status ==
+            LaunchMetadataStatus::kFunctionArrayNotMapped,
+        "unmapped function array was accepted");
+
+  auto zero_arrays = MakeLaunchMetadata();
+  zero_arrays.dynamic_info.preinit_array_address.reset();
+  zero_arrays.dynamic_info.preinit_array_size = 0;
+  zero_arrays.dynamic_info.init_array_address = 0;
+  zero_arrays.dynamic_info.init_array_size.reset();
+  const auto empty_arrays = AnalyzeLaunchMetadata(zero_arrays);
+  Check(empty_arrays && !empty_arrays.metadata.preinit_array.has_value() &&
+            !empty_arrays.metadata.init_array.has_value(),
+        "zero-valued function-array tags were rejected");
+
   auto optional_fields = MakeLaunchMetadata();
   optional_fields.entry_point = 0;
   optional_fields.program_headers.erase(
       optional_fields.program_headers.begin() + 1,
       optional_fields.program_headers.end());
+  optional_fields.dynamic_info = {};
   const auto optional = AnalyzeLaunchMetadata(optional_fields);
   Check(optional && !optional.metadata.entry_point.has_value() &&
             !optional.metadata.process_parameters.has_value() &&

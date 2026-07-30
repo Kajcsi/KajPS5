@@ -126,6 +126,82 @@ LaunchMetadataResult AnalyzeLaunchMetadata(const ElfMetadata& metadata,
         image_address, initial_size, tls->memory_size, tls->alignment};
   }
 
+  const auto resolve_function =
+      [&metadata, load_bias, &result](
+          const std::optional<std::uint64_t>& source,
+          std::optional<std::uint64_t>& destination,
+          LaunchMetadataStatus invalid_status) {
+        if (!source.has_value() || *source == 0) {
+          return true;
+        }
+        if (!RangeWithinLoad(metadata, *source, 1, true)) {
+          result.status = invalid_status;
+          return false;
+        }
+        std::uint64_t address = 0;
+        if (!AddAddress(*source, load_bias, address)) {
+          result.status = LaunchMetadataStatus::kAddressOverflow;
+          return false;
+        }
+        destination = address;
+        return true;
+      };
+  if (!resolve_function(metadata.dynamic_info.init_function,
+                        result.metadata.init_function,
+                        LaunchMetadataStatus::kInitFunctionNotExecutable) ||
+      !resolve_function(metadata.dynamic_info.fini_function,
+                        result.metadata.fini_function,
+                        LaunchMetadataStatus::kFiniFunctionNotExecutable)) {
+    return result;
+  }
+
+  const auto resolve_array =
+      [&metadata, load_bias, &result](
+          const std::optional<std::uint64_t>& source_address,
+          const std::optional<std::uint64_t>& source_size,
+          std::optional<ExecutableFunctionArrayMetadata>& destination,
+          LaunchMetadataStatus incomplete_status) {
+        const auto address = source_address.value_or(0);
+        const auto size = source_size.value_or(0);
+        if (address == 0 || size == 0) {
+          if (address == 0 && size == 0) {
+            return true;
+          }
+          result.status = incomplete_status;
+          return false;
+        }
+        if (size % sizeof(std::uint64_t) != 0) {
+          result.status = LaunchMetadataStatus::kInvalidFunctionArraySize;
+          return false;
+        }
+        if (!RangeWithinLoad(metadata, address, size, false)) {
+          result.status = LaunchMetadataStatus::kFunctionArrayNotMapped;
+          return false;
+        }
+        std::uint64_t image_address = 0;
+        if (!AddAddress(address, load_bias, image_address)) {
+          result.status = LaunchMetadataStatus::kAddressOverflow;
+          return false;
+        }
+        destination = ExecutableFunctionArrayMetadata{
+            image_address, size / sizeof(std::uint64_t)};
+        return true;
+      };
+  if (!resolve_array(metadata.dynamic_info.preinit_array_address,
+                     metadata.dynamic_info.preinit_array_size,
+                     result.metadata.preinit_array,
+                     LaunchMetadataStatus::kIncompletePreinitArray) ||
+      !resolve_array(metadata.dynamic_info.init_array_address,
+                     metadata.dynamic_info.init_array_size,
+                     result.metadata.init_array,
+                     LaunchMetadataStatus::kIncompleteInitArray) ||
+      !resolve_array(metadata.dynamic_info.fini_array_address,
+                     metadata.dynamic_info.fini_array_size,
+                     result.metadata.fini_array,
+                     LaunchMetadataStatus::kIncompleteFiniArray)) {
+    return result;
+  }
+
   return result;
 }
 
@@ -145,6 +221,20 @@ std::string_view LaunchMetadataStatusName(
     case LaunchMetadataStatus::kMultipleTlsSegments:
       return "multiple-tls-segments";
     case LaunchMetadataStatus::kTlsNotMapped: return "tls-not-mapped";
+    case LaunchMetadataStatus::kInitFunctionNotExecutable:
+      return "init-function-not-executable";
+    case LaunchMetadataStatus::kFiniFunctionNotExecutable:
+      return "fini-function-not-executable";
+    case LaunchMetadataStatus::kIncompletePreinitArray:
+      return "incomplete-preinit-array";
+    case LaunchMetadataStatus::kIncompleteInitArray:
+      return "incomplete-init-array";
+    case LaunchMetadataStatus::kIncompleteFiniArray:
+      return "incomplete-fini-array";
+    case LaunchMetadataStatus::kInvalidFunctionArraySize:
+      return "invalid-function-array-size";
+    case LaunchMetadataStatus::kFunctionArrayNotMapped:
+      return "function-array-not-mapped";
   }
   return "unknown";
 }
@@ -182,7 +272,33 @@ std::string FormatLaunchMetadataTrace(const LaunchMetadataResult& result) {
         << "launch.tls_alignment="
         << (result.metadata.tls.has_value() ? result.metadata.tls->alignment
                                             : 0)
-        << '\n';
+        << '\n'
+        << "launch.has_init_function="
+        << (result.metadata.init_function.has_value() ? 1 : 0) << '\n'
+        << "launch.init_function=";
+  WriteHex64(trace, result.metadata.init_function.value_or(0));
+  trace << '\n'
+        << "launch.has_fini_function="
+        << (result.metadata.fini_function.has_value() ? 1 : 0) << '\n'
+        << "launch.fini_function=";
+  WriteHex64(trace, result.metadata.fini_function.value_or(0));
+  const auto write_array = [&trace](
+                               std::string_view name,
+                               const std::optional<
+                                   ExecutableFunctionArrayMetadata>& array) {
+    trace << '\n'
+          << "launch.has_" << name << "=" << (array.has_value() ? 1 : 0)
+          << '\n'
+          << "launch." << name << "_address=";
+    WriteHex64(trace, array.has_value() ? array->address : 0);
+    trace << '\n'
+          << "launch." << name << "_count="
+          << (array.has_value() ? array->entry_count : 0);
+  };
+  write_array("preinit_array", result.metadata.preinit_array);
+  write_array("init_array", result.metadata.init_array);
+  write_array("fini_array", result.metadata.fini_array);
+  trace << '\n';
   return trace.str();
 }
 

@@ -24,6 +24,7 @@
 - [x] Resolve PS5 dynamic metadata from dynlib-data or load segments.
 - [x] Run a recognized SELF through checked loading and relocation planning.
 - [x] Validate entry-point, process-parameter, and TLS template metadata.
+- [x] Validate module startup and shutdown functions and function arrays.
 
 ## Stage 2: CPU and kernel
 

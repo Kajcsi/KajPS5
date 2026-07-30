@@ -5,6 +5,8 @@
 
 #include "loader/module_plan.h"
 
+#include "loader/elf.h"
+
 #include <algorithm>
 #include <set>
 #include <unordered_map>
@@ -133,6 +135,25 @@ ModuleStartPlanResult BuildModuleStartPlan(
     }
   }
   return result;
+}
+
+ModuleDependencyInput MakeModuleDependencyInput(std::string file_name,
+                                                const ElfMetadata& metadata) {
+  ModuleDependencyInput input;
+  input.file_name = std::move(file_name);
+  input.shared_object_name = metadata.dynamic_info.shared_object_name;
+  input.needed_libraries = metadata.dynamic_info.needed_libraries;
+  const auto has_array = [](const std::optional<std::uint64_t>& address,
+                            const std::optional<std::uint64_t>& size) {
+    return address.value_or(0) != 0 && size.value_or(0) != 0;
+  };
+  input.has_initializer =
+      metadata.dynamic_info.init_function.value_or(0) != 0 ||
+      has_array(metadata.dynamic_info.preinit_array_address,
+                metadata.dynamic_info.preinit_array_size) ||
+      has_array(metadata.dynamic_info.init_array_address,
+                metadata.dynamic_info.init_array_size);
+  return input;
 }
 
 std::string_view ModulePlanStatusName(ModulePlanStatus status) noexcept {
