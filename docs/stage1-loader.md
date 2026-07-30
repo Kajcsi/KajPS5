@@ -30,6 +30,13 @@ its read, write, or execute check before access begins. The ELF loader rejects
 overlapping segments and mapping conflicts before it creates a region, then
 keeps each segment's `R/W/X` flags while copying its data.
 
+The loader can add one checked runtime bias to every load segment. It rejects
+an overflowing or conflicting biased range before creating any mapping and
+keeps parsed ELF addresses unchanged. The same bias then feeds relocation,
+launch metadata, exports, and lifecycle planning. This follows KytyPS5's
+runtime image-base flow and prepares one coherent address space for direct
+native execution.
+
 The public test fixture is built from constants in
 `tests/elf_loader_test.cpp`; it contains no external or proprietary bytes. The
 tests cover metadata, file copies, zero fill, truncated input, integer

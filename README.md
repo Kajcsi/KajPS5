@@ -29,9 +29,11 @@ The current core includes:
   `PT_LOAD` segment's read, write, and execute flags. The inspection path also
   reports unresolved imports and validates the entry point, process
   parameters, TLS template, and module startup and shutdown metadata without
-  running code. The same trace measures how many required import relocations
-  and unique imports match the built-in HLE handlers. After relocation, it
-  builds bounded startup and shutdown call lists from checked guest memory.
+  running code. A checked load bias can place every segment at a selected
+  runtime base before relocation. The same trace measures how many required
+  import relocations and unique imports match the built-in HLE handlers. After
+  relocation, it builds bounded startup and shutdown call lists from checked
+  guest memory.
 - Versioned PS5 NID linking between supplied modules and library-scoped HLE
   dispatch, with bounded diagnostics for unresolved symbols, deterministic
   dependency order, and checked guest register and memory access.

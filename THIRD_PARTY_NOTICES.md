@@ -62,6 +62,12 @@ The SharpEmu reference file states:
 
 No upstream loader source was copied.
 
+The checked ELF load-bias path in `src/loader/elf.cpp` and its loader and
+relocation tests follows the nonzero runtime image-base flow in pinned KytyPS5
+`src/loader/runtimeLinker.cpp`. It keeps KajPS5's parsed metadata unchanged and
+uses the existing checked relocation boundary. No upstream loader source was
+copied.
+
 Transactional guest-memory protection and unmap behavior in
 `src/core/memory/guest_memory.cpp` and `tests/guest_memory_test.cpp` follows
 behavior observed in KytyPS5 `src/common/virtualMemory.h` and

@@ -202,6 +202,19 @@ int main() {
   std::array<std::byte, 1> gap_byte{};
   Check(!memory.Read(0x1008, gap_byte), "unmapped load gap was readable");
 
+  constexpr std::uint64_t kLoadBias = 0x10000000;
+  GuestMemory biased_memory(kLoadBias + 0x1000, 0x100,
+                            GuestMemoryProtection::kNone);
+  const auto biased_loaded = LoadElf64(image, biased_memory, kLoadBias);
+  std::array<std::byte, 8> biased_bytes{};
+  Check(biased_loaded &&
+            biased_memory.Read(kLoadBias + 0x1000, biased_bytes) &&
+            biased_bytes == expected &&
+            biased_memory.CanExecute(kLoadBias + 0x1000, 8),
+        "load bias did not move the complete executable segment");
+  Check(!biased_memory.IsMapped(0x1000, 1),
+        "biased load also mapped the raw ELF address");
+
   auto multi_segment_image = image;
   const auto second_header = kLoadHeaderOffset + 56;
   Write32(multi_segment_image, second_header, 1);
@@ -293,6 +306,14 @@ int main() {
         "out-of-range load returned the wrong error");
   Check(short_memory.regions().empty(),
         "rejected load created a partial mapping");
+
+  GuestMemory overflow_memory(0x1000, 0x100,
+                              GuestMemoryProtection::kNone);
+  const auto overflow_load = LoadElf64(
+      image, overflow_memory, std::numeric_limits<std::uint64_t>::max());
+  Check(overflow_load.error == ElfError::kSegmentAddressRangeOverflow &&
+            overflow_memory.regions().empty(),
+        "overflowing load bias changed guest mappings");
 
   GuestMemory conflicting_memory(0x1000, 0x200,
                                  GuestMemoryProtection::kNone);

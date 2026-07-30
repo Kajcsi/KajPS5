@@ -166,6 +166,24 @@ int main() {
   Check(relocated == expected_relocated,
         "relative relocation wrote the wrong value");
 
+  constexpr std::uint64_t kLoadBias = 0x10000000;
+  kajps5::memory::GuestMemory biased_memory(
+      kLoadBias + kRelaAddress,
+      static_cast<std::size_t>(kTargetAddress - kRelaAddress + 8),
+      kajps5::memory::GuestMemoryProtection::kNone);
+  const auto biased_load =
+      kajps5::loader::LoadElf64(image, biased_memory, kLoadBias);
+  const auto biased_relocation = kajps5::loader::ApplyRelativeRelocations(
+      biased_load.metadata, biased_memory, kLoadBias);
+  std::array<std::byte, 8> biased_value{};
+  const std::array expected_biased_value = {
+      std::byte{0xfc}, std::byte{0xff}, std::byte{0xff}, std::byte{0x0f},
+      std::byte{0},    std::byte{0},    std::byte{0},    std::byte{0}};
+  Check(biased_load && biased_relocation &&
+            biased_memory.Read(kLoadBias + kTargetAddress, biased_value) &&
+            biased_value == expected_biased_value,
+        "load bias and relative relocation did not use the same address");
+
   auto invalid_symbol = loaded.metadata;
   invalid_symbol.dynamic_info.relocations[0].info =
       (std::uint64_t{1} << 32U) | 8U;

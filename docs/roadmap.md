@@ -13,6 +13,7 @@
 - [x] Validate all guest address ranges and access permissions.
 - [x] Add transactional guest protection and unmap changes.
 - [x] Load one small public test program.
+- [x] Apply a checked runtime load bias to complete ELF segment mappings.
 - [x] Produce a stable loader trace.
 - [x] Validate and record raw ELF64 dynamic-table entries.
 - [x] Resolve checked standard ELF dynamic strings.

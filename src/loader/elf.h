@@ -214,9 +214,11 @@ struct ElfLoadRangeResult {
 [[nodiscard]] ElfLoadRangeResult CalculateElfLoadRange(
     const ElfMetadata& metadata) noexcept;
 [[nodiscard]] ElfLoadResult LoadElf64(std::span<const std::byte> image,
-                                      memory::GuestMemory& memory);
+                                      memory::GuestMemory& memory,
+                                      std::uint64_t load_bias = 0);
 [[nodiscard]] ElfLoadResult LoadExecutable64(std::span<const std::byte> image,
-                                             memory::GuestMemory& memory);
+                                             memory::GuestMemory& memory,
+                                             std::uint64_t load_bias = 0);
 [[nodiscard]] std::string_view ElfErrorName(ElfError error) noexcept;
 
 }  // namespace kajps5::loader
