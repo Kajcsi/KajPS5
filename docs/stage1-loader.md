@@ -141,6 +141,15 @@ remaining cycle. It does not scan directories or assume that firmware is
 available. A caller can combine legally supplied modules with the same HLE
 registry used for unresolved system libraries.
 
+The module export registry follows KytyPS5's split between imported and
+exported symbols. It indexes nonzero global or weak function, object, and
+untyped exports. Each key includes the decoded NID, library name and version,
+and module name and version. A consumer relocation must match the full PS5
+scope. Unscoped lookup succeeds only for one matching export. Registration is
+bounded and transactional, so a duplicate or overflowing address adds no
+partial module. This lets legally supplied modules link to each other without
+changing the HLE registry or guest-memory model.
+
 The separate controlled native tests are documented in `stage2-cpu.md` and
 `stage2-hle.md`.
 

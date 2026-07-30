@@ -46,6 +46,7 @@
 - [x] Resolve scoped PS5 NID symbols through parsed module and library IDs.
 - [x] Add bounded stable diagnostics for unresolved imports.
 - [x] Add deterministic dependency order for supplied module initializers.
+- [x] Resolve versioned exports between supplied PS5 modules.
 - [x] Apply checked TLS module-ID relocations after TLS registration.
 - [x] Add a platform-neutral checked HLE call context.
 - [x] Add deterministic library-scoped HLE handler dispatch.

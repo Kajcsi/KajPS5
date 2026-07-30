@@ -58,6 +58,9 @@ class ImportResolver {
   [[nodiscard]] virtual std::optional<std::uint64_t> ResolveImport(
       std::string_view symbol,
       std::span<const std::string> library_order) const = 0;
+  [[nodiscard]] virtual std::optional<std::uint64_t> ResolveScopedImport(
+      std::string_view symbol, const ElfLibraryIdentity& library,
+      const ElfModuleIdentity& module) const;
 };
 
 [[nodiscard]] RelocationResult ApplyRelativeRelocations(

@@ -31,9 +31,9 @@ The current core includes:
   parameters, TLS template, and module startup and shutdown metadata without
   running code. After relocation, it builds bounded startup and shutdown call
   lists from checked guest memory.
-- Library-scoped PS5 NID import linking and HLE dispatch, with bounded
-  diagnostics for unresolved symbols, deterministic dependency order for
-  supplied modules, and checked guest register and memory access.
+- Versioned PS5 NID linking between supplied modules and library-scoped HLE
+  dispatch, with bounded diagnostics for unresolved symbols, deterministic
+  dependency order, and checked guest register and memory access.
 - Typed kernel handles and one cooperative scheduler for ready, running,
   blocked, and exited guest threads.
 - Event flags, semaphores, user-event queues, portable clocks, guest memory

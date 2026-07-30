@@ -12,6 +12,8 @@
 #include <utility>
 #include <vector>
 
+#include "loader/sce_symbol.h"
+
 namespace kajps5::loader {
 namespace {
 
@@ -41,31 +43,9 @@ struct PlannedRelocation {
 struct ImportReference {
   std::string_view nid;
   const ElfLibraryIdentity* library = nullptr;
+  const ElfModuleIdentity* module = nullptr;
   bool valid = false;
 };
-
-std::optional<std::uint16_t> DecodeSceId(std::string_view value) noexcept {
-  constexpr std::string_view alphabet =
-      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+-";
-  if (value.empty() || value.size() > 3) {
-    return std::nullopt;
-  }
-
-  std::uint32_t decoded = 0;
-  for (const auto character : value) {
-    const auto digit = alphabet.find(character);
-    if (digit == std::string_view::npos) {
-      return std::nullopt;
-    }
-    decoded = (decoded << 6U) | static_cast<std::uint32_t>(digit);
-  }
-  if (decoded > std::numeric_limits<std::uint16_t>::max() ||
-      (value.size() == 2 && decoded < 0x40U) ||
-      (value.size() == 3 && decoded < 0x1000U)) {
-    return std::nullopt;
-  }
-  return static_cast<std::uint16_t>(decoded);
-}
 
 template <typename Identity>
 const Identity* FindIdentity(std::uint16_t id,
@@ -87,29 +67,21 @@ ImportReference ParseImportReference(const ElfMetadata& metadata,
                                      std::string_view symbol) noexcept {
   const auto first_separator = symbol.find('#');
   if (first_separator == std::string_view::npos) {
-    return {symbol, nullptr, !symbol.empty()};
+    return {symbol, nullptr, nullptr, !symbol.empty()};
   }
-
-  const auto nid = symbol.substr(0, first_separator);
-  const auto second_separator = symbol.find('#', first_separator + 1);
-  if (second_separator == std::string_view::npos ||
-      symbol.find('#', second_separator + 1) != std::string_view::npos) {
-    return {nid, nullptr, false};
-  }
-  const auto library_id = DecodeSceId(symbol.substr(
-      first_separator + 1, second_separator - first_separator - 1));
-  const auto module_id = DecodeSceId(symbol.substr(second_separator + 1));
-  if (!library_id.has_value() || !module_id.has_value()) {
-    return {nid, nullptr, false};
+  const auto parsed = ParseSceSymbolReference(symbol);
+  if (!parsed.has_value()) {
+    return {symbol.substr(0, first_separator), nullptr, nullptr, false};
   }
 
   const auto* library = FindIdentity(
-      *library_id, metadata.dynamic_info.import_libraries,
+      parsed->library_id, metadata.dynamic_info.import_libraries,
       metadata.dynamic_info.export_libraries);
   const auto* module = FindIdentity(
-      *module_id, metadata.dynamic_info.import_modules,
+      parsed->module_id, metadata.dynamic_info.import_modules,
       metadata.dynamic_info.export_modules);
-  return {nid, library, library != nullptr && module != nullptr};
+  return {parsed->nid, library, module,
+          library != nullptr && module != nullptr};
 }
 
 constexpr bool IsSymbolRelocation(std::uint32_t type) noexcept {
@@ -251,10 +223,9 @@ RelocationStatus PlanTable(const std::vector<ElfRelaEntry>& entries,
               {entry.symbol(), type, target, symbol->name});
           continue;
         }
-        if (reference.library != nullptr) {
-          const std::span<const std::string> library_scope(
-              &reference.library->name, 1);
-          resolved = resolver->ResolveImport(reference.nid, library_scope);
+        if (reference.library != nullptr && reference.module != nullptr) {
+          resolved = resolver->ResolveScopedImport(
+              reference.nid, *reference.library, *reference.module);
         } else {
           resolved = resolver->ResolveImport(
               reference.nid, metadata.dynamic_info.needed_libraries);
@@ -363,6 +334,14 @@ RelocationResult ApplyRelocationsInternal(const ElfMetadata& metadata,
 }
 
 }  // namespace
+
+std::optional<std::uint64_t> ImportResolver::ResolveScopedImport(
+    std::string_view symbol, const ElfLibraryIdentity& library,
+    const ElfModuleIdentity& module) const {
+  (void)module;
+  return ResolveImport(symbol,
+                       std::span<const std::string>(&library.name, 1));
+}
 
 RelocationResult ApplyRelativeRelocations(const ElfMetadata& metadata,
                                           memory::GuestMemory& memory,

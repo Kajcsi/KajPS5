@@ -23,9 +23,11 @@ add_library(kajps5_core STATIC
   loader/elf_trace.cpp
   loader/launch_metadata.cpp
   loader/lifecycle_plan.cpp
+  loader/module_export_registry.cpp
   loader/module_plan.cpp
   loader/relocation_trace.cpp
   loader/relocator.cpp
+  loader/sce_symbol.cpp
 )
 
 target_include_directories(kajps5_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
