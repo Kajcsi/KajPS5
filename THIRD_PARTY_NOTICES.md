@@ -160,25 +160,31 @@ The SharpEmu reference files state:
 
 No upstream file-service, import-resolver, or stub source was copied.
 
-## Semaphores, event flags, and event queues
+## Pthreads
 
 The pthread state in `src/kernel/pthread.cpp`, its handlers in
 `src/hle/kernel_pthread_exports.cpp`, and
 `tests/hle_kernel_pthread_exports_test.cpp` adapt behavior from KytyPS5
 `src/kernel/pthread.h`, `src/kernel/pthread.cpp`, and `src/libs/libKernel.cpp`
 at commit `f6e01e54031a3c615f089f061a4eab2f3c59acba`, and SharpEmu
-`src/SharpEmu.Libs/Kernel/KernelPthreadCompatExports.cs` and
+`src/SharpEmu.Libs/Kernel/KernelExports.cs`,
+`src/SharpEmu.Libs/Kernel/KernelPthreadCompatExports.cs`, and
 `src/SharpEmu.Libs/Kernel/KernelPthreadExtendedCompatExports.cs` at commit
 `d5108e854d609808f17093a6f5dbbc711d09ad2e`. Attribute defaults, the 16 KiB
 minimum stack, the 256-key limit, and POSIX error results follow KytyPS5.
 Synthetic guest attribute handles, checked guest writes, and guest-thread TLS
-isolation adapt SharpEmu behavior. The SharpEmu files state:
+isolation adapt SharpEmu behavior. Thread creation keeps KytyPS5's entry,
+argument, attribute, and return-value model while adapting SharpEmu's checked
+guest output and shared-scheduler start, join, and exit flow. The SharpEmu
+files state:
 
 `Copyright (C) 2026 SharpEmu Emulator Project`
 
 Both upstreams are GPL-2.0-or-later. No upstream pthread source was copied
 verbatim, and KajPS5 keeps all pthread state in its one kernel runtime and
 scheduler.
+
+## Semaphores, event flags, and event queues
 
 The non-blocking semaphore handlers in
 `src/hle/kernel_semaphore_exports.cpp` and

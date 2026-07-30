@@ -10,6 +10,7 @@
 #include <map>
 #include <mutex>
 #include <optional>
+#include <string>
 
 #include "kernel/guest_scheduler.h"
 #include "kernel/status.h"
@@ -61,6 +62,20 @@ struct PthreadSpecificResult {
   }
 };
 
+struct PthreadThreadCreateResult {
+  KernelStatus status = KernelStatus::kOk;
+  KernelHandle handle = kInvalidKernelHandle;
+
+  [[nodiscard]] explicit operator bool() const noexcept {
+    return status == KernelStatus::kOk;
+  }
+};
+
+struct PthreadThreadSnapshot {
+  KernelHandle handle = kInvalidKernelHandle;
+  PthreadAttribute attributes;
+};
+
 class PthreadService final {
  public:
   explicit PthreadService(GuestScheduler& scheduler) noexcept;
@@ -74,6 +89,15 @@ class PthreadService final {
                                                    std::uint64_t stack_size);
   [[nodiscard]] std::optional<PthreadAttribute> GetAttribute(
       std::uint64_t handle) const;
+
+  [[nodiscard]] PthreadThreadCreateResult CreateThread(
+      std::string name, std::uint64_t attribute_handle,
+      std::uint64_t entry_address, std::uint64_t argument);
+  [[nodiscard]] bool DiscardReadyThread(KernelHandle handle);
+  [[nodiscard]] GuestThreadJoinResult JoinThread(KernelHandle handle);
+  [[nodiscard]] bool ExitCurrent(std::uint64_t exit_value);
+  [[nodiscard]] std::optional<PthreadThreadSnapshot> GetThread(
+      KernelHandle handle) const;
 
   [[nodiscard]] PthreadKeyCreateResult CreateKey(
       std::uint64_t destructor_address);
@@ -96,6 +120,7 @@ class PthreadService final {
   GuestScheduler& scheduler_;
   mutable std::mutex mutex_;
   std::map<std::uint64_t, PthreadAttribute> attributes_;
+  std::map<KernelHandle, PthreadThreadSnapshot> threads_;
   std::array<std::optional<KeyState>, kMaximumPthreadKeys> keys_{};
   std::map<KernelHandle, std::map<std::uint32_t, std::uint64_t>>
       specific_values_;

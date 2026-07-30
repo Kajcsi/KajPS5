@@ -47,6 +47,8 @@
 - [x] Add deterministic thread-exit joins.
 - [x] Add checked pthread attributes, bounded TLS keys, and scheduler-aware
       thread identity and yielding.
+- [x] Preserve pthread entry points and arguments across checked create, join,
+      and exit calls.
 - [x] Add deterministic library-scoped HLE import lookup.
 - [x] Connect checked import lookup to standard relocation targets.
 - [x] Resolve scoped PS5 NID symbols through parsed module and library IDs.

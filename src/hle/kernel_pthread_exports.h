@@ -28,6 +28,22 @@ inline constexpr auto kPosixPthreadYieldName = "pthread_yield";
 inline constexpr auto kPosixPthreadYieldNid = "B5GmVDKwpn0";
 inline constexpr auto kKernelPthreadYieldName = "scePthreadYield";
 inline constexpr auto kKernelPthreadYieldNid = "T72hz6ffq08";
+inline constexpr auto kPosixPthreadCreateName = "pthread_create";
+inline constexpr auto kPosixPthreadCreateNid = "OxhIB8LB-PQ";
+inline constexpr auto kPosixPthreadCreateNameNpName =
+    "pthread_create_name_np";
+inline constexpr auto kPosixPthreadCreateNameNpNid = "Jmi+9w9u0E4";
+inline constexpr auto kKernelPthreadCreateName = "scePthreadCreate";
+inline constexpr auto kKernelPthreadCreateNid = "6UgtwV+0zb4";
+inline constexpr auto kPosixPthreadJoinName = "pthread_join";
+inline constexpr auto kPosixPthreadJoinNid = "h9CcP3J0oVM";
+inline constexpr auto kKernelPthreadJoinName = "scePthreadJoin";
+inline constexpr auto kKernelPthreadJoinNid = "onNY9Byn-W8";
+inline constexpr auto kPosixPthreadExitName = "pthread_exit";
+inline constexpr auto kPosixPthreadExitNid = "FJrT5LuUBAU";
+inline constexpr auto kKernelPthreadExitName = "scePthreadExit";
+inline constexpr auto kKernelPthreadExitNid = "3kg7rT0NQIs";
+inline constexpr auto kLibScePosixName = "libScePosix";
 
 inline constexpr auto kPosixPthreadAttrInitName = "pthread_attr_init";
 inline constexpr auto kPosixPthreadAttrInitNid = "wtkt-teR1so";

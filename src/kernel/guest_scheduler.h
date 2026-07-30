@@ -55,6 +55,8 @@ struct GuestThreadSnapshot {
   GuestThreadState state = GuestThreadState::kReady;
   std::string wait_key;
   std::uint64_t exit_value = 0;
+  std::uint64_t entry_address = 0;
+  std::uint64_t argument = 0;
 };
 
 class GuestScheduler final {
@@ -66,7 +68,10 @@ public:
   GuestScheduler &operator=(const GuestScheduler &) = delete;
 
   [[nodiscard]] GuestThreadCreateResult CreateThread(std::string name,
-                                                     int priority);
+                                                     int priority,
+                                                     std::uint64_t entry_address = 0,
+                                                     std::uint64_t argument = 0);
+  [[nodiscard]] bool DiscardReadyThread(KernelHandle handle);
   [[nodiscard]] std::optional<KernelHandle> SelectNext();
   [[nodiscard]] bool YieldCurrent();
   [[nodiscard]] bool BlockCurrent(std::string wait_key);

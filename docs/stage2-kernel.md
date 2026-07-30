@@ -20,7 +20,7 @@ The behavior review used these pinned upstream files:
 - KytyPS5 `src/kernel/pthread.h` and `src/kernel/pthread.cpp` at the pinned
   KytyPS5 commit.
 - SharpEmu `src/SharpEmu.Libs/Kernel/KernelRuntimeCompatExports.cs`,
-  `KernelPthreadCompatExports.cs`, and
+  `KernelExports.cs`, `KernelPthreadCompatExports.cs`, and
   `KernelPthreadExtendedCompatExports.cs` at the pinned SharpEmu commit.
 - KytyPS5 `src/kernel/fileSystem.h` and `src/kernel/fileSystem.cpp` at the
   pinned KytyPS5 commit.
@@ -52,6 +52,13 @@ The tests capture the behavior below.
   into the guest model.
 - Pthread identity and equality use guest scheduler handles. Pthread yield
   returns the current thread to the shared ready queue.
+- Pthread creation checks output, attribute, entry-point, and optional name
+  pointers before it changes scheduler state. It records the guest entry point,
+  argument, priority, and attributes without creating a second host runtime.
+- Pthread join uses the scheduler's existing block, wake, and recheck path.
+  Pthread exit preserves the guest return value and wakes all joiners. POSIX
+  handlers return POSIX pthread errors; `scePthread` handlers return kernel
+  errors.
 - Setting an event flag uses bitwise OR. Clearing retains the bits selected by
   the supplied mask. Poll supports all-bit and any-bit conditions and can clear
   all bits or only the requested pattern after returning the observed value.
@@ -122,7 +129,8 @@ The tests capture the behavior below.
 - Event-queue handlers expose create, delete, user-event add, edge add,
   trigger, and removal by name and NID.
 - Blocking wait exports remain deferred until the runtime can save and resume
-  a guest call continuation.
+  a guest call continuation. A live pthread join uses the same temporary
+  recheck contract.
 
 KajPS5 implements this behavior through its own C++ interfaces. It does not
 copy an upstream executor, continuation system, ownership model, or source

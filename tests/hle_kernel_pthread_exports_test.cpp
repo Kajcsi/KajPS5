@@ -56,7 +56,7 @@ int main() {
   Check(kajps5::hle::RegisterKernelPthreadExports(
             registry, runtime.pthreads(), runtime.scheduler()) ==
             ExportRegistryStatus::kOk &&
-            registry.size() == 44,
+            registry.size() == 60,
         "pthread exports did not register atomically");
 
   GuestMemory memory(0x1000, 0x4000);
@@ -216,6 +216,130 @@ int main() {
                      stale_attr) ==
                 KernelResult(kajps5::hle::kKernelHleErrorInvalidArgument),
         "pthread accepted an already destroyed attribute");
+
+  KernelRuntime lifecycle_runtime;
+  ExportRegistry lifecycle_registry;
+  Check(kajps5::hle::RegisterKernelPthreadExports(
+            lifecycle_registry, lifecycle_runtime.pthreads(),
+            lifecycle_runtime.scheduler()) == ExportRegistryStatus::kOk,
+        "pthread lifecycle exports did not register");
+  const auto lifecycle_main =
+      lifecycle_runtime.scheduler().CreateThread("main", 700);
+  Check(lifecycle_main &&
+            lifecycle_runtime.scheduler().SelectNext() ==
+                lifecycle_main.handle,
+        "pthread lifecycle scheduler setup failed");
+
+  HleCallContext lifecycle_attr(memory);
+  Check(lifecycle_attr.SetRegister(HleRegister::kRdi, 0x1200) &&
+            Dispatch(lifecycle_registry,
+                     kajps5::hle::kKernelPthreadAttrInitNid,
+                     lifecycle_attr) == 0,
+        "pthread lifecycle attribute setup failed");
+  HleCallContext lifecycle_stack(memory);
+  Check(lifecycle_stack.SetRegister(HleRegister::kRdi, 0x1200) &&
+            lifecycle_stack.SetRegister(HleRegister::kRsi, 0x180000) &&
+            Dispatch(lifecycle_registry,
+                     kajps5::hle::kPosixPthreadAttrSetstacksizeNid,
+                     lifecycle_stack) == 0,
+        "pthread lifecycle stack setup failed");
+
+  HleCallContext create(memory);
+  Check(create.SetRegister(HleRegister::kRdi, 0x1210) &&
+            create.SetRegister(HleRegister::kRsi, 0x1200) &&
+            create.SetRegister(HleRegister::kRdx, 0x400000) &&
+            create.SetRegister(HleRegister::kRcx, 0xbeef) &&
+            Dispatch(lifecycle_registry,
+                     kajps5::hle::kPosixPthreadCreateNid, create) == 0,
+        "pthread_create failed");
+  std::uint64_t created_handle = 0;
+  Check(create.ReadUInt64(0x1210, created_handle) == HleContextStatus::kOk &&
+            created_handle != 0,
+        "pthread_create did not write a guest thread handle");
+  const auto created_scheduler_thread =
+      lifecycle_runtime.scheduler().Snapshot(created_handle);
+  const auto created_pthread =
+      lifecycle_runtime.pthreads().GetThread(created_handle);
+  Check(created_scheduler_thread && created_pthread &&
+            created_scheduler_thread->entry_address == 0x400000 &&
+            created_scheduler_thread->argument == 0xbeef &&
+            created_pthread->attributes.stack_size == 0x180000,
+        "pthread_create lost its entry, argument, or attributes");
+
+  const auto thread_count_before_fault =
+      lifecycle_runtime.scheduler().SnapshotAll().size();
+  HleCallContext create_fault(memory);
+  Check(create_fault.SetRegister(HleRegister::kRdi, 0x800) &&
+            create_fault.SetRegister(HleRegister::kRdx, 0x500000) &&
+            Dispatch(lifecycle_registry,
+                     kajps5::hle::kPosixPthreadCreateNid,
+                     create_fault) == 14 &&
+            lifecycle_runtime.scheduler().SnapshotAll().size() ==
+                thread_count_before_fault,
+        "invalid pthread_create output changed scheduler state");
+  HleCallContext create_without_entry(memory);
+  Check(create_without_entry.SetRegister(HleRegister::kRdi, 0x1230) &&
+            Dispatch(lifecycle_registry,
+                     kajps5::hle::kPosixPthreadCreateNid,
+                     create_without_entry) == 22 &&
+            lifecycle_runtime.scheduler().SnapshotAll().size() ==
+                thread_count_before_fault,
+        "pthread_create accepted a null entry point");
+
+  HleCallContext first_join(memory);
+  const auto first_join_result =
+      first_join.SetRegister(HleRegister::kRdi, created_handle) &&
+      first_join.SetRegister(HleRegister::kRsi, 0x1220) &&
+      Dispatch(lifecycle_registry, kajps5::hle::kPosixPthreadJoinNid,
+               first_join) == 16;
+  const auto blocked_main =
+      lifecycle_runtime.scheduler().Snapshot(lifecycle_main.handle);
+  Check(first_join_result && blocked_main &&
+            blocked_main->state == kajps5::kernel::GuestThreadState::kBlocked,
+        "pthread_join did not block a live joiner");
+  Check(lifecycle_runtime.scheduler().SelectNext() == created_handle,
+        "pthread-created worker was not ready to run");
+
+  HleCallContext exit(memory);
+  Check(exit.SetRegister(HleRegister::kRdi, 0x77),
+        "pthread_exit setup failed");
+  const std::vector<std::string> posix_libraries = {
+      kajps5::hle::kLibScePosixName};
+  const auto exit_dispatched = lifecycle_registry.Dispatch(
+      kajps5::hle::kPosixPthreadExitNid, posix_libraries, exit);
+  const auto exited_worker =
+      lifecycle_runtime.scheduler().Snapshot(created_handle);
+  Check(exit_dispatched &&
+            exit.GetRegister(HleRegister::kRax).value_or(0) == 0x77 &&
+            exited_worker &&
+            exited_worker->state == kajps5::kernel::GuestThreadState::kExited,
+        "pthread_exit did not save the guest return value");
+  Check(lifecycle_runtime.scheduler().SelectNext() == lifecycle_main.handle,
+        "pthread_exit did not wake its joiner");
+
+  HleCallContext completed_join(memory);
+  Check(completed_join.SetRegister(HleRegister::kRdi, created_handle) &&
+            completed_join.SetRegister(HleRegister::kRsi, 0x1220) &&
+            Dispatch(lifecycle_registry,
+                     kajps5::hle::kKernelPthreadJoinNid,
+                     completed_join) == 0,
+        "pthread_join did not complete after thread exit");
+  std::uint64_t joined_value = 0;
+  Check(completed_join.ReadUInt64(0x1220, joined_value) ==
+            HleContextStatus::kOk &&
+            joined_value == 0x77,
+        "pthread_join wrote the wrong thread return value");
+
+  HleCallContext self_join(memory);
+  Check(self_join.SetRegister(HleRegister::kRdi, lifecycle_main.handle) &&
+            Dispatch(lifecycle_registry,
+                     kajps5::hle::kPosixPthreadJoinNid, self_join) == 11,
+        "pthread_join accepted a self join");
+  HleCallContext stale_join(memory);
+  Check(stale_join.SetRegister(HleRegister::kRdi, 9999) &&
+            Dispatch(lifecycle_registry,
+                     kajps5::hle::kPosixPthreadJoinNid, stale_join) == 3,
+        "pthread_join returned the wrong stale-thread error");
 
   return failures == 0 ? 0 : 1;
 }

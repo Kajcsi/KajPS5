@@ -143,6 +143,18 @@ int main() {
             KernelStatus::kInvalidArgument,
         "long thread name was accepted");
 
+  const auto disposable =
+      scheduler.CreateThread("disposable", 30, 0x400000, 0xbeef);
+  const auto disposable_snapshot = scheduler.Snapshot(disposable.handle);
+  Check(disposable && disposable_snapshot &&
+            disposable_snapshot->entry_address == 0x400000 &&
+            disposable_snapshot->argument == 0xbeef,
+        "thread start metadata was not preserved");
+  Check(scheduler.DiscardReadyThread(disposable.handle) &&
+            !scheduler.Snapshot(disposable.handle) &&
+            runtime.handles().size() == 3,
+        "ready thread rollback did not release its shared handle");
+
   std::cout << "kernel scheduler tests passed\n";
   return 0;
 }

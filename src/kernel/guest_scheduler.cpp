@@ -18,15 +18,20 @@ std::string ThreadExitWaitKey(KernelHandle handle) {
 } // namespace
 
 struct GuestScheduler::GuestThread final : KernelObject {
-  GuestThread(std::string thread_name, int thread_priority)
+  GuestThread(std::string thread_name, int thread_priority,
+              std::uint64_t thread_entry_address,
+              std::uint64_t thread_argument)
       : KernelObject(KernelObjectType::kThread), name(std::move(thread_name)),
-        priority(thread_priority) {}
+        priority(thread_priority), entry_address(thread_entry_address),
+        argument(thread_argument) {}
 
   std::string name;
   int priority = 0;
   GuestThreadState state = GuestThreadState::kReady;
   std::string wait_key;
   std::uint64_t exit_value = 0;
+  std::uint64_t entry_address = 0;
+  std::uint64_t argument = 0;
 };
 
 GuestScheduler::GuestScheduler(HandleTable &handles) noexcept
@@ -35,12 +40,15 @@ GuestScheduler::GuestScheduler(HandleTable &handles) noexcept
 GuestScheduler::~GuestScheduler() = default;
 
 GuestThreadCreateResult GuestScheduler::CreateThread(std::string name,
-                                                     int priority) {
+                                                     int priority,
+                                                     std::uint64_t entry_address,
+                                                     std::uint64_t argument) {
   if (name.size() > kMaximumGuestThreadNameLength) {
     return {KernelStatus::kInvalidArgument, kInvalidKernelHandle};
   }
 
-  auto thread = std::make_shared<GuestThread>(std::move(name), priority);
+  auto thread = std::make_shared<GuestThread>(
+      std::move(name), priority, entry_address, argument);
   const auto handle = handles_.Insert(thread);
   if (!handle) {
     return {KernelStatus::kNoResources, kInvalidKernelHandle};
@@ -50,6 +58,22 @@ GuestThreadCreateResult GuestScheduler::CreateThread(std::string name,
   threads_.emplace(*handle, std::move(thread));
   ready_threads_.push_back(*handle);
   return {KernelStatus::kOk, *handle};
+}
+
+bool GuestScheduler::DiscardReadyThread(KernelHandle handle) {
+  std::lock_guard lock(mutex_);
+  const auto found = threads_.find(handle);
+  if (found == threads_.end() ||
+      found->second->state != GuestThreadState::kReady) {
+    return false;
+  }
+  if (!handles_.Remove(handle, KernelObjectType::kThread)) {
+    return false;
+  }
+
+  std::erase(ready_threads_, handle);
+  threads_.erase(found);
+  return true;
 }
 
 std::optional<KernelHandle> GuestScheduler::SelectNext() {
@@ -222,8 +246,14 @@ std::vector<GuestThreadSnapshot> GuestScheduler::SnapshotAll() const {
 
 GuestThreadSnapshot GuestScheduler::MakeSnapshot(KernelHandle handle,
                                                  const GuestThread &thread) {
-  return {handle,       thread.name,     thread.priority,
-          thread.state, thread.wait_key, thread.exit_value};
+  return {handle,
+          thread.name,
+          thread.priority,
+          thread.state,
+          thread.wait_key,
+          thread.exit_value,
+          thread.entry_address,
+          thread.argument};
 }
 
 } // namespace kajps5::kernel

@@ -60,6 +60,63 @@ std::optional<PthreadAttribute> PthreadService::GetAttribute(
   return found->second;
 }
 
+PthreadThreadCreateResult PthreadService::CreateThread(
+    std::string name, std::uint64_t attribute_handle,
+    std::uint64_t entry_address, std::uint64_t argument) {
+  if (entry_address == 0) {
+    return {KernelStatus::kInvalidArgument, kInvalidKernelHandle};
+  }
+
+  PthreadAttribute attributes;
+  if (attribute_handle != 0) {
+    std::lock_guard lock(mutex_);
+    const auto found = attributes_.find(attribute_handle);
+    if (found != attributes_.end()) {
+      attributes = found->second;
+    }
+  }
+
+  const auto created = scheduler_.CreateThread(
+      std::move(name), attributes.priority, entry_address, argument);
+  if (!created) {
+    return {created.status, kInvalidKernelHandle};
+  }
+
+  std::lock_guard lock(mutex_);
+  threads_.emplace(created.handle,
+                   PthreadThreadSnapshot{created.handle, attributes});
+  return {KernelStatus::kOk, created.handle};
+}
+
+bool PthreadService::DiscardReadyThread(KernelHandle handle) {
+  if (!scheduler_.DiscardReadyThread(handle)) {
+    return false;
+  }
+
+  std::lock_guard lock(mutex_);
+  threads_.erase(handle);
+  specific_values_.erase(handle);
+  return true;
+}
+
+GuestThreadJoinResult PthreadService::JoinThread(KernelHandle handle) {
+  return scheduler_.JoinThread(handle);
+}
+
+bool PthreadService::ExitCurrent(std::uint64_t exit_value) {
+  return scheduler_.ExitCurrent(exit_value);
+}
+
+std::optional<PthreadThreadSnapshot> PthreadService::GetThread(
+    KernelHandle handle) const {
+  std::lock_guard lock(mutex_);
+  const auto found = threads_.find(handle);
+  if (found == threads_.end()) {
+    return std::nullopt;
+  }
+  return found->second;
+}
+
 PthreadKeyCreateResult PthreadService::CreateKey(
     std::uint64_t destructor_address) {
   std::lock_guard lock(mutex_);
