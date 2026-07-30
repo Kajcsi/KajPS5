@@ -178,9 +178,10 @@ std::vector<std::byte> MakePublicHleElf() {
       std::byte{0},    std::byte{0},    std::byte{0x41}, std::byte{0xb9},
       std::byte{60},   std::byte{0},    std::byte{0},    std::byte{0},
       std::byte{0x48}, std::byte{0x83}, std::byte{0xec}, stack_adjustment,
-      std::byte{0xff}, std::byte{0x15}, std::byte{0x0e}, std::byte{0x00},
+      std::byte{0x6a}, std::byte{80},   std::byte{0x6a}, std::byte{70},
+      std::byte{0xff}, std::byte{0x15}, std::byte{0x0a}, std::byte{0x00},
       std::byte{0x00}, std::byte{0x00}, std::byte{0x48}, std::byte{0x83},
-      std::byte{0xc4}, stack_adjustment, std::byte{0xc3}};
+      std::byte{0xc4}, std::byte{0x18}, std::byte{0xc3}};
   for (std::size_t index = 0; index < code.size(); ++index) {
     image[kProgramOffset + index] = code[index];
   }
@@ -219,8 +220,8 @@ int main() {
   Check(exports.Register(
             "libkajps5_test", "answer",
             [](kajps5::hle::HleCallContext& context) {
-              const std::array expected = {10ULL, 20ULL, 30ULL,
-                                           40ULL, 50ULL, 60ULL};
+              const std::array expected = {10ULL, 20ULL, 30ULL, 40ULL,
+                                           50ULL, 60ULL, 70ULL, 80ULL};
               std::uint64_t sum = 0;
               for (std::size_t index = 0; index < expected.size(); ++index) {
                 const auto argument = context.Argument(index).value_or(0);
@@ -233,7 +234,7 @@ int main() {
             }) == ExportRegistryStatus::kOk,
         "checked HLE handler registration failed");
   NativeHleTrampoline trampoline(memory, exports, "answer",
-                                 {"libkajps5_test"});
+                                 {"libkajps5_test"}, 2);
   if (trampoline.status() == NativeHleTrampolineStatus::kUnsupportedHost) {
     std::cout << "native HLE guest execution is unsupported on this host\n";
     return failures == 0 ? 0 : 1;
@@ -247,6 +248,13 @@ int main() {
                 NativeHleTrampolineStatus::kInvalidArgument &&
             missing_trampoline.address() == 0,
         "missing HLE export produced an executable trampoline");
+  NativeHleTrampoline oversized_stack_trampoline(
+      memory, exports, "answer", {"libkajps5_test"},
+      kajps5::hle::kMaximumCapturedHleStackArguments + 1);
+  Check(oversized_stack_trampoline.status() ==
+                NativeHleTrampolineStatus::kInvalidArgument &&
+            oversized_stack_trampoline.address() == 0,
+        "oversized stack capture produced an executable trampoline");
 
   ImportRegistry imports;
   Check(imports.Register("libkajps5_test", "answer", trampoline.address()) ==
@@ -267,7 +275,7 @@ int main() {
     return failures == 0 ? 0 : 1;
   }
   const auto dispatch = trampoline.last_dispatch();
-  Check(executed && executed.return_value == 210,
+  Check(executed && executed.return_value == 360,
         "public guest did not return the checked HLE result");
   Check(dispatch.lookup_status == ExportRegistryStatus::kOk &&
             dispatch.handler_status == HleContextStatus::kOk &&

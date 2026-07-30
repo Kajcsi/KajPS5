@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -41,7 +42,8 @@ class NativeHleTrampoline final {
   NativeHleTrampoline(memory::GuestMemory& memory,
                       const hle::ExportRegistry& registry,
                       std::string symbol,
-                      std::vector<std::string> library_order);
+                      std::vector<std::string> library_order,
+                      std::size_t stack_argument_count = 0);
   ~NativeHleTrampoline();
 
   NativeHleTrampoline(const NativeHleTrampoline&) = delete;

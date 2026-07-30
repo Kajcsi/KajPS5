@@ -4,8 +4,8 @@ KajPS5 has two deliberately small native x86-64 execution tests. The first
 loads an ELF built from constants, copies its six-byte leaf entry from guest
 memory into a writable host allocation, changes that allocation to
 read-execute, and calls it. The leaf returns 42 without using arguments,
-memory, imports, system calls, or threads. The second fixture calls a
-checked HLE handler with six integer arguments through a linked import and is
+memory, imports, system calls, or threads. The second fixture calls a checked
+HLE handler with eight integer arguments through a linked import and is
 described in `stage2-hle.md`.
 
 The design review used these pinned references:
@@ -31,7 +31,7 @@ code. This keeps optimized host callers intact even when guest code uses
 registers that are volatile on PS5.
 
 The executor is available only to tests. The first ABI bridge captures the six
-System V integer arguments and returns the checked handler's `RAX` value. It
-does not capture the guest stack, vector registers, a full CPU context, faults,
-or timeouts. Until those pieces exist, it must run only controlled leaf
-fixtures.
+System V integer registers plus a declared, bounded number of stack arguments,
+and returns the checked handler's `RAX` value. It does not capture vector
+registers, a full CPU context, faults, or timeouts. Until those pieces exist,
+it must run only controlled leaf fixtures.

@@ -18,6 +18,7 @@
 namespace kajps5::hle {
 
 inline constexpr std::size_t kMaximumHleStringBytes = 4096;
+inline constexpr std::size_t kMaximumCapturedHleStackArguments = 16;
 
 enum class HleRegister : std::uint8_t {
   kRax,
@@ -69,6 +70,8 @@ class HleCallContext final {
       HleRegister reg) const noexcept;
   [[nodiscard]] std::optional<std::uint64_t> Argument(
       std::size_t index) const noexcept;
+  [[nodiscard]] bool SetCapturedStackArguments(
+      std::span<const std::uint64_t> arguments) noexcept;
 
   void SetReturn(std::uint64_t value) noexcept;
   [[nodiscard]] bool return_written() const noexcept;
@@ -114,6 +117,9 @@ class HleCallContext final {
   std::array<std::uint64_t,
              static_cast<std::size_t>(HleRegister::kCount)>
       registers_{};
+  std::array<std::uint64_t, kMaximumCapturedHleStackArguments>
+      captured_stack_arguments_{};
+  std::size_t captured_stack_argument_count_ = 0;
   bool return_written_ = false;
 };
 

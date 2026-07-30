@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <initializer_list>
 #include <mutex>
+#include <span>
 #include <utility>
 
 #include "core/memory/guest_memory.h"
@@ -40,18 +41,21 @@ struct NativeHleTrampoline::State {
   const hle::ExportRegistry* registry = nullptr;
   std::string symbol;
   std::vector<std::string> library_order;
+  std::size_t stack_argument_count = 0;
   mutable std::mutex mutex;
   NativeHleDispatchSnapshot last_dispatch;
 };
 
 NativeHleTrampoline::NativeHleTrampoline(
     memory::GuestMemory& memory, const hle::ExportRegistry& registry,
-    std::string symbol, std::vector<std::string> library_order)
+    std::string symbol, std::vector<std::string> library_order,
+    std::size_t stack_argument_count)
     : state_(std::make_unique<State>()) {
   state_->memory = &memory;
   state_->registry = &registry;
   state_->symbol = std::move(symbol);
   state_->library_order = std::move(library_order);
+  state_->stack_argument_count = stack_argument_count;
   Build();
 }
 
@@ -90,6 +94,15 @@ std::uint64_t NativeHleTrampoline::Dispatch(
     for (std::size_t index = 0; index < registers.size(); ++index) {
       (void)context.SetRegister(registers[index], arguments[index]);
     }
+    if (!context.SetCapturedStackArguments(
+            std::span(arguments + registers.size() + 1,
+                      state->stack_argument_count))) {
+      std::lock_guard lock(state->mutex);
+      state->last_dispatch = {hle::ExportRegistryStatus::kInvalidArgument,
+                              hle::HleContextStatus::kInvalidArgument,
+                              false, false, {}};
+      return 0;
+    }
     const auto result = state->registry->Dispatch(
         state->symbol, state->library_order, context);
     const auto return_value =
@@ -110,6 +123,8 @@ std::uint64_t NativeHleTrampoline::Dispatch(
 
 void NativeHleTrampoline::Build() {
   if (state_->symbol.empty() || state_->library_order.empty() ||
+      state_->stack_argument_count >
+          hle::kMaximumCapturedHleStackArguments ||
       !state_->registry->Lookup(state_->symbol, state_->library_order)) {
     status_ = NativeHleTrampolineStatus::kInvalidArgument;
     return;

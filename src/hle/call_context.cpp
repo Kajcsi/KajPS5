@@ -70,6 +70,12 @@ std::optional<std::uint64_t> HleCallContext::Argument(
 
   const auto stack_pointer = GetRegister(HleRegister::kRsp).value_or(0);
   const auto stack_index = index - kArgumentRegisters.size();
+  if (captured_stack_argument_count_ != 0) {
+    return stack_index < captured_stack_argument_count_
+               ? std::optional<std::uint64_t>(
+                     captured_stack_arguments_[stack_index])
+               : std::nullopt;
+  }
   constexpr auto kStackSlotSize = sizeof(std::uint64_t);
   constexpr auto kReturnAddressSize = sizeof(std::uint64_t);
   if (stack_index >
@@ -86,6 +92,17 @@ std::optional<std::uint64_t> HleCallContext::Argument(
   return ReadUInt64(stack_pointer + offset, value) == HleContextStatus::kOk
              ? std::optional<std::uint64_t>(value)
              : std::nullopt;
+}
+
+bool HleCallContext::SetCapturedStackArguments(
+    std::span<const std::uint64_t> arguments) noexcept {
+  if (arguments.size() > captured_stack_arguments_.size()) {
+    return false;
+  }
+  std::copy(arguments.begin(), arguments.end(),
+            captured_stack_arguments_.begin());
+  captured_stack_argument_count_ = arguments.size();
+  return true;
 }
 
 void HleCallContext::SetReturn(std::uint64_t value) noexcept {

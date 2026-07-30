@@ -51,6 +51,17 @@ int main() {
             context.Argument(6).value_or(0) == 7 &&
             context.Argument(7).value_or(0) == 8,
         "System V stack argument order is incorrect");
+  const std::array captured_stack = {17ULL, 18ULL};
+  Check(context.SetCapturedStackArguments(captured_stack) &&
+            context.Argument(6).value_or(0) == 17 &&
+            context.Argument(7).value_or(0) == 18 &&
+            !context.Argument(8).has_value(),
+        "captured native stack arguments were not preferred");
+  const std::array<std::uint64_t,
+                   kajps5::hle::kMaximumCapturedHleStackArguments + 1>
+      too_many_stack_arguments{};
+  Check(!context.SetCapturedStackArguments(too_many_stack_arguments),
+        "oversized native stack snapshot was accepted");
   Check(!context.Argument(std::numeric_limits<std::size_t>::max())
              .has_value(),
         "overflowing stack argument was accepted");

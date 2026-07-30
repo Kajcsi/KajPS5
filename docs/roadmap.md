@@ -73,7 +73,8 @@
 - [x] Add a transactional libkernel gettimeofday handler.
 - [x] Run a public no-import guest leaf test program.
 - [x] Run a public guest program through checked HLE imports.
-- [x] Capture six System V integer arguments in a native HLE trampoline.
+- [x] Capture System V register and bounded stack arguments in a native HLE
+      trampoline.
 - Expand thread, event, file, and time coverage as their HLE bridges grow.
 - Compare small, repeatable traces with both upstream projects.
 

@@ -26,16 +26,16 @@ unbounded output.
 The registry does not generate general executable stubs. One redistributable
 test ELF goes through parse, load, link, and native leaf execution to call a
 checked HLE handler. Its generated trampoline preserves the six System V
-integer arguments across the Windows or POSIX host call and returns the
-handler's `RAX` value.
+integer registers and a declared, bounded number of stack arguments across the
+Windows or POSIX host call. It returns the handler's `RAX` value.
 
 The platform-neutral HLE call context maps the six System V integer argument
 registers and the return register. Integer and string access use guest memory,
 and string reads stop at 4 KiB. If a bulk read crosses an unmapped boundary,
 the context checks bytes individually so it can still accept an earlier null
 terminator. A missing terminator and a memory fault remain distinct results.
-The first native trampoline captures those six integer registers. Stack and
-vector state still need a larger execution context.
+The first native trampoline captures those six integer registers and up to 16
+declared stack arguments. Vector state still needs a larger execution context.
 
 The HLE export registry keeps C++ context handlers separate from executable
 import targets. Dispatch uses the same ordered library scope as linking. An
