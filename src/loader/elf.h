@@ -30,7 +30,10 @@ enum class ElfError {
   kInvalidProgramHeaderSize,
   kProgramHeaderTableOutOfRange,
   kMultipleDynamicSegments,
+  kMultipleSceDynlibDataSegments,
   kDynamicSegmentFileRangeOutOfRange,
+  kSceDynlibDataSegmentFileRangeOutOfRange,
+  kMissingSceDynlibDataSegment,
   kInvalidDynamicSegmentSize,
   kUnterminatedDynamicTable,
   kIncompleteDynamicStringTable,
@@ -45,6 +48,7 @@ enum class ElfError {
   kUnsupportedPltRelocationFormat,
   kIncompleteDynamicSymbolMetadata,
   kInvalidSymbolEntrySize,
+  kInvalidSymbolTableSize,
   kHashTableNotFileBacked,
   kSymbolTableNotFileBacked,
   kSymbolNameOffsetOutOfRange,
@@ -101,11 +105,35 @@ struct ElfSymbol {
   [[nodiscard]] std::uint8_t type() const noexcept { return info & 0x0fU; }
 };
 
+enum class ElfDynamicDataSource {
+  kNone,
+  kLoadSegment,
+  kSceDynlibData,
+};
+
+struct ElfModuleIdentity {
+  std::uint16_t id = 0;
+  std::uint8_t version_major = 0;
+  std::uint8_t version_minor = 0;
+  std::string name;
+};
+
+struct ElfLibraryIdentity {
+  std::uint16_t id = 0;
+  std::uint16_t version = 0;
+  std::string name;
+};
+
 struct ElfDynamicInfo {
-  std::optional<std::uint64_t> string_table_address;
+  ElfDynamicDataSource string_table_source = ElfDynamicDataSource::kNone;
+  std::optional<std::uint64_t> string_table_file_offset;
   std::optional<std::uint64_t> string_table_size;
   std::vector<std::string> needed_libraries;
   std::optional<std::string> shared_object_name;
+  std::vector<ElfModuleIdentity> import_modules;
+  std::vector<ElfModuleIdentity> export_modules;
+  std::vector<ElfLibraryIdentity> import_libraries;
+  std::vector<ElfLibraryIdentity> export_libraries;
   std::vector<ElfRelaEntry> relocations;
   std::vector<ElfRelaEntry> plt_relocations;
   std::vector<ElfSymbol> symbols;

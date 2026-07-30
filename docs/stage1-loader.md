@@ -66,8 +66,24 @@ checks the full hash and symbol-table ranges, requires 24-byte x86-64 symbols,
 and resolves every name inside the dynamic string table. ELFs that use only a
 different hash format still load, but their symbols are not indexed yet.
 
-This milestone does not interpret PS5-specific dynamic tags or parse SELF
-containers. The separate controlled native tests are documented in
-`stage2-cpu.md` and `stage2-hle.md`.
+PS5 dynamic-link tables use the checked `PT_SCE_DYNLIBDATA` file range. SCE
+string, symbol, `RELA`, and PLT tags take precedence over standard tags when
+both forms are present. The loader accepts the fixed 24-byte symbol and
+relocation layout when an optional SCE entry-size or PLT-format tag is absent.
+This matches SharpEmu's useful handling of dumped metadata while keeping
+KytyPS5's native linker layout.
+
+Packed KytyPS5 module and library records become typed metadata. Each record
+keeps its numeric ID, version, and checked name from the SCE string table. Both
+known tag generations are accepted. The stable trace reports the string-table
+source and import and export counts without printing untrusted names.
+
+Synthetic tests cover SCE precedence, size-based symbols, relocations,
+module and library identities, missing and repeated dynlib-data segments,
+truncated ranges, and invalid table and name offsets. No fixture contains
+proprietary data.
+
+This milestone does not parse SELF containers. The separate controlled native
+tests are documented in `stage2-cpu.md` and `stage2-hle.md`.
 
 See `public-elf-validation.md` for the external PS5 homebrew ELF check.

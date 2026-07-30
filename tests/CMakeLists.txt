@@ -22,6 +22,12 @@ kajps5_deploy_msvc_asan_runtime(kajps5_elf_dynamic_test)
 
 add_test(NAME kajps5_elf_dynamic COMMAND kajps5_elf_dynamic_test)
 
+add_executable(kajps5_elf_sce_dynamic_test elf_sce_dynamic_test.cpp)
+target_link_libraries(kajps5_elf_sce_dynamic_test PRIVATE kajps5_core)
+kajps5_deploy_msvc_asan_runtime(kajps5_elf_sce_dynamic_test)
+
+add_test(NAME kajps5_elf_sce_dynamic COMMAND kajps5_elf_sce_dynamic_test)
+
 add_executable(kajps5_elf_relocation_test elf_relocation_test.cpp)
 target_link_libraries(kajps5_elf_relocation_test PRIVATE kajps5_core)
 kajps5_deploy_msvc_asan_runtime(kajps5_elf_relocation_test)

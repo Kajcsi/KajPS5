@@ -140,6 +140,7 @@ int main() {
       "elf.program_headers=2\n"
       "elf.load_segments=1\n"
       "elf.dynamic_entries=0\n"
+      "elf.dynamic_string_source=none\n"
       "elf.dynamic_string_table_size=0\n"
       "elf.needed_libraries=0\n"
       "elf.has_soname=0\n"
@@ -147,6 +148,10 @@ int main() {
       "elf.plt_relocations=0\n"
       "elf.symbols=0\n"
       "elf.undefined_symbols=0\n"
+      "elf.import_modules=0\n"
+      "elf.export_modules=0\n"
+      "elf.import_libraries=0\n"
+      "elf.export_libraries=0\n"
       "elf.load[0].flags=r-x offset=0x0000000000000100 "
       "virtual_address=0x0000000000001000 file_size=0x0000000000000004 "
       "memory_size=0x0000000000000008 alignment=0x0000000000000100\n";

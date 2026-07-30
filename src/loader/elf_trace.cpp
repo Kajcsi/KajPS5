@@ -29,6 +29,15 @@ std::string SegmentFlags(std::uint32_t flags) {
   return result;
 }
 
+std::string_view DynamicDataSourceName(ElfDynamicDataSource source) noexcept {
+  switch (source) {
+    case ElfDynamicDataSource::kNone: return "none";
+    case ElfDynamicDataSource::kLoadSegment: return "load-segment";
+    case ElfDynamicDataSource::kSceDynlibData: return "sce-dynlibdata";
+  }
+  return "unknown";
+}
+
 void WriteHex64(std::ostringstream& trace, std::uint64_t value) {
   trace << "0x" << std::hex << std::setfill('0') << std::setw(16) << value
         << std::dec;
@@ -59,6 +68,9 @@ std::string FormatElfTrace(const ElfMetadata& metadata) {
   }
   trace << "elf.load_segments=" << load_segment_count << '\n';
   trace << "elf.dynamic_entries=" << metadata.dynamic_entries.size() << '\n';
+  trace << "elf.dynamic_string_source="
+        << DynamicDataSourceName(metadata.dynamic_info.string_table_source)
+        << '\n';
   trace << "elf.dynamic_string_table_size="
         << metadata.dynamic_info.string_table_size.value_or(0) << '\n';
   trace << "elf.needed_libraries="
@@ -77,6 +89,14 @@ std::string FormatElfTrace(const ElfMetadata& metadata) {
         return symbol.section_index == 0 && !symbol.name.empty();
       });
   trace << "elf.undefined_symbols=" << undefined_symbols << '\n';
+  trace << "elf.import_modules=" << metadata.dynamic_info.import_modules.size()
+        << '\n';
+  trace << "elf.export_modules=" << metadata.dynamic_info.export_modules.size()
+        << '\n';
+  trace << "elf.import_libraries="
+        << metadata.dynamic_info.import_libraries.size() << '\n';
+  trace << "elf.export_libraries="
+        << metadata.dynamic_info.export_libraries.size() << '\n';
 
   std::size_t load_index = 0;
   for (const auto& header : metadata.program_headers) {

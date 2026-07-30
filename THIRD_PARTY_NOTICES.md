@@ -18,11 +18,23 @@ system, ownership model, or source was copied.
 
 ## Loader and guest memory
 
-The dynamic-table, standard dynamic-string, and standard `RELA` behavior in
+The dynamic-table, dynamic-string, symbol, and `RELA` behavior in
 `src/loader/elf.cpp`, `src/loader/relocator.cpp`,
-`tests/elf_dynamic_test.cpp`, `tests/elf_relocation_test.cpp`, and
-`tests/elf_symbol_test.cpp` was based on behavior observed in the pinned
-KytyPS5 and SharpEmu loader files. The SharpEmu reference file states:
+`tests/elf_dynamic_test.cpp`, `tests/elf_sce_dynamic_test.cpp`,
+`tests/elf_relocation_test.cpp`, and `tests/elf_symbol_test.cpp` was based on
+behavior observed in the pinned KytyPS5 and SharpEmu loader files. The PS5
+metadata parser follows KytyPS5's `PT_OS_DYNLIBDATA`, packed module, packed
+library, and SCE dynamic-tag semantics. It adapts SharpEmu's preference for
+SCE table tags and its fixed-size fallback when optional SCE entry-size tags
+are absent.
+
+The reviewed sources are KytyPS5 `src/loader/elf.h` and
+`src/loader/runtimeLinker.cpp` at commit
+`f6e01e54031a3c615f089f061a4eab2f3c59acba`, and SharpEmu
+`src/SharpEmu.Core/Loader/SelfLoader.cs` at commit
+`d5108e854d609808f17093a6f5dbbc711d09ad2e`.
+
+The SharpEmu reference file states:
 
 `Copyright (C) 2026 SharpEmu Emulator Project`
 

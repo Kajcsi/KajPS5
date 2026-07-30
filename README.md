@@ -21,8 +21,8 @@ The current core includes:
 - A guest address space with whole-range access checks and transactional map,
   protection, and unmap operations. Released bytes are cleared before the
   range can be reused.
-- An ELF64 loader that checks program headers, dynamic strings, standard
-  x86-64 `RELA` relocations, and `DT_HASH` symbols before it changes guest
+- An ELF64 loader that checks program headers, standard and PS5 dynamic-link
+  metadata, x86-64 `RELA` relocations, and symbols before it changes guest
   memory. It preserves each `PT_LOAD` segment's read, write, and execute flags.
 - Library-scoped import linking and HLE dispatch, with bounded diagnostics for
   unresolved symbols and checked guest register and memory access.

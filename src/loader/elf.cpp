@@ -1,4 +1,5 @@
 // Copyright (C) 2026 KajPS5 contributors
+// Architecture reference: KytyPS5
 // Behavior reference: Copyright (C) 2026 SharpEmu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -6,6 +7,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <initializer_list>
 #include <limits>
 #include <utility>
 
@@ -26,6 +28,7 @@ constexpr std::uint16_t kTypeSceDynamic = 0xfe18;
 constexpr std::uint16_t kMachineX86_64 = 62;
 constexpr std::uint32_t kProgramTypeLoad = 1;
 constexpr std::uint32_t kProgramTypeDynamic = 2;
+constexpr std::uint32_t kProgramTypeSceDynlibData = 0x61000000;
 constexpr std::size_t kDynamicEntrySize = 16;
 constexpr std::int64_t kDynamicTagNull = 0;
 constexpr std::int64_t kDynamicTagNeeded = 1;
@@ -41,6 +44,25 @@ constexpr std::int64_t kDynamicTagSymbolEntrySize = 11;
 constexpr std::int64_t kDynamicTagSharedObjectName = 14;
 constexpr std::int64_t kDynamicTagPltRelocationFormat = 20;
 constexpr std::int64_t kDynamicTagJumpRelocation = 23;
+constexpr std::int64_t kDynamicTagSceExportLibrary = 0x61000013;
+constexpr std::int64_t kDynamicTagSceImportLibrary = 0x61000015;
+constexpr std::int64_t kDynamicTagSceJumpRelocation = 0x61000029;
+constexpr std::int64_t kDynamicTagScePltRelocationFormat = 0x6100002b;
+constexpr std::int64_t kDynamicTagScePltRelocationSize = 0x6100002d;
+constexpr std::int64_t kDynamicTagSceRela = 0x6100002f;
+constexpr std::int64_t kDynamicTagSceRelaSize = 0x61000031;
+constexpr std::int64_t kDynamicTagSceRelaEntrySize = 0x61000033;
+constexpr std::int64_t kDynamicTagSceStringTable = 0x61000035;
+constexpr std::int64_t kDynamicTagSceStringTableSize = 0x61000037;
+constexpr std::int64_t kDynamicTagSceSymbolTable = 0x61000039;
+constexpr std::int64_t kDynamicTagSceSymbolEntrySize = 0x6100003b;
+constexpr std::int64_t kDynamicTagSceSymbolTableSize = 0x6100003f;
+constexpr std::int64_t kDynamicTagSceModuleInfoV2 = 0x61000043;
+constexpr std::int64_t kDynamicTagSceNeededModuleV2 = 0x61000045;
+constexpr std::int64_t kDynamicTagSceExportLibraryV2 = 0x61000047;
+constexpr std::int64_t kDynamicTagSceImportLibraryV2 = 0x61000049;
+constexpr std::int64_t kDynamicTagSceModuleInfo = 0x6100000d;
+constexpr std::int64_t kDynamicTagSceNeededModule = 0x6100000f;
 constexpr std::uint64_t kDynamicFormatRela = 7;
 constexpr std::size_t kRelaEntrySize = 24;
 constexpr std::size_t kSymbolEntrySize = 24;
@@ -128,6 +150,41 @@ const ElfDynamicEntry* FindDynamicEntry(
   return entry == metadata.dynamic_entries.end() ? nullptr : &*entry;
 }
 
+bool HasDynamicEntry(const ElfMetadata& metadata,
+                     std::initializer_list<std::int64_t> tags) noexcept {
+  return std::any_of(
+      metadata.dynamic_entries.begin(), metadata.dynamic_entries.end(),
+      [tags](const ElfDynamicEntry& entry) {
+        return std::find(tags.begin(), tags.end(), entry.tag) != tags.end();
+      });
+}
+
+struct DynamicEntrySelection {
+  const ElfDynamicEntry* entry = nullptr;
+  ElfDynamicDataSource source = ElfDynamicDataSource::kNone;
+};
+
+DynamicEntrySelection SelectDynamicEntry(const ElfMetadata& metadata,
+                                         std::int64_t standard_tag,
+                                         std::int64_t sce_tag) noexcept {
+  if (const auto* entry = FindDynamicEntry(metadata, sce_tag);
+      entry != nullptr) {
+    return {entry, ElfDynamicDataSource::kSceDynlibData};
+  }
+  if (const auto* entry = FindDynamicEntry(metadata, standard_tag);
+      entry != nullptr) {
+    return {entry, ElfDynamicDataSource::kLoadSegment};
+  }
+  return {};
+}
+
+DynamicEntrySelection SelectSceDynamicEntry(const ElfMetadata& metadata,
+                                            std::int64_t tag) noexcept {
+  const auto* entry = FindDynamicEntry(metadata, tag);
+  return {entry, entry == nullptr ? ElfDynamicDataSource::kNone
+                                  : ElfDynamicDataSource::kSceDynlibData};
+}
+
 std::optional<std::size_t> ResolveFileOffset(
     const ElfMetadata& metadata, std::uint64_t virtual_address,
     std::uint64_t size) noexcept {
@@ -143,6 +200,36 @@ std::optional<std::size_t> ResolveFileOffset(
     }
   }
   return std::nullopt;
+}
+
+const ElfProgramHeader* FindProgramHeader(const ElfMetadata& metadata,
+                                          std::uint32_t type) noexcept {
+  const auto header = std::find_if(metadata.program_headers.begin(),
+                                   metadata.program_headers.end(),
+                                   [type](const ElfProgramHeader& candidate) {
+                                     return candidate.type == type;
+                                   });
+  return header == metadata.program_headers.end() ? nullptr : &*header;
+}
+
+std::optional<std::size_t> ResolveDynamicFileOffset(
+    const ElfMetadata& metadata, DynamicEntrySelection selection,
+    std::uint64_t size) noexcept {
+  if (selection.entry == nullptr) {
+    return std::nullopt;
+  }
+  if (selection.source == ElfDynamicDataSource::kLoadSegment) {
+    return ResolveFileOffset(metadata, selection.entry->value, size);
+  }
+  if (selection.source != ElfDynamicDataSource::kSceDynlibData) {
+    return std::nullopt;
+  }
+  const auto* header = FindProgramHeader(metadata, kProgramTypeSceDynlibData);
+  if (header == nullptr ||
+      !RangeWithin(header->file_size, selection.entry->value, size)) {
+    return std::nullopt;
+  }
+  return static_cast<std::size_t>(header->offset + selection.entry->value);
 }
 
 enum class DynamicStringReadStatus {
@@ -189,36 +276,43 @@ DynamicStringReadStatus ReadDynamicString(
 ElfError ParseDynamicStrings(std::span<const std::byte> image,
                              ElfMetadata& metadata,
                              std::size_t& decoded_string_budget) {
-  const auto* string_table =
-      FindDynamicEntry(metadata, kDynamicTagStringTable);
-  const auto* string_table_size =
-      FindDynamicEntry(metadata, kDynamicTagStringTableSize);
+  const auto string_table = SelectDynamicEntry(metadata, kDynamicTagStringTable,
+                                               kDynamicTagSceStringTable);
+  const auto string_table_size = SelectDynamicEntry(
+      metadata, kDynamicTagStringTableSize, kDynamicTagSceStringTableSize);
   const auto* shared_object_name =
       FindDynamicEntry(metadata, kDynamicTagSharedObjectName);
 
-  const auto has_needed = std::any_of(
-      metadata.dynamic_entries.begin(), metadata.dynamic_entries.end(),
-      [](const ElfDynamicEntry& entry) {
-        return entry.tag == kDynamicTagNeeded;
-      });
-  if ((string_table == nullptr) != (string_table_size == nullptr) ||
+  const auto has_needed =
+      FindDynamicEntry(metadata, kDynamicTagNeeded) != nullptr;
+  const auto has_sce_identities = HasDynamicEntry(
+      metadata, {kDynamicTagSceNeededModule, kDynamicTagSceNeededModuleV2,
+                 kDynamicTagSceModuleInfo, kDynamicTagSceModuleInfoV2,
+                 kDynamicTagSceImportLibrary, kDynamicTagSceImportLibraryV2,
+                 kDynamicTagSceExportLibrary, kDynamicTagSceExportLibraryV2});
+  if ((string_table.entry == nullptr) != (string_table_size.entry == nullptr) ||
+      (string_table.entry != nullptr &&
+       string_table.source != string_table_size.source) ||
       ((has_needed || shared_object_name != nullptr) &&
-       string_table == nullptr)) {
+       string_table.entry == nullptr) ||
+      (has_sce_identities &&
+       string_table.source != ElfDynamicDataSource::kSceDynlibData)) {
     return ElfError::kIncompleteDynamicStringTable;
   }
-  if (string_table == nullptr) {
+  if (string_table.entry == nullptr) {
     return ElfError::kNone;
   }
 
-  const auto file_offset = ResolveFileOffset(
-      metadata, string_table->value, string_table_size->value);
+  const auto file_offset = ResolveDynamicFileOffset(
+      metadata, string_table, string_table_size.entry->value);
   if (!file_offset.has_value()) {
     return ElfError::kDynamicStringTableNotFileBacked;
   }
   const auto bytes = image.subspan(
-      *file_offset, static_cast<std::size_t>(string_table_size->value));
-  metadata.dynamic_info.string_table_address = string_table->value;
-  metadata.dynamic_info.string_table_size = string_table_size->value;
+      *file_offset, static_cast<std::size_t>(string_table_size.entry->value));
+  metadata.dynamic_info.string_table_source = string_table.source;
+  metadata.dynamic_info.string_table_file_offset = *file_offset;
+  metadata.dynamic_info.string_table_size = string_table_size.entry->value;
 
   for (const auto& entry : metadata.dynamic_entries) {
     if (entry.tag != kDynamicTagNeeded) {
@@ -257,6 +351,84 @@ ElfError ParseDynamicStrings(std::span<const std::byte> image,
   return ElfError::kNone;
 }
 
+ElfError ReadMetadataString(std::span<const std::byte> image,
+                            const ElfMetadata& metadata, std::uint64_t offset,
+                            std::size_t& decoded_string_budget,
+                            std::string& value) {
+  if (!metadata.dynamic_info.string_table_file_offset.has_value() ||
+      !metadata.dynamic_info.string_table_size.has_value()) {
+    return ElfError::kIncompleteDynamicStringTable;
+  }
+  const auto table_offset = *metadata.dynamic_info.string_table_file_offset;
+  const auto table_size = *metadata.dynamic_info.string_table_size;
+  if (!RangeWithin(image.size(), table_offset, table_size)) {
+    return ElfError::kDynamicStringTableNotFileBacked;
+  }
+  const auto bytes = image.subspan(static_cast<std::size_t>(table_offset),
+                                   static_cast<std::size_t>(table_size));
+  if (offset >= bytes.size()) {
+    return ElfError::kDynamicStringOffsetOutOfRange;
+  }
+  const auto status =
+      ReadDynamicString(bytes, offset, decoded_string_budget, value);
+  if (status == DynamicStringReadStatus::kBudgetExceeded) {
+    return ElfError::kDecodedStringBudgetExceeded;
+  }
+  return status == DynamicStringReadStatus::kOk
+             ? ElfError::kNone
+             : ElfError::kUnterminatedDynamicString;
+}
+
+ElfError ParseSceIdentities(std::span<const std::byte> image,
+                            ElfMetadata& metadata,
+                            std::size_t& decoded_string_budget) {
+  for (const auto& entry : metadata.dynamic_entries) {
+    const auto is_import_module = entry.tag == kDynamicTagSceNeededModule ||
+                                  entry.tag == kDynamicTagSceNeededModuleV2;
+    const auto is_export_module = entry.tag == kDynamicTagSceModuleInfo ||
+                                  entry.tag == kDynamicTagSceModuleInfoV2;
+    const auto is_import_library = entry.tag == kDynamicTagSceImportLibrary ||
+                                   entry.tag == kDynamicTagSceImportLibraryV2;
+    const auto is_export_library = entry.tag == kDynamicTagSceExportLibrary ||
+                                   entry.tag == kDynamicTagSceExportLibraryV2;
+    if (!is_import_module && !is_export_module && !is_import_library &&
+        !is_export_library) {
+      continue;
+    }
+
+    std::string name;
+    if (const auto error = ReadMetadataString(
+            image, metadata, static_cast<std::uint32_t>(entry.value),
+            decoded_string_budget, name);
+        error != ElfError::kNone) {
+      return error;
+    }
+
+    if (is_import_module || is_export_module) {
+      ElfModuleIdentity identity;
+      identity.id = static_cast<std::uint16_t>(entry.value >> 48U);
+      identity.version_major = static_cast<std::uint8_t>(entry.value >> 40U);
+      identity.version_minor = static_cast<std::uint8_t>(entry.value >> 32U);
+      identity.name = std::move(name);
+      auto& identities = is_import_module
+                             ? metadata.dynamic_info.import_modules
+                             : metadata.dynamic_info.export_modules;
+      identities.push_back(std::move(identity));
+      continue;
+    }
+
+    ElfLibraryIdentity identity;
+    identity.id = static_cast<std::uint16_t>(entry.value >> 48U);
+    identity.version = static_cast<std::uint16_t>(entry.value >> 32U);
+    identity.name = std::move(name);
+    auto& identities = is_import_library
+                           ? metadata.dynamic_info.import_libraries
+                           : metadata.dynamic_info.export_libraries;
+    identities.push_back(std::move(identity));
+  }
+  return ElfError::kNone;
+}
+
 bool IsGuestRangeMapped(const ElfMetadata& metadata, std::uint64_t address,
                         std::uint64_t size) noexcept {
   for (const auto& header : metadata.program_headers) {
@@ -272,14 +444,13 @@ bool IsGuestRangeMapped(const ElfMetadata& metadata, std::uint64_t address,
   return false;
 }
 
-ElfError ParseRelaTable(std::span<const std::byte> image,
-                        ElfMetadata& metadata, std::uint64_t address,
-                        std::uint64_t size,
+ElfError ParseRelaTable(std::span<const std::byte> image, ElfMetadata& metadata,
+                        DynamicEntrySelection table, std::uint64_t size,
                         std::vector<ElfRelaEntry>& entries) {
   if (size % kRelaEntrySize != 0) {
     return ElfError::kInvalidRelaEntrySize;
   }
-  const auto file_offset = ResolveFileOffset(metadata, address, size);
+  const auto file_offset = ResolveDynamicFileOffset(metadata, table, size);
   if (!file_offset.has_value()) {
     return ElfError::kRelaTableNotFileBacked;
   }
@@ -304,47 +475,78 @@ ElfError ParseRelaTable(std::span<const std::byte> image,
 
 ElfError ParseDynamicRelocations(std::span<const std::byte> image,
                                  ElfMetadata& metadata) {
-  const auto* rela = FindDynamicEntry(metadata, kDynamicTagRela);
-  const auto* rela_size = FindDynamicEntry(metadata, kDynamicTagRelaSize);
-  const auto* rela_entry_size =
-      FindDynamicEntry(metadata, kDynamicTagRelaEntrySize);
-  const auto rela_fields = static_cast<unsigned>(rela != nullptr) +
-                           static_cast<unsigned>(rela_size != nullptr) +
-                           static_cast<unsigned>(rela_entry_size != nullptr);
-  if (rela_fields != 0 && rela_fields != 3) {
-    return ElfError::kIncompleteRelaMetadata;
+  const auto has_sce_rela =
+      HasDynamicEntry(metadata, {kDynamicTagSceRela, kDynamicTagSceRelaSize,
+                                 kDynamicTagSceRelaEntrySize});
+  DynamicEntrySelection rela;
+  const ElfDynamicEntry* rela_size = nullptr;
+  const ElfDynamicEntry* rela_entry_size = nullptr;
+  if (has_sce_rela) {
+    rela = SelectSceDynamicEntry(metadata, kDynamicTagSceRela);
+    rela_size = FindDynamicEntry(metadata, kDynamicTagSceRelaSize);
+    rela_entry_size = FindDynamicEntry(metadata, kDynamicTagSceRelaEntrySize);
+    if (rela.entry == nullptr || rela_size == nullptr) {
+      return ElfError::kIncompleteRelaMetadata;
+    }
+  } else {
+    rela = {FindDynamicEntry(metadata, kDynamicTagRela),
+            ElfDynamicDataSource::kLoadSegment};
+    rela_size = FindDynamicEntry(metadata, kDynamicTagRelaSize);
+    rela_entry_size = FindDynamicEntry(metadata, kDynamicTagRelaEntrySize);
+    const auto fields = static_cast<unsigned>(rela.entry != nullptr) +
+                        static_cast<unsigned>(rela_size != nullptr) +
+                        static_cast<unsigned>(rela_entry_size != nullptr);
+    if (fields != 0 && fields != 3) {
+      return ElfError::kIncompleteRelaMetadata;
+    }
   }
-  if (rela != nullptr) {
-    if (rela_entry_size->value != kRelaEntrySize) {
+  if (rela.entry != nullptr) {
+    if (rela_entry_size != nullptr &&
+        rela_entry_size->value != kRelaEntrySize) {
       return ElfError::kInvalidRelaEntrySize;
     }
-    if (const auto error = ParseRelaTable(
-            image, metadata, rela->value, rela_size->value,
-            metadata.dynamic_info.relocations);
+    if (const auto error =
+            ParseRelaTable(image, metadata, rela, rela_size->value,
+                           metadata.dynamic_info.relocations);
         error != ElfError::kNone) {
       return error;
     }
   }
 
-  const auto* jump_relocation =
-      FindDynamicEntry(metadata, kDynamicTagJumpRelocation);
-  const auto* plt_size =
-      FindDynamicEntry(metadata, kDynamicTagPltRelocationSize);
-  const auto* plt_format =
-      FindDynamicEntry(metadata, kDynamicTagPltRelocationFormat);
-  const auto plt_fields = static_cast<unsigned>(jump_relocation != nullptr) +
-                          static_cast<unsigned>(plt_size != nullptr) +
-                          static_cast<unsigned>(plt_format != nullptr);
-  if (plt_fields != 0 && plt_fields != 3) {
-    return ElfError::kIncompleteRelaMetadata;
+  const auto has_sce_plt = HasDynamicEntry(
+      metadata, {kDynamicTagSceJumpRelocation, kDynamicTagScePltRelocationSize,
+                 kDynamicTagScePltRelocationFormat});
+  DynamicEntrySelection jump_relocation;
+  const ElfDynamicEntry* plt_size = nullptr;
+  const ElfDynamicEntry* plt_format = nullptr;
+  if (has_sce_plt) {
+    jump_relocation =
+        SelectSceDynamicEntry(metadata, kDynamicTagSceJumpRelocation);
+    plt_size = FindDynamicEntry(metadata, kDynamicTagScePltRelocationSize);
+    plt_format = FindDynamicEntry(metadata, kDynamicTagScePltRelocationFormat);
+    if (jump_relocation.entry == nullptr || plt_size == nullptr) {
+      return ElfError::kIncompleteRelaMetadata;
+    }
+  } else {
+    jump_relocation = {FindDynamicEntry(metadata, kDynamicTagJumpRelocation),
+                       ElfDynamicDataSource::kLoadSegment};
+    plt_size = FindDynamicEntry(metadata, kDynamicTagPltRelocationSize);
+    plt_format = FindDynamicEntry(metadata, kDynamicTagPltRelocationFormat);
+    const auto fields =
+        static_cast<unsigned>(jump_relocation.entry != nullptr) +
+        static_cast<unsigned>(plt_size != nullptr) +
+        static_cast<unsigned>(plt_format != nullptr);
+    if (fields != 0 && fields != 3) {
+      return ElfError::kIncompleteRelaMetadata;
+    }
   }
-  if (jump_relocation != nullptr) {
-    if (plt_format->value != kDynamicFormatRela) {
+  if (jump_relocation.entry != nullptr) {
+    if (plt_format != nullptr && plt_format->value != kDynamicFormatRela) {
       return ElfError::kUnsupportedPltRelocationFormat;
     }
-    if (const auto error = ParseRelaTable(
-            image, metadata, jump_relocation->value, plt_size->value,
-            metadata.dynamic_info.plt_relocations);
+    if (const auto error =
+            ParseRelaTable(image, metadata, jump_relocation, plt_size->value,
+                           metadata.dynamic_info.plt_relocations);
         error != ElfError::kNone) {
       return error;
     }
@@ -352,61 +554,29 @@ ElfError ParseDynamicRelocations(std::span<const std::byte> image,
   return ElfError::kNone;
 }
 
-ElfError ParseDynamicSymbols(std::span<const std::byte> image,
-                             ElfMetadata& metadata,
-                             std::size_t& decoded_string_budget) {
-  const auto* hash = FindDynamicEntry(metadata, kDynamicTagHash);
-  if (hash == nullptr) {
-    return ElfError::kNone;
-  }
-  const auto* symbol_table =
-      FindDynamicEntry(metadata, kDynamicTagSymbolTable);
-  const auto* symbol_entry_size =
-      FindDynamicEntry(metadata, kDynamicTagSymbolEntrySize);
-  if (symbol_table == nullptr || symbol_entry_size == nullptr ||
-      !metadata.dynamic_info.string_table_address.has_value() ||
+ElfError ParseSymbolRecords(std::span<const std::byte> image,
+                            ElfMetadata& metadata,
+                            std::size_t symbol_file_offset,
+                            std::uint64_t symbol_count,
+                            std::size_t& decoded_string_budget) {
+  if (!metadata.dynamic_info.string_table_file_offset.has_value() ||
       !metadata.dynamic_info.string_table_size.has_value()) {
     return ElfError::kIncompleteDynamicSymbolMetadata;
   }
-  if (symbol_entry_size->value != kSymbolEntrySize) {
-    return ElfError::kInvalidSymbolEntrySize;
-  }
-
-  const auto hash_header_offset = ResolveFileOffset(metadata, hash->value, 8);
-  if (!hash_header_offset.has_value()) {
-    return ElfError::kHashTableNotFileBacked;
-  }
-  const auto bucket_count = Read32(image, *hash_header_offset);
-  const auto symbol_count = Read32(image, *hash_header_offset + 4);
-  const auto hash_size =
-      std::uint64_t{8} + std::uint64_t{4} *
-                             (static_cast<std::uint64_t>(bucket_count) +
-                              static_cast<std::uint64_t>(symbol_count));
-  if (!ResolveFileOffset(metadata, hash->value, hash_size).has_value()) {
-    return ElfError::kHashTableNotFileBacked;
-  }
-
-  const auto symbol_table_size =
-      static_cast<std::uint64_t>(symbol_count) * kSymbolEntrySize;
-  const auto symbol_file_offset =
-      ResolveFileOffset(metadata, symbol_table->value, symbol_table_size);
-  if (!symbol_file_offset.has_value()) {
-    return ElfError::kSymbolTableNotFileBacked;
-  }
-  const auto string_file_offset = ResolveFileOffset(
-      metadata, *metadata.dynamic_info.string_table_address,
-      *metadata.dynamic_info.string_table_size);
-  if (!string_file_offset.has_value()) {
+  const auto string_file_offset =
+      *metadata.dynamic_info.string_table_file_offset;
+  const auto string_table_size = *metadata.dynamic_info.string_table_size;
+  if (!RangeWithin(image.size(), string_file_offset, string_table_size)) {
     return ElfError::kDynamicStringTableNotFileBacked;
   }
-  const auto strings = image.subspan(
-      *string_file_offset, static_cast<std::size_t>(
-                               *metadata.dynamic_info.string_table_size));
+  const auto strings =
+      image.subspan(static_cast<std::size_t>(string_file_offset),
+                    static_cast<std::size_t>(string_table_size));
 
-  metadata.dynamic_info.symbols.reserve(symbol_count);
-  for (std::uint32_t index = 0; index < symbol_count; ++index) {
+  metadata.dynamic_info.symbols.reserve(static_cast<std::size_t>(symbol_count));
+  for (std::uint64_t index = 0; index < symbol_count; ++index) {
     const auto offset =
-        *symbol_file_offset + static_cast<std::size_t>(index) * kSymbolEntrySize;
+        symbol_file_offset + static_cast<std::size_t>(index) * kSymbolEntrySize;
     ElfSymbol symbol;
     symbol.name_offset = Read32(image, offset);
     symbol.info = Read8(image, offset + 4);
@@ -430,6 +600,82 @@ ElfError ParseDynamicSymbols(std::span<const std::byte> image,
     metadata.dynamic_info.symbols.push_back(std::move(symbol));
   }
   return ElfError::kNone;
+}
+
+ElfError ParseDynamicSymbols(std::span<const std::byte> image,
+                             ElfMetadata& metadata,
+                             std::size_t& decoded_string_budget) {
+  const auto has_sce_symbols = HasDynamicEntry(
+      metadata, {kDynamicTagSceSymbolTable, kDynamicTagSceSymbolTableSize,
+                 kDynamicTagSceSymbolEntrySize});
+  if (has_sce_symbols) {
+    const auto symbol_table =
+        SelectSceDynamicEntry(metadata, kDynamicTagSceSymbolTable);
+    const auto* symbol_table_size =
+        FindDynamicEntry(metadata, kDynamicTagSceSymbolTableSize);
+    const auto* symbol_entry_size =
+        FindDynamicEntry(metadata, kDynamicTagSceSymbolEntrySize);
+    if (symbol_table.entry == nullptr || symbol_table_size == nullptr ||
+        metadata.dynamic_info.string_table_source !=
+            ElfDynamicDataSource::kSceDynlibData) {
+      return ElfError::kIncompleteDynamicSymbolMetadata;
+    }
+    if (symbol_entry_size != nullptr &&
+        symbol_entry_size->value != kSymbolEntrySize) {
+      return ElfError::kInvalidSymbolEntrySize;
+    }
+    if (symbol_table_size->value % kSymbolEntrySize != 0) {
+      return ElfError::kInvalidSymbolTableSize;
+    }
+    const auto symbol_file_offset = ResolveDynamicFileOffset(
+        metadata, symbol_table, symbol_table_size->value);
+    if (!symbol_file_offset.has_value()) {
+      return ElfError::kSymbolTableNotFileBacked;
+    }
+    return ParseSymbolRecords(image, metadata, *symbol_file_offset,
+                              symbol_table_size->value / kSymbolEntrySize,
+                              decoded_string_budget);
+  }
+
+  const auto* hash = FindDynamicEntry(metadata, kDynamicTagHash);
+  if (hash == nullptr) {
+    return ElfError::kNone;
+  }
+  const auto* symbol_table = FindDynamicEntry(metadata, kDynamicTagSymbolTable);
+  const auto* symbol_entry_size =
+      FindDynamicEntry(metadata, kDynamicTagSymbolEntrySize);
+  if (symbol_table == nullptr || symbol_entry_size == nullptr ||
+      !metadata.dynamic_info.string_table_file_offset.has_value() ||
+      !metadata.dynamic_info.string_table_size.has_value()) {
+    return ElfError::kIncompleteDynamicSymbolMetadata;
+  }
+  if (symbol_entry_size->value != kSymbolEntrySize) {
+    return ElfError::kInvalidSymbolEntrySize;
+  }
+
+  const auto hash_header_offset = ResolveFileOffset(metadata, hash->value, 8);
+  if (!hash_header_offset.has_value()) {
+    return ElfError::kHashTableNotFileBacked;
+  }
+  const auto bucket_count = Read32(image, *hash_header_offset);
+  const auto symbol_count = Read32(image, *hash_header_offset + 4);
+  const auto hash_size =
+      std::uint64_t{8} +
+      std::uint64_t{4} * (static_cast<std::uint64_t>(bucket_count) +
+                          static_cast<std::uint64_t>(symbol_count));
+  if (!ResolveFileOffset(metadata, hash->value, hash_size).has_value()) {
+    return ElfError::kHashTableNotFileBacked;
+  }
+
+  const auto symbol_table_size =
+      static_cast<std::uint64_t>(symbol_count) * kSymbolEntrySize;
+  const auto symbol_file_offset =
+      ResolveFileOffset(metadata, symbol_table->value, symbol_table_size);
+  if (!symbol_file_offset.has_value()) {
+    return ElfError::kSymbolTableNotFileBacked;
+  }
+  return ParseSymbolRecords(image, metadata, *symbol_file_offset, symbol_count,
+                            decoded_string_budget);
 }
 
 }  // namespace
@@ -547,6 +793,21 @@ ElfParseResult ParseElf64(std::span<const std::byte> image) {
     }
   }
 
+  const ElfProgramHeader* sce_dynlibdata_header = nullptr;
+  for (const auto& header : metadata.program_headers) {
+    if (header.type != kProgramTypeSceDynlibData) {
+      continue;
+    }
+    if (sce_dynlibdata_header != nullptr) {
+      return ParseFailure(ElfError::kMultipleSceDynlibDataSegments);
+    }
+    if (!RangeWithin(static_cast<std::uint64_t>(image.size()), header.offset,
+                     header.file_size)) {
+      return ParseFailure(ElfError::kSceDynlibDataSegmentFileRangeOutOfRange);
+    }
+    sce_dynlibdata_header = &header;
+  }
+
   const ElfProgramHeader* dynamic_header = nullptr;
   for (const auto& header : metadata.program_headers) {
     if (header.type != kProgramTypeDynamic) {
@@ -586,9 +847,25 @@ ElfParseResult ParseElf64(std::span<const std::byte> image) {
     if (!terminated) {
       return ParseFailure(ElfError::kUnterminatedDynamicTable);
     }
+    if (HasDynamicEntry(
+            metadata,
+            {kDynamicTagSceStringTable, kDynamicTagSceStringTableSize,
+             kDynamicTagSceSymbolTable, kDynamicTagSceSymbolTableSize,
+             kDynamicTagSceSymbolEntrySize, kDynamicTagSceRela,
+             kDynamicTagSceRelaSize, kDynamicTagSceRelaEntrySize,
+             kDynamicTagSceJumpRelocation, kDynamicTagScePltRelocationSize,
+             kDynamicTagScePltRelocationFormat}) &&
+        sce_dynlibdata_header == nullptr) {
+      return ParseFailure(ElfError::kMissingSceDynlibDataSegment);
+    }
     auto decoded_string_budget = CalculateDecodedStringBudget(image.size());
     if (const auto error =
             ParseDynamicStrings(image, metadata, decoded_string_budget);
+        error != ElfError::kNone) {
+      return ParseFailure(error);
+    }
+    if (const auto error =
+            ParseSceIdentities(image, metadata, decoded_string_budget);
         error != ElfError::kNone) {
       return ParseFailure(error);
     }
@@ -734,8 +1011,14 @@ std::string_view ElfErrorName(ElfError error) noexcept {
       return "program-header-table-out-of-range";
     case ElfError::kMultipleDynamicSegments:
       return "multiple-dynamic-segments";
+    case ElfError::kMultipleSceDynlibDataSegments:
+      return "multiple-sce-dynlibdata-segments";
     case ElfError::kDynamicSegmentFileRangeOutOfRange:
       return "dynamic-segment-file-range-out-of-range";
+    case ElfError::kSceDynlibDataSegmentFileRangeOutOfRange:
+      return "sce-dynlibdata-segment-file-range-out-of-range";
+    case ElfError::kMissingSceDynlibDataSegment:
+      return "missing-sce-dynlibdata-segment";
     case ElfError::kInvalidDynamicSegmentSize:
       return "invalid-dynamic-segment-size";
     case ElfError::kUnterminatedDynamicTable:
@@ -764,6 +1047,7 @@ std::string_view ElfErrorName(ElfError error) noexcept {
       return "incomplete-dynamic-symbol-metadata";
     case ElfError::kInvalidSymbolEntrySize:
       return "invalid-symbol-entry-size";
+    case ElfError::kInvalidSymbolTableSize: return "invalid-symbol-table-size";
     case ElfError::kHashTableNotFileBacked:
       return "hash-table-not-file-backed";
     case ElfError::kSymbolTableNotFileBacked:

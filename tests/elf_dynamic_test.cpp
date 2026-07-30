@@ -243,13 +243,18 @@ int main() {
         "shared-object name is incorrect");
   Check(kajps5::loader::FormatElfTrace(parsed.metadata)
                 .find("elf.dynamic_entries=4\n"
+                      "elf.dynamic_string_source=load-segment\n"
                       "elf.dynamic_string_table_size=64\n"
                       "elf.needed_libraries=1\n"
                       "elf.has_soname=1\n"
                       "elf.relocations=0\n"
                       "elf.plt_relocations=0\n"
                       "elf.symbols=0\n"
-                      "elf.undefined_symbols=0\n") != std::string::npos,
+                      "elf.undefined_symbols=0\n"
+                      "elf.import_modules=0\n"
+                      "elf.export_modules=0\n"
+                      "elf.import_libraries=0\n"
+                      "elf.export_libraries=0\n") != std::string::npos,
         "dynamic summary is missing from the stable trace");
 
   auto invalid_size = image;
