@@ -16,6 +16,7 @@
 #include "hle/import_registry.h"
 #include "loader/elf.h"
 #include "loader/elf_trace.h"
+#include "loader/launch_metadata.h"
 #include "loader/relocation_trace.h"
 #include "loader/relocator.h"
 
@@ -112,6 +113,16 @@ int TraceExecutableFile(const char* path) {
                 << kajps5::loader::RelocationStatusName(relocated.status)
                 << '\n';
       return 4;
+    }
+
+    const auto launch =
+        kajps5::loader::AnalyzeLaunchMetadata(loaded.metadata);
+    std::cout << kajps5::loader::FormatLaunchMetadataTrace(launch);
+    if (!launch) {
+      std::cerr << "Executable launch metadata check failed: "
+                << kajps5::loader::LaunchMetadataStatusName(launch.status)
+                << '\n';
+      return 5;
     }
   } catch (const std::exception& exception) {
     std::cerr << "Executable load check failed: " << exception.what() << '\n';

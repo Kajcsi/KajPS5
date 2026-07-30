@@ -108,7 +108,14 @@ dynlib-data segments, truncated ranges, and invalid table and name offsets.
 No fixture contains proprietary data. The valid fixtures also run through
 checked guest loading, scoped NID resolution, and transactional relocation
 writes. One generated PS5 SELF covers the full container, dynamic-metadata,
-load, relative-relocation, and import-link sequence.
+load, relative-relocation, import-link, and launch-metadata sequence.
+
+Launch metadata follows the image-base flow used by both references. A nonzero
+entry point must be inside an executable load segment. Only one SCE process
+parameter segment and one TLS segment are accepted. Process parameters must be
+inside loaded memory. The initialized TLS bytes must be loaded, while the
+larger zero-filled TLS area remains per-thread storage and does not need its
+own file-backed load range.
 
 The separate controlled native tests are documented in `stage2-cpu.md` and
 `stage2-hle.md`.

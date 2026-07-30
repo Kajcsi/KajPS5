@@ -15,6 +15,7 @@
 #include "hle/import_registry.h"
 #include "loader/elf.h"
 #include "loader/elf_trace.h"
+#include "loader/launch_metadata.h"
 #include "loader/relocator.h"
 
 namespace {
@@ -235,10 +236,10 @@ std::vector<std::byte> MakeLinkedSelf() {
   Write64(image, kElfOffset + 32, 0x40);
   Write16(image, kElfOffset + 52, 64);
   Write16(image, kElfOffset + 54, 56);
-  Write16(image, kElfOffset + 56, 2);
+  Write16(image, kElfOffset + 56, 4);
 
   Write32(image, kProgramHeaderOffset, 1);
-  Write32(image, kProgramHeaderOffset + 4, 6);
+  Write32(image, kProgramHeaderOffset + 4, 7);
   Write64(image, kProgramHeaderOffset + 8, kLinkedLoadFileOffset);
   Write64(image, kProgramHeaderOffset + 16, kLinkedLoadAddress);
   Write64(image, kProgramHeaderOffset + 24, kLinkedLoadAddress);
@@ -258,6 +259,29 @@ std::vector<std::byte> MakeLinkedSelf() {
   Write64(image, dynamic_header + 32, dynamic_count * 16);
   Write64(image, dynamic_header + 40, dynamic_count * 16);
   Write64(image, dynamic_header + 48, 8);
+
+  const auto tls_header = kProgramHeaderOffset + 112;
+  Write32(image, tls_header, 7);
+  Write32(image, tls_header + 4, 4);
+  Write64(image, tls_header + 8, kLinkedLoadFileOffset + 0x340);
+  Write64(image, tls_header + 16, kLinkedLoadAddress + 0x340);
+  Write64(image, tls_header + 24, kLinkedLoadAddress + 0x340);
+  Write64(image, tls_header + 32, 0x10);
+  Write64(image, tls_header + 40, 0x20);
+  Write64(image, tls_header + 48, 0x10);
+
+  const auto process_parameters_header = kProgramHeaderOffset + 168;
+  Write32(image, process_parameters_header, 0x61000001);
+  Write32(image, process_parameters_header + 4, 4);
+  Write64(image, process_parameters_header + 8,
+          kLinkedLoadFileOffset + 0x360);
+  Write64(image, process_parameters_header + 16,
+          kLinkedLoadAddress + 0x360);
+  Write64(image, process_parameters_header + 24,
+          kLinkedLoadAddress + 0x360);
+  Write64(image, process_parameters_header + 32, 0x10);
+  Write64(image, process_parameters_header + 40, 0x10);
+  Write64(image, process_parameters_header + 48, 8);
 
   const auto dynamic = kLinkedPayloadOffset + dynamic_relative;
   WriteDynamic(image, dynamic, 0, kTagSceStringTable,
@@ -374,6 +398,15 @@ int main() {
   Check(linked_memory.Read(kLinkedLoadAddress + 0x300, linked_values) &&
             linked_values == expected_linked_values,
         "synthetic PS5 SELF relocation values are incorrect");
+  const auto launch =
+      kajps5::loader::AnalyzeLaunchMetadata(linked_load.metadata);
+  Check(launch && launch.metadata.entry_point == kLinkedLoadAddress &&
+            launch.metadata.process_parameters == kLinkedLoadAddress + 0x360 &&
+            launch.metadata.tls.has_value() &&
+            launch.metadata.tls->image_address == kLinkedLoadAddress + 0x340 &&
+            launch.metadata.tls->initial_size == 0x10 &&
+            launch.metadata.tls->memory_size == 0x20,
+        "synthetic PS5 SELF launch metadata is incorrect");
 
   Check(static_cast<bool>(ParseExecutable64(MakeSelf(0x802))),
         "resolved dumped encrypted payload was rejected");

@@ -23,6 +23,7 @@
 - [x] Parse checked SELF/FSELF containers and resolve their ELF payloads.
 - [x] Resolve PS5 dynamic metadata from dynlib-data or load segments.
 - [x] Run a recognized SELF through checked loading and relocation planning.
+- [x] Validate entry-point, process-parameter, and TLS template metadata.
 
 ## Stage 2: CPU and kernel
 
