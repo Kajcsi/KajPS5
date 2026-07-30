@@ -45,6 +45,8 @@ The current core includes:
   protection, flexible and direct-memory mappings, direct-memory range
   allocation, and a read-only in-memory file namespace. The matching
   `libkernel` handlers share the same services.
+- Checked JSON value construction and destruction through a bounded shadow
+  store, without writing an assumed guest object layout.
 - Small public and generated test fixtures, including an ELF that loads
   without running guest code and controlled x86-64 leaf programs used only by
   tests.

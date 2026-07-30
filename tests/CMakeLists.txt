@@ -206,6 +206,12 @@ kajps5_deploy_msvc_asan_runtime(kajps5_hle_import_coverage_test)
 add_test(NAME kajps5_hle_import_coverage
          COMMAND kajps5_hle_import_coverage_test)
 
+add_executable(kajps5_hle_json_exports_test hle_json_exports_test.cpp)
+target_link_libraries(kajps5_hle_json_exports_test PRIVATE kajps5_core)
+kajps5_deploy_msvc_asan_runtime(kajps5_hle_json_exports_test)
+
+add_test(NAME kajps5_hle_json_exports COMMAND kajps5_hle_json_exports_test)
+
 add_executable(kajps5_relocation_trace_test relocation_trace_test.cpp)
 target_link_libraries(kajps5_relocation_trace_test PRIVATE kajps5_core)
 kajps5_deploy_msvc_asan_runtime(kajps5_relocation_trace_test)

@@ -8,6 +8,7 @@ add_library(kajps5_core STATIC
   hle/export_registry.cpp
   hle/import_coverage.cpp
   hle/import_registry.cpp
+  hle/json_exports.cpp
   hle/kernel_clock_exports.cpp
   hle/kernel_event_queue_exports.cpp
   hle/kernel_event_flag_exports.cpp
@@ -25,6 +26,7 @@ add_library(kajps5_core STATIC
   kernel/file.cpp
   kernel/guest_scheduler.cpp
   kernel/handle_table.cpp
+  kernel/json_value.cpp
   kernel/pthread.cpp
   kernel/semaphore.cpp
   loader/elf.cpp

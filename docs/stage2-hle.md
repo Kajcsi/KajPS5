@@ -62,6 +62,12 @@ The libc registry also recognizes `__cxa_pure_virtual`. Calling it returns a
 fatal guest status and never reports success or a return value. A later guest
 executor can use that status to end the process cleanly.
 
+The first JSON bridge handles complete and base `Value` construction and
+destruction for `libSceJson2` and `libSceJson`. The single runtime owns a
+bounded map keyed by checked guest object addresses. Constructors create a
+null shadow, repeated construction resets it, and destructors remove it.
+KajPS5 does not write a guessed JSON object layout into guest stack memory.
+
 The first `libc` batch implements `__cxa_guard_acquire`,
 `__cxa_guard_release`, and `__cxa_guard_abort`. It preserves the upper six
 bytes of each guest guard word. One guest thread owns initialization, a

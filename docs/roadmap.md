@@ -65,6 +65,7 @@
 - [x] Add a platform-neutral checked HLE call context.
 - [x] Add deterministic library-scoped HLE handler dispatch.
 - [x] Relocate known runtime data imports to checked guest memory.
+- [x] Add bounded JSON value construction and destruction shadows.
 - [x] Add scheduler-aware C++ static initialization guards.
 - [x] Register consistent libkernel process-time handlers.
 - [x] Add a transactional libkernel clock-gettime handler.

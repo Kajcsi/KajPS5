@@ -19,6 +19,7 @@
 #include "hle/export_registry.h"
 #include "hle/import_coverage.h"
 #include "hle/import_registry.h"
+#include "hle/json_exports.h"
 #include "hle/kernel_exports.h"
 #include "hle/libc_exports.h"
 #include "kernel/runtime.h"
@@ -177,6 +178,15 @@ int TraceExecutableFile(const char* path) {
       std::cerr << "HLE coverage check failed: libc export registration "
                    "returned "
                 << kajps5::hle::ExportRegistryStatusName(libc_export_status)
+                << '\n';
+      return 7;
+    }
+    const auto json_export_status = kajps5::hle::RegisterJsonExports(
+        hle_exports, kernel_runtime.json_values());
+    if (json_export_status != kajps5::hle::ExportRegistryStatus::kOk) {
+      std::cerr << "HLE coverage check failed: JSON export registration "
+                   "returned "
+                << kajps5::hle::ExportRegistryStatusName(json_export_status)
                 << '\n';
       return 7;
     }

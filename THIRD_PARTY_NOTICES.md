@@ -166,6 +166,15 @@ confirmed by pinned SharpEmu `scripts/ps5_names.txt` and
 `scripts/aerolib_catalog.py`. KajPS5 treats a call as a fatal guest error; it
 does not return a false success. No upstream handler source was copied.
 
+The JSON value service in `src/kernel/json_value.cpp`, its HLE bridge in
+`src/hle/json_exports.cpp`, and `tests/hle_json_exports_test.cpp` use the
+constructor, destructor, and NIDs confirmed by pinned KytyPS5
+`src/libs/libJson2.cpp`. The bounded address-keyed shadow model and the
+`libSceJson` aliases adapt pinned SharpEmu
+`src/SharpEmu.Libs/Json/JsonValueModel.cs`, `JsonValueExports.cs`, and
+`JsonExports.cs`. KajPS5 also registers the observed `libSceJson2` scope. No
+upstream JSON source or object layout was copied.
+
 The process-time handlers in `src/hle/kernel_clock_exports.cpp` and
 `tests/hle_kernel_clock_exports_test.cpp` adapt the matching process-time,
 counter, and frequency behavior from the pinned KytyPS5
