@@ -134,6 +134,17 @@ Both upstreams are GPL-2.0-or-later. No upstream event-queue source code was
 copied verbatim. Blocking wait dispatch remains deferred until a saved guest
 continuation can resume.
 
+The AI-assisted contribution guidance in `CONTRIBUTING.md` and
+`.github/pull_request_template.md` adapts policy concepts from KytyPS5
+`README.md` at commit `f6e01e54031a3c615f089f061a4eab2f3c59acba`,
+and SharpEmu `CONTRIBUTING.md` and `.github/pull_request_template.md` at commit
+`d5108e854d609808f17093a6f5dbbc711d09ad2e`. The SharpEmu reference states:
+
+`Copyright (C) 2026 SharpEmu Emulator Project`
+
+Both references are GPL-2.0-or-later. The KajPS5 text is adapted for this
+project and does not copy the upstream wording verbatim.
+
 Add an entry here when a later change imports or adapts code. Each entry must
 state the project, commit, source path, destination path, copyright notice, and
 license.
