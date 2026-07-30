@@ -54,6 +54,12 @@ C++ scalar allocation calls use the same checked libc heap. A stack-canary
 failure returns a fatal guest status instead of pretending that execution can
 continue.
 
+Libc string scans have a one-megabyte limit. `wcscmp` reads little-endian
+16-bit guest units, independent of the host's `wchar_t` size. `atof` parses a
+bounded guest byte string and returns through XMM0. `sincos` and `sincosf`
+check both optional output ranges before either value is written. Array
+allocation uses the same checked heap as scalar C++ allocation.
+
 The HLE export registry keeps C++ context handlers separate from executable
 import targets. Dispatch uses the same ordered library scope as linking. An
 ambiguous unscoped name does not run. The registry copies the selected handler

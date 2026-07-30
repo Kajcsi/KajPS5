@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <charconv>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -30,6 +31,7 @@ constexpr std::int32_t kMaximumInitArgumentCount = 2;
 constexpr std::uint64_t kPosixEinval = 22;
 constexpr std::uint64_t kPosixEnomem = 12;
 constexpr std::size_t kMemoryCopyChunkBytes = 4096;
+constexpr std::size_t kMaximumLibcWideUnits = 1024 * 1024;
 
 bool IsPowerOfTwo(std::uint64_t value) noexcept {
   return value != 0 && (value & (value - 1)) == 0;
@@ -380,6 +382,58 @@ HleContextStatus Strcmp(HleCallContext& context) {
   return HleContextStatus::kOk;
 }
 
+HleContextStatus Strlen(HleCallContext& context) {
+  const auto value = context.ReadNullTerminatedString(
+      context.Argument(0).value_or(0), kMaximumHleStringBytes);
+  context.SetReturn(value ? value.value.size() : 0);
+  return value.status;
+}
+
+HleContextStatus Wcscmp(HleCallContext& context) {
+  const auto left = context.Argument(0).value_or(0);
+  const auto right = context.Argument(1).value_or(0);
+  if (left == 0 || right == 0) {
+    context.SetReturn(0);
+    return HleContextStatus::kInvalidArgument;
+  }
+
+  for (std::size_t index = 0; index < kMaximumLibcWideUnits; ++index) {
+    constexpr std::size_t kWideUnitBytes = sizeof(std::uint16_t);
+    if (index > (std::numeric_limits<std::uint64_t>::max() - left) /
+                    kWideUnitBytes ||
+        index > (std::numeric_limits<std::uint64_t>::max() - right) /
+                    kWideUnitBytes) {
+      context.SetReturn(0);
+      return HleContextStatus::kMemoryFault;
+    }
+    std::array<std::byte, kWideUnitBytes> left_bytes{};
+    std::array<std::byte, kWideUnitBytes> right_bytes{};
+    const auto offset = static_cast<std::uint64_t>(index * kWideUnitBytes);
+    if (context.ReadMemory(left + offset, left_bytes) !=
+            HleContextStatus::kOk ||
+        context.ReadMemory(right + offset, right_bytes) !=
+            HleContextStatus::kOk) {
+      context.SetReturn(0);
+      return HleContextStatus::kMemoryFault;
+    }
+    const auto left_unit = static_cast<std::uint16_t>(
+        std::to_integer<unsigned char>(left_bytes[0]) |
+        (std::to_integer<unsigned char>(left_bytes[1]) << 8U));
+    const auto right_unit = static_cast<std::uint16_t>(
+        std::to_integer<unsigned char>(right_bytes[0]) |
+        (std::to_integer<unsigned char>(right_bytes[1]) << 8U));
+    if (left_unit != right_unit || left_unit == 0) {
+      const auto result = static_cast<std::int32_t>(left_unit) -
+                          static_cast<std::int32_t>(right_unit);
+      context.SetReturn(static_cast<std::uint64_t>(
+          static_cast<std::int64_t>(result)));
+      return HleContextStatus::kOk;
+    }
+  }
+  context.SetReturn(0);
+  return HleContextStatus::kUnterminatedString;
+}
+
 template <typename T>
 std::optional<T> ScalarArgument(const HleCallContext& context,
                                 std::size_t index) noexcept {
@@ -419,6 +473,72 @@ HleContextStatus Atan2(HleCallContext& context) {
     return HleContextStatus::kInvalidArgument;
   }
   return SetScalarReturn(context, std::atan2(*left, *right));
+}
+
+template <typename T>
+HleContextStatus WriteGuestScalar(HleCallContext& context,
+                                  std::uint64_t address, T value) {
+  std::array<std::byte, sizeof(T)> bytes{};
+  std::memcpy(bytes.data(), &value, sizeof(value));
+  return context.WriteMemory(address, bytes);
+}
+
+template <typename T>
+HleContextStatus SinCos(HleCallContext& context) {
+  const auto input = ScalarArgument<T>(context, 0);
+  if (!input) {
+    return HleContextStatus::kInvalidArgument;
+  }
+  const auto sine_output = context.Argument(0).value_or(0);
+  const auto cosine_output = context.Argument(1).value_or(0);
+  if ((sine_output != 0 &&
+       !context.CanWriteMemory(sine_output, sizeof(T))) ||
+      (cosine_output != 0 &&
+       !context.CanWriteMemory(cosine_output, sizeof(T)))) {
+    return HleContextStatus::kMemoryFault;
+  }
+  if (sine_output != 0 &&
+      WriteGuestScalar(context, sine_output,
+                       static_cast<T>(std::sin(*input))) !=
+          HleContextStatus::kOk) {
+    return HleContextStatus::kMemoryFault;
+  }
+  if (cosine_output != 0 &&
+      WriteGuestScalar(context, cosine_output,
+                       static_cast<T>(std::cos(*input))) !=
+          HleContextStatus::kOk) {
+    return HleContextStatus::kMemoryFault;
+  }
+  return HleContextStatus::kOk;
+}
+
+HleContextStatus Atof(HleCallContext& context) {
+  const auto input = context.ReadNullTerminatedString(
+      context.Argument(0).value_or(0), kMaximumHleStringBytes);
+  if (!input) {
+    return input.status;
+  }
+  const auto* first = input.value.data();
+  const auto* const last = first + input.value.size();
+  while (first != last &&
+         (*first == ' ' || *first == '\t' || *first == '\n' ||
+          *first == '\r' || *first == '\f' || *first == '\v')) {
+    ++first;
+  }
+  bool positive_sign = false;
+  if (first != last && *first == '+') {
+    positive_sign = true;
+    ++first;
+  }
+  double value = 0;
+  const auto parsed =
+      std::from_chars(first, last, value, std::chars_format::general);
+  if (parsed.ec != std::errc{}) {
+    value = 0;
+  } else if (positive_sign) {
+    value = std::abs(value);
+  }
+  return SetScalarReturn(context, value);
 }
 
 HleContextStatus OperatorNew(HleCallContext& context,
@@ -600,7 +720,7 @@ ExportRegistryStatus RegisterLibcExports(ExportRegistry& registry,
   auto* const heap_view = &heap;
   auto* const memory_view = &memory;
   std::vector<HleExportDefinition> exports;
-  exports.reserve(82);
+  exports.reserve(96);
   AddAliases(exports, kCxaGuardAcquireName, kCxaGuardAcquireNid,
              [guard_view](HleCallContext& context) {
                return CxaGuardAcquire(context, *guard_view);
@@ -678,6 +798,9 @@ ExportRegistryStatus RegisterLibcExports(ExportRegistry& registry,
   AddAliases(exports, kLibcMemsetName, kLibcMemsetNid, Memset);
   AddAliases(exports, kLibcMemcpyName, kLibcMemcpyNid, Memcpy);
   AddAliases(exports, kLibcStrcmpName, kLibcStrcmpNid, Strcmp);
+  AddAliases(exports, kLibcStrlenName, kLibcStrlenNid, Strlen);
+  AddAliases(exports, kLibcWcscmpName, kLibcWcscmpNid, Wcscmp);
+  AddAliases(exports, kLibcAtofName, kLibcAtofNid, Atof);
   AddAliases(exports, kLibcExp2fName, kLibcExp2fNid,
              [](HleCallContext& context) {
                return UnaryMath<float>(context, [](float value) {
@@ -715,11 +838,28 @@ ExportRegistryStatus RegisterLibcExports(ExportRegistry& registry,
                  return std::tan(value);
                });
              });
+  AddAliases(exports, kLibcSincosName, kLibcSincosNid,
+             [](HleCallContext& context) {
+               return SinCos<double>(context);
+             });
+  AddAliases(exports, kLibcSincosfName, kLibcSincosfNid,
+             [](HleCallContext& context) {
+               return SinCos<float>(context);
+             });
   AddAliases(exports, kLibcOperatorNewName, kLibcOperatorNewNid,
              [heap_view, memory_view](HleCallContext& context) {
                return OperatorNew(context, *heap_view, *memory_view);
              });
   AddAliases(exports, kLibcOperatorDeleteName, kLibcOperatorDeleteNid,
+             [heap_view, memory_view](HleCallContext& context) {
+               return OperatorDelete(context, *heap_view, *memory_view);
+             });
+  AddAliases(exports, kLibcOperatorNewArrayName, kLibcOperatorNewArrayNid,
+             [heap_view, memory_view](HleCallContext& context) {
+               return OperatorNew(context, *heap_view, *memory_view);
+             });
+  AddAliases(exports, kLibcOperatorDeleteArrayName,
+             kLibcOperatorDeleteArrayNid,
              [heap_view, memory_view](HleCallContext& context) {
                return OperatorDelete(context, *heap_view, *memory_view);
              });

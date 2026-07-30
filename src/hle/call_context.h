@@ -17,7 +17,7 @@
 
 namespace kajps5::hle {
 
-inline constexpr std::size_t kMaximumHleStringBytes = 4096;
+inline constexpr std::size_t kMaximumHleStringBytes = 1024 * 1024;
 inline constexpr std::size_t kMaximumCapturedHleStackArguments = 16;
 inline constexpr std::size_t kHleVectorArgumentRegisterCount = 8;
 inline constexpr std::size_t kHleVectorReturnRegisterCount = 2;

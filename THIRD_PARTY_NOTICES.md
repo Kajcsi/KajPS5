@@ -212,6 +212,12 @@ KytyPS5's direct host-math bridge but uses KajPS5's checked XMM call context.
 C++ allocation remains inside the existing guest heap. No upstream handler
 source was copied.
 
+The bounded `strlen` and 16-bit `wcscmp` behavior also follows pinned
+SharpEmu `src/SharpEmu.Libs/Kernel/KernelMemoryCompatExports.cs`. The
+`sincos` and `sincosf` output rules follow pinned KytyPS5
+`src/libs/libC.cpp`. Array allocation shares KajPS5's existing scalar C++
+allocation path. No upstream string, math, or allocation source was copied.
+
 The native HLE bridge in `src/cpu/native_hle_trampoline.cpp` adapts the
 register-pack and host-call boundary from pinned SharpEmu
 `src/SharpEmu.Core/Cpu/Native/DirectExecutionBackend.Imports.cs`. Its shared

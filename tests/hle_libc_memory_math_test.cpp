@@ -96,6 +96,18 @@ std::uint64_t ReturnValue(const kajps5::hle::HleCallContext& context) {
   return context.GetRegister(kajps5::hle::HleRegister::kRax).value_or(0);
 }
 
+template <typename T>
+std::optional<T> ReadGuestScalar(const kajps5::memory::GuestMemory& memory,
+                                 std::uint64_t address) {
+  std::array<std::byte, sizeof(T)> bytes{};
+  if (!memory.Read(address, bytes)) {
+    return std::nullopt;
+  }
+  T value{};
+  std::memcpy(&value, bytes.data(), sizeof(value));
+  return value;
+}
+
 }  // namespace
 
 int main() {
@@ -118,7 +130,7 @@ int main() {
   Check(kajps5::hle::RegisterLibcExports(
             registry, runtime.cxa_guards(), runtime.process_lifecycle(),
             runtime.libc_heap(), memory) == ExportRegistryStatus::kOk &&
-            registry.size() == 82,
+            registry.size() == 96,
         "libc exports did not register atomically");
   const std::vector<std::string> scope = {kajps5::hle::kLibcName};
 
@@ -161,6 +173,38 @@ int main() {
   Check(registry.Dispatch(kajps5::hle::kLibcStrcmpNid, scope, compare) &&
             std::bit_cast<std::int64_t>(ReturnValue(compare)) < 0,
         "strcmp did not preserve unsigned byte ordering");
+  HleCallContext length(memory);
+  SetArguments(length, {kPage + 0x200});
+  Check(registry.Dispatch(kajps5::hle::kLibcStrlenNid, scope, length) &&
+            ReturnValue(length) == 3,
+        "strlen returned the wrong byte count");
+
+  const std::array left_wide = {
+      std::byte{'a'}, std::byte{0}, std::byte{'b'}, std::byte{0},
+      std::byte{0}, std::byte{0}};
+  const std::array right_wide = {
+      std::byte{'a'}, std::byte{0}, std::byte{'c'}, std::byte{0},
+      std::byte{0}, std::byte{0}};
+  Check(memory.Write(kPage + 0x240, left_wide) &&
+            memory.Write(kPage + 0x250, right_wide),
+        "wide string setup failed");
+  HleCallContext wide_compare(memory);
+  SetArguments(wide_compare, {kPage + 0x240, kPage + 0x250});
+  Check(registry.Dispatch(kajps5::hle::kLibcWcscmpNid, scope,
+                          wide_compare) &&
+            std::bit_cast<std::int64_t>(ReturnValue(wide_compare)) < 0,
+        "wcscmp did not compare 16-bit guest units");
+
+  const std::array number = {
+      std::byte{' '}, std::byte{'+'}, std::byte{'1'}, std::byte{'2'},
+      std::byte{'.'}, std::byte{'5'}, std::byte{'x'}, std::byte{0}};
+  Check(memory.Write(kPage + 0x280, number), "number string setup failed");
+  HleCallContext atof_call(memory);
+  SetArguments(atof_call, {kPage + 0x280});
+  Check(registry.Dispatch(kajps5::hle::kLibcAtofNid, scope, atof_call) &&
+            ScalarReturn<double>(atof_call) &&
+            *ScalarReturn<double>(atof_call) == 12.5,
+        "atof did not return the parsed scalar value");
 
   const auto exp2 = CallFloat(registry, scope, memory,
                               kajps5::hle::kLibcExp2fNid, 3.0F);
@@ -192,6 +236,53 @@ int main() {
             std::abs(*ScalarReturn<double>(atan2_call) - std::atan2(1.0, 1.0)) <
                 1.0e-12,
         "atan2 did not consume both vector arguments");
+
+  HleCallContext sincos_call(memory);
+  SetArguments(sincos_call, {kPage + 0x300, kPage + 0x308});
+  const std::array<kajps5::hle::HleVectorValue, 1> sincos_argument = {
+      ScalarVector(0.5)};
+  const auto sincos_set =
+      sincos_call.SetCapturedVectorArguments(sincos_argument);
+  const auto sincos_result = registry.Dispatch(
+      kajps5::hle::kLibcSincosNid, scope, sincos_call);
+  const auto sine_double = ReadGuestScalar<double>(memory, kPage + 0x300);
+  const auto cosine_double = ReadGuestScalar<double>(memory, kPage + 0x308);
+  Check(sincos_set && sincos_result && sine_double && cosine_double &&
+            std::abs(*sine_double - std::sin(0.5)) < 1.0e-12 &&
+            std::abs(*cosine_double - std::cos(0.5)) < 1.0e-12,
+        "sincos did not write both checked outputs");
+  constexpr double kPreservedOutput = 77.0;
+  const auto preserved_bytes = ScalarVector(kPreservedOutput);
+  Check(memory.Write(kPage + 0x310,
+                     std::span(preserved_bytes).first(sizeof(double))),
+        "sincos failure setup failed");
+  HleCallContext bad_sincos(memory);
+  SetArguments(bad_sincos, {kPage + 0x310, 0x90000});
+  const auto bad_sincos_set =
+      bad_sincos.SetCapturedVectorArguments(sincos_argument);
+  const auto bad_sincos_result = registry.Dispatch(
+      kajps5::hle::kLibcSincosNid, scope, bad_sincos);
+  Check(bad_sincos_set &&
+            bad_sincos_result.handler_status ==
+                HleContextStatus::kMemoryFault &&
+            ReadGuestScalar<double>(memory, kPage + 0x310) ==
+                kPreservedOutput,
+        "failed sincos changed its first output");
+
+  HleCallContext sincosf_call(memory);
+  SetArguments(sincosf_call, {kPage + 0x320, kPage + 0x324});
+  const std::array<kajps5::hle::HleVectorValue, 1> sincosf_argument = {
+      ScalarVector(0.25F)};
+  const auto sincosf_set =
+      sincosf_call.SetCapturedVectorArguments(sincosf_argument);
+  const auto sincosf_result = registry.Dispatch(
+      kajps5::hle::kLibcSincosfNid, scope, sincosf_call);
+  const auto sine_float = ReadGuestScalar<float>(memory, kPage + 0x320);
+  const auto cosine_float = ReadGuestScalar<float>(memory, kPage + 0x324);
+  Check(sincosf_set && sincosf_result && sine_float && cosine_float &&
+            std::abs(*sine_float - std::sin(0.25F)) < 1.0e-6F &&
+            std::abs(*cosine_float - std::cos(0.25F)) < 1.0e-6F,
+        "sincosf did not write both checked outputs");
   HleCallContext missing_vector(memory);
   Check(registry.Dispatch(kajps5::hle::kLibcSinfNid, scope,
                           missing_vector)
@@ -214,6 +305,20 @@ int main() {
             runtime.libc_heap().allocation_count() == 0 &&
             !memory.QueryRegion(allocation).has_value(),
         "operator delete did not release the guest allocation");
+
+  HleCallContext allocate_array(memory);
+  SetArguments(allocate_array, {80});
+  Check(static_cast<bool>(registry.Dispatch(
+            kajps5::hle::kLibcOperatorNewArrayNid, scope, allocate_array)),
+        "array operator new dispatch failed");
+  const auto array_allocation = ReturnValue(allocate_array);
+  HleCallContext release_array(memory);
+  SetArguments(release_array, {array_allocation});
+  Check(array_allocation != 0 &&
+            registry.Dispatch(kajps5::hle::kLibcOperatorDeleteArrayNid,
+                              scope, release_array) &&
+            runtime.libc_heap().allocation_count() == 0,
+        "array allocation did not use the checked guest heap");
 
   const std::vector<std::string> wrong_scope = {"libkernel"};
   Check(registry.Dispatch(kajps5::hle::kLibcMemcpyNid, wrong_scope, copy)
