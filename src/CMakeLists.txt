@@ -20,6 +20,7 @@ add_library(kajps5_core STATIC
   hle/kernel_pthread_exports.cpp
   hle/kernel_semaphore_exports.cpp
   hle/libc_exports.cpp
+  hle/libc_format.cpp
   kernel/clock.cpp
   kernel/cxa_guard.cpp
   kernel/direct_memory.cpp

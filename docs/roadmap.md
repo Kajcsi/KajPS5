@@ -70,6 +70,7 @@
 - [x] Add checked guest-memory allocation for common libc heap calls.
 - [x] Add bounded caller-owned libc mspaces with aligned allocation.
 - [x] Add checked libc memory, string, scalar math, and C++ allocation calls.
+- [x] Add bounded libc formatted output with register and `va_list` arguments.
 - [x] Add scheduler-aware C++ static initialization guards.
 - [x] Register consistent libkernel process-time handlers.
 - [x] Add a transactional libkernel clock-gettime handler.

@@ -50,8 +50,8 @@ The current core includes:
 - Checked process arguments, bounded exit callbacks, and explicit guest exit
   requests for the first libc lifecycle imports.
 - Checked libc memory, byte-string, and 16-bit wide-string calls, scalar math
-  through XMM registers, C++ allocation, a guest-memory heap, and caller-owned
-  mspaces.
+  through XMM registers, bounded formatted output, C++ allocation, a
+  guest-memory heap, and caller-owned mspaces.
 - A small native HLE trampoline that carries register and bounded stack
   arguments, including XMM values, from public guest code into the checked C++
   call context.

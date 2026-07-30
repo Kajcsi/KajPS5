@@ -218,6 +218,15 @@ SharpEmu `src/SharpEmu.Libs/Kernel/KernelMemoryCompatExports.cs`. The
 `src/libs/libC.cpp`. Array allocation shares KajPS5's existing scalar C++
 allocation path. No upstream string, math, or allocation source was copied.
 
+The formatted-output bridge in `src/hle/libc_format.cpp` and its focused test
+adapt the bounded format parsing, separate integer and XMM argument streams,
+stack spill order, and System V AMD64 `va_list` cursor from pinned SharpEmu
+`src/SharpEmu.Libs/Kernel/KernelMemoryCompatExports.cs`. Export identities are
+confirmed by the pinned SharpEmu catalogs. Pinned KytyPS5
+`src/libs/libC.cpp` confirms the direct `snprintf` and `memmove` model and their
+NIDs. KajPS5 implements the behavior in its checked C++ guest-memory boundary.
+No upstream formatter source was copied.
+
 The native HLE bridge in `src/cpu/native_hle_trampoline.cpp` adapts the
 register-pack and host-call boundary from pinned SharpEmu
 `src/SharpEmu.Core/Cpu/Native/DirectExecutionBackend.Imports.cs`. Its shared

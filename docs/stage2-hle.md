@@ -32,7 +32,7 @@ handler's `RAX` and optional XMM0-XMM1 values.
 
 The platform-neutral HLE call context maps the six System V integer argument
 registers and the return register. Integer and string access use guest memory,
-and string reads stop at 4 KiB. If a bulk read crosses an unmapped boundary,
+and string reads stop at one MiB. If a bulk read crosses an unmapped boundary,
 the context checks bytes individually so it can still accept an earlier null
 terminator. A missing terminator and a memory fault remain distinct results.
 The first native trampoline captures those six integer registers, XMM0-XMM7,
@@ -59,6 +59,14 @@ Libc string scans have a one-megabyte limit. `wcscmp` reads little-endian
 bounded guest byte string and returns through XMM0. `sincos` and `sincosf`
 check both optional output ranges before either value is written. Array
 allocation uses the same checked heap as scalar C++ allocation.
+
+The first formatted-output bridge handles `snprintf`, `vsnprintf`, `sprintf`,
+and `vsprintf`. It keeps integer, XMM, and spilled stack arguments separate and
+reads the standard System V AMD64 `va_list` layout. Integer, pointer, byte
+string, byte character, floating-point, and count conversions have a one-MiB
+output limit. Bounded calls keep the normal truncation and return-length rules.
+All destination and count ranges are checked before output changes guest
+memory. Wide-character conversions fail clearly until their ABI is supported.
 
 The HLE export registry keeps C++ context handlers separate from executable
 import targets. Dispatch uses the same ordered library scope as linking. An

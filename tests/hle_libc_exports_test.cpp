@@ -52,7 +52,7 @@ int main() {
   Check(kajps5::hle::RegisterLibcExports(
             registry, runtime.cxa_guards(), runtime.process_lifecycle(),
             runtime.libc_heap(), memory) == ExportRegistryStatus::kOk &&
-            registry.size() == 96,
+            registry.size() == 106,
         "libc exports did not register atomically");
 
   constexpr std::uint64_t kGuardAddress = 0x1020;

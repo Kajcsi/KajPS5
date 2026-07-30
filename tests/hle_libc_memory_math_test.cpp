@@ -130,7 +130,7 @@ int main() {
   Check(kajps5::hle::RegisterLibcExports(
             registry, runtime.cxa_guards(), runtime.process_lifecycle(),
             runtime.libc_heap(), memory) == ExportRegistryStatus::kOk &&
-            registry.size() == 96,
+            registry.size() == 106,
         "libc exports did not register atomically");
   const std::vector<std::string> scope = {kajps5::hle::kLibcName};
 
@@ -160,6 +160,21 @@ int main() {
   Check(bad_copy_result.handler_status == HleContextStatus::kMemoryFault &&
             memory.Read(kPage + 0x100, copied) && copied == expected_fill,
         "failed memcpy changed its destination");
+
+  const std::array overlap_source = {
+      std::byte{1}, std::byte{2}, std::byte{3}, std::byte{4},
+      std::byte{5}, std::byte{6}, std::byte{7}, std::byte{8}};
+  Check(memory.Write(kPage + 0x340, overlap_source),
+        "memmove overlap setup failed");
+  HleCallContext move(memory);
+  SetArguments(move, {kPage + 0x342, kPage + 0x340, 6});
+  std::array<std::byte, overlap_source.size()> moved{};
+  const std::array expected_move = {
+      std::byte{1}, std::byte{2}, std::byte{1}, std::byte{2},
+      std::byte{3}, std::byte{4}, std::byte{5}, std::byte{6}};
+  Check(registry.Dispatch(kajps5::hle::kLibcMemmoveNid, scope, move) &&
+            memory.Read(kPage + 0x340, moved) && moved == expected_move,
+        "memmove did not preserve overlapping source bytes");
 
   const std::array left = {std::byte{'a'}, std::byte{'b'}, std::byte{'c'},
                            std::byte{0}};

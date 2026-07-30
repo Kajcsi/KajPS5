@@ -17,6 +17,7 @@
 #include <utility>
 #include <vector>
 
+#include "hle/libc_format.h"
 #include "kernel/cxa_guard.h"
 #include "kernel/libc_heap.h"
 #include "kernel/process_lifecycle.h"
@@ -332,6 +333,53 @@ HleContextStatus Memcpy(HleCallContext& context) {
   }
 
   std::array<std::byte, kMemoryCopyChunkBytes> bytes{};
+  std::uint64_t copied = 0;
+  while (copied < length) {
+    const auto chunk = static_cast<std::size_t>(std::min<std::uint64_t>(
+        bytes.size(), length - copied));
+    const auto view = std::span(bytes).first(chunk);
+    if (context.ReadMemory(source + copied, view) != HleContextStatus::kOk ||
+        context.WriteMemory(destination + copied, view) !=
+            HleContextStatus::kOk) {
+      return HleContextStatus::kMemoryFault;
+    }
+    copied += chunk;
+  }
+  return HleContextStatus::kOk;
+}
+
+HleContextStatus Memmove(HleCallContext& context) {
+  const auto destination = context.Argument(0).value_or(0);
+  const auto source = context.Argument(1).value_or(0);
+  const auto length = context.Argument(2).value_or(0);
+  context.SetReturn(destination);
+  if (length == 0 || destination == source) {
+    return HleContextStatus::kOk;
+  }
+  if (!context.CanReadMemory(source, length) ||
+      !context.CanWriteMemory(destination, length)) {
+    return HleContextStatus::kMemoryFault;
+  }
+
+  std::array<std::byte, kMemoryCopyChunkBytes> bytes{};
+  if (destination > source && destination - source < length) {
+    auto remaining = length;
+    while (remaining != 0) {
+      const auto chunk = static_cast<std::size_t>(std::min<std::uint64_t>(
+          bytes.size(), remaining));
+      const auto offset = remaining - chunk;
+      const auto view = std::span(bytes).first(chunk);
+      if (context.ReadMemory(source + offset, view) !=
+              HleContextStatus::kOk ||
+          context.WriteMemory(destination + offset, view) !=
+              HleContextStatus::kOk) {
+        return HleContextStatus::kMemoryFault;
+      }
+      remaining = offset;
+    }
+    return HleContextStatus::kOk;
+  }
+
   std::uint64_t copied = 0;
   while (copied < length) {
     const auto chunk = static_cast<std::size_t>(std::min<std::uint64_t>(
@@ -720,7 +768,7 @@ ExportRegistryStatus RegisterLibcExports(ExportRegistry& registry,
   auto* const heap_view = &heap;
   auto* const memory_view = &memory;
   std::vector<HleExportDefinition> exports;
-  exports.reserve(96);
+  exports.reserve(106);
   AddAliases(exports, kCxaGuardAcquireName, kCxaGuardAcquireNid,
              [guard_view](HleCallContext& context) {
                return CxaGuardAcquire(context, *guard_view);
@@ -797,6 +845,7 @@ ExportRegistryStatus RegisterLibcExports(ExportRegistry& registry,
              });
   AddAliases(exports, kLibcMemsetName, kLibcMemsetNid, Memset);
   AddAliases(exports, kLibcMemcpyName, kLibcMemcpyNid, Memcpy);
+  AddAliases(exports, kLibcMemmoveName, kLibcMemmoveNid, Memmove);
   AddAliases(exports, kLibcStrcmpName, kLibcStrcmpNid, Strcmp);
   AddAliases(exports, kLibcStrlenName, kLibcStrlenNid, Strlen);
   AddAliases(exports, kLibcWcscmpName, kLibcWcscmpNid, Wcscmp);
@@ -863,6 +912,14 @@ ExportRegistryStatus RegisterLibcExports(ExportRegistry& registry,
              [heap_view, memory_view](HleCallContext& context) {
                return OperatorDelete(context, *heap_view, *memory_view);
              });
+  AddAliases(exports, detail::kLibcSnprintfName,
+             detail::kLibcSnprintfNid, detail::LibcSnprintf);
+  AddAliases(exports, detail::kLibcVsnprintfName,
+             detail::kLibcVsnprintfNid, detail::LibcVsnprintf);
+  AddAliases(exports, detail::kLibcSprintfName,
+             detail::kLibcSprintfNid, detail::LibcSprintf);
+  AddAliases(exports, detail::kLibcVsprintfName,
+             detail::kLibcVsprintfNid, detail::LibcVsprintf);
   AddAliases(exports, kLibcMspaceCreateName, kLibcMspaceCreateNid,
              [heap_view, memory_view](HleCallContext& context) {
                return CreateMspace(context, *heap_view, *memory_view);
