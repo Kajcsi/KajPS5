@@ -122,6 +122,14 @@ be executable. Array storage must be loaded, complete, and made of 64-bit
 entries. This prepares the data needed to build the call order without
 executing guest code.
 
+After relocation, the lifecycle planner reads each function array through the
+guest-memory access checks. It ignores null and all-ones sentinel entries,
+removes repeated calls within one lifecycle phase, and requires every retained
+target to be executable. Pre-initializers keep array order. Initializers use
+`DT_INIT` before `DT_INIT_ARRAY`. Finalizers use `DT_FINI_ARRAY` in reverse
+order before `DT_FINI`. The planner has a 65,536-call limit and returns no
+partial plan after an error. It still does not execute guest functions.
+
 The module planner accepts already-parsed module descriptions. It matches file
 and shared-object names without case sensitivity, starts available dependencies
 first, reports missing dependencies once, and preserves input order for a

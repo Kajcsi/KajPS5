@@ -27,7 +27,8 @@ The current core includes:
   each `PT_LOAD` segment's read, write, and execute flags. The inspection path
   also plans relocations, reports unresolved imports, and validates the entry
   point, process parameters, TLS template, and module startup and shutdown
-  metadata without running code.
+  metadata without running code. After relocation, it builds bounded startup
+  and shutdown call lists from checked guest memory.
 - Library-scoped PS5 NID import linking and HLE dispatch, with bounded
   diagnostics for unresolved symbols, deterministic dependency order for
   supplied modules, and checked guest register and memory access.

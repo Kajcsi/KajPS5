@@ -20,21 +20,25 @@ system, ownership model, or source was copied.
 
 The dynamic-table, dynamic-string, symbol, `RELA`, and launch-metadata behavior
 in `src/loader/elf.cpp`, `src/loader/relocator.cpp`,
-`src/loader/launch_metadata.cpp`, `src/loader/module_plan.cpp`,
-`tests/elf_dynamic_test.cpp`, `tests/elf_sce_dynamic_test.cpp`,
-`tests/elf_relocation_test.cpp`, `tests/elf_symbol_test.cpp`, and
-`tests/launch_metadata_test.cpp`, `tests/module_plan_test.cpp`, and
-`tests/self_loader_test.cpp` was based on behavior observed in the pinned
-KytyPS5 and SharpEmu loader files. The PS5 metadata parser follows KytyPS5's
-`PT_OS_DYNLIBDATA`, packed module, packed library, and SCE dynamic-tag
-semantics. SELF parsing follows KytyPS5's header, segment, and containing
-program-header model. Launch metadata follows KytyPS5's entry-point,
-process-parameter, TLS, module-order, and `R_X86_64_DTPMOD64` behavior and
+`src/loader/launch_metadata.cpp`, `src/loader/lifecycle_plan.cpp`,
+`src/loader/module_plan.cpp`, `tests/elf_dynamic_test.cpp`,
+`tests/elf_sce_dynamic_test.cpp`, `tests/elf_relocation_test.cpp`,
+`tests/elf_symbol_test.cpp`, `tests/launch_metadata_test.cpp`,
+`tests/lifecycle_plan_test.cpp`,
+`tests/module_plan_test.cpp`, and `tests/self_loader_test.cpp` was based on
+behavior observed in the pinned KytyPS5 and SharpEmu loader files. The PS5
+metadata parser follows KytyPS5's `PT_OS_DYNLIBDATA`, packed module, packed
+library, and SCE dynamic-tag semantics. SELF parsing follows KytyPS5's header,
+segment, and containing program-header model. Launch metadata follows
+KytyPS5's entry-point, process-parameter, TLS, module-order, and
+`R_X86_64_DTPMOD64` behavior and
 SharpEmu's split between initialized TLS bytes and per-thread zero fill. It
 adapts SharpEmu's checked TLS module identity, structural SELF checks, checked
 payload fallbacks, mixed standard and SCE dynamic fields, symbol-size fallback,
 initializer discovery, and handling of already-dumped payloads. Dynamic
 startup and shutdown tags and arrays follow KytyPS5's runtime-linker model.
+The lifecycle planner combines KytyPS5's direct module hooks with SharpEmu's
+checked array discovery and duplicate suppression.
 
 The reviewed sources are KytyPS5 `src/loader/elf.h` and
 `src/loader/runtimeLinker.cpp` at commit

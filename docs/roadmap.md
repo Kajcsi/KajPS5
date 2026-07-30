@@ -25,6 +25,7 @@
 - [x] Run a recognized SELF through checked loading and relocation planning.
 - [x] Validate entry-point, process-parameter, and TLS template metadata.
 - [x] Validate module startup and shutdown functions and function arrays.
+- [x] Build checked lifecycle call lists from relocated guest memory.
 
 ## Stage 2: CPU and kernel
 

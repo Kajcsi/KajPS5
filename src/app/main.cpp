@@ -17,6 +17,7 @@
 #include "loader/elf.h"
 #include "loader/elf_trace.h"
 #include "loader/launch_metadata.h"
+#include "loader/lifecycle_plan.h"
 #include "loader/relocation_trace.h"
 #include "loader/relocator.h"
 
@@ -124,6 +125,16 @@ int TraceExecutableFile(const char* path) {
                 << kajps5::loader::RelocationStatusName(relocated.status)
                 << '\n';
       return 4;
+    }
+
+    const auto lifecycle =
+        kajps5::loader::BuildLifecycleCallPlan(launch.metadata, memory);
+    std::cout << kajps5::loader::FormatLifecyclePlanTrace(lifecycle);
+    if (!lifecycle) {
+      std::cerr << "Executable lifecycle check failed: "
+                << kajps5::loader::LifecyclePlanStatusName(lifecycle.status)
+                << '\n';
+      return 6;
     }
   } catch (const std::exception& exception) {
     std::cerr << "Executable load check failed: " << exception.what() << '\n';

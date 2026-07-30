@@ -218,6 +218,20 @@ int main() {
             !empty_arrays.metadata.init_array.has_value(),
         "zero-valued function-array tags were rejected");
 
+  auto overflowing_array = MakeLaunchMetadata();
+  overflowing_array.entry_point = 0;
+  overflowing_array.program_headers.erase(
+      overflowing_array.program_headers.begin() + 1,
+      overflowing_array.program_headers.end());
+  overflowing_array.dynamic_info = {};
+  overflowing_array.dynamic_info.init_array_address = 0x1300;
+  overflowing_array.dynamic_info.init_array_size = 8;
+  Check(AnalyzeLaunchMetadata(
+            overflowing_array,
+            std::numeric_limits<std::uint64_t>::max() - 0x1303)
+            .status == LaunchMetadataStatus::kAddressOverflow,
+        "overflowing biased function array was accepted");
+
   auto optional_fields = MakeLaunchMetadata();
   optional_fields.entry_point = 0;
   optional_fields.program_headers.erase(

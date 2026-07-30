@@ -183,6 +183,10 @@ LaunchMetadataResult AnalyzeLaunchMetadata(const ElfMetadata& metadata,
           result.status = LaunchMetadataStatus::kAddressOverflow;
           return false;
         }
+        if (size > std::numeric_limits<std::uint64_t>::max() - image_address) {
+          result.status = LaunchMetadataStatus::kAddressOverflow;
+          return false;
+        }
         destination = ExecutableFunctionArrayMetadata{
             image_address, size / sizeof(std::uint64_t)};
         return true;
