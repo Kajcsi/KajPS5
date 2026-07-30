@@ -17,6 +17,7 @@
 #include "hle/import_coverage.h"
 #include "hle/import_registry.h"
 #include "hle/kernel_exports.h"
+#include "hle/libc_exports.h"
 #include "kernel/runtime.h"
 #include "loader/elf.h"
 #include "loader/elf_trace.h"
@@ -126,6 +127,15 @@ int TraceExecutableFile(const char* path) {
     if (export_status != kajps5::hle::ExportRegistryStatus::kOk) {
       std::cerr << "HLE coverage check failed: export registration returned "
                 << kajps5::hle::ExportRegistryStatusName(export_status)
+                << '\n';
+      return 7;
+    }
+    const auto libc_export_status = kajps5::hle::RegisterLibcExports(
+        hle_exports, kernel_runtime.cxa_guards());
+    if (libc_export_status != kajps5::hle::ExportRegistryStatus::kOk) {
+      std::cerr << "HLE coverage check failed: libc export registration "
+                   "returned "
+                << kajps5::hle::ExportRegistryStatusName(libc_export_status)
                 << '\n';
       return 7;
     }

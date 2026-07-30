@@ -64,6 +64,7 @@
 - [x] Apply checked TLS module-ID relocations after TLS registration.
 - [x] Add a platform-neutral checked HLE call context.
 - [x] Add deterministic library-scoped HLE handler dispatch.
+- [x] Add scheduler-aware C++ static initialization guards.
 - [x] Register consistent libkernel process-time handlers.
 - [x] Add a transactional libkernel clock-gettime handler.
 - [x] Add a transactional libkernel gettimeofday handler.

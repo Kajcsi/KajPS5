@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "kernel/clock.h"
+#include "kernel/cxa_guard.h"
 #include "kernel/direct_memory.h"
 #include "kernel/event_queue.h"
 #include "kernel/event_flag.h"
@@ -21,13 +22,14 @@ namespace kajps5::kernel {
 class KernelRuntime final {
 public:
   KernelRuntime()
-      : scheduler_(handles_, clock_), pthreads_(scheduler_, clock_),
+      : scheduler_(handles_, clock_), cxa_guards_(scheduler_),
+        pthreads_(scheduler_, clock_),
         event_queues_(handles_, scheduler_),
         event_flags_(handles_, scheduler_),
         semaphores_(handles_, scheduler_), files_(handles_) {}
   explicit KernelRuntime(std::unique_ptr<KernelClockSource> clock_source)
       : clock_(std::move(clock_source)), scheduler_(handles_, clock_),
-        pthreads_(scheduler_, clock_),
+        cxa_guards_(scheduler_), pthreads_(scheduler_, clock_),
         event_queues_(handles_, scheduler_),
         event_flags_(handles_, scheduler_),
         semaphores_(handles_, scheduler_), files_(handles_) {}
@@ -37,6 +39,9 @@ public:
 
   [[nodiscard]] HandleTable &handles() noexcept { return handles_; }
   [[nodiscard]] GuestScheduler &scheduler() noexcept { return scheduler_; }
+  [[nodiscard]] CxaGuardService& cxa_guards() noexcept {
+    return cxa_guards_;
+  }
   [[nodiscard]] PthreadService& pthreads() noexcept { return pthreads_; }
   [[nodiscard]] EventQueueService &event_queues() noexcept {
     return event_queues_;
@@ -55,6 +60,7 @@ private:
   HandleTable handles_;
   KernelClockService clock_;
   GuestScheduler scheduler_;
+  CxaGuardService cxa_guards_;
   PthreadService pthreads_;
   EventQueueService event_queues_;
   EventFlagService event_flags_;

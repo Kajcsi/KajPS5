@@ -136,6 +136,17 @@ The scoped handler table in `src/hle/export_registry.cpp` and
 `src/SharpEmu.HLE/ExportedFunction.cs` and KytyPS5's native symbol database.
 No export-registry source was copied.
 
+The C++ initialization guard service in `src/kernel/cxa_guard.cpp`, the libc
+handlers in `src/hle/libc_exports.cpp`, and
+`tests/hle_libc_exports_test.cpp` adapt the checked guard-word states,
+same-owner behavior, and NIDs from SharpEmu
+`src/SharpEmu.Libs/CxxAbiExports.cs` at commit
+`d5108e854d609808f17093a6f5dbbc711d09ad2e`. KajPS5 replaces SharpEmu's host
+spin wait with its existing guest scheduler. No source was copied. The
+SharpEmu reference file states:
+
+`Copyright (C) 2026 SharpEmu Emulator Project`
+
 The process-time handlers in `src/hle/kernel_clock_exports.cpp` and
 `tests/hle_kernel_clock_exports_test.cpp` adapt the matching process-time,
 counter, and frequency behavior from the pinned KytyPS5

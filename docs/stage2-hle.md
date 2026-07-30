@@ -49,6 +49,15 @@ inventory, while lookup preserves KytyPS5's library scope. Missing imports are
 ranked by relocation count. Names and scope use a bounded hex format, so guest
 text cannot add trace lines.
 
+The first `libc` batch implements `__cxa_guard_acquire`,
+`__cxa_guard_release`, and `__cxa_guard_abort`. It preserves the upper six
+bytes of each guest guard word. One guest thread owns initialization, a
+recursive acquire returns zero, and another guest thread blocks through the
+shared scheduler. Release publishes the complete bit and wakes waiters. Abort
+clears the low guard state and also wakes waiters. A blocked handler returns a
+distinct HLE status; the general executor still needs a continuation path to
+resume that call.
+
 The first `libKernel` handler batch exposes
 `sceKernelGetProcessTime`, `sceKernelGetProcessTimeCounter`, and
 `sceKernelGetProcessTimeCounterFrequency`. All three use the shared kernel
