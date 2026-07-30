@@ -14,6 +14,8 @@ class KernelRuntime;
 namespace kajps5::hle {
 
 inline constexpr auto kLibKernelName = "libkernel";
+inline constexpr auto kKernelStackCheckFailName = "__stack_chk_fail";
+inline constexpr auto kKernelStackCheckFailNid = "Ou3iL1abvng";
 
 inline constexpr std::int32_t kKernelHleErrorNotFound = -2147352574;
 inline constexpr std::int32_t kKernelHleErrorNoSuchProcess = -2147352573;

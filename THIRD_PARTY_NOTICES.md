@@ -199,6 +199,19 @@ SharpEmu `scripts/ps5_names.txt` and `scripts/aerolib_catalog.py`. Mspace
 backing remains under the existing KajPS5 guest-memory owner. No upstream
 mspace implementation was copied.
 
+The checked libc memory, string, scalar math, and C++ allocation handlers in
+`src/hle/libc_exports.cpp`, plus the stack-check handler in
+`src/hle/kernel_exports.cpp`, use export identities confirmed by pinned
+SharpEmu `scripts/ps5_names.txt` and `scripts/aerolib_catalog.py`.
+Memory and string behavior follows pinned SharpEmu
+`src/SharpEmu.Libs/Kernel/KernelMemoryCompatExports.cs` and the direct libc
+bridges in pinned KytyPS5 `src/libs/libC.cpp`. The fatal stack-check result
+adapts pinned SharpEmu
+`src/SharpEmu.Libs/Kernel/KernelRuntimeCompatExports.cs`. Scalar math follows
+KytyPS5's direct host-math bridge but uses KajPS5's checked XMM call context.
+C++ allocation remains inside the existing guest heap. No upstream handler
+source was copied.
+
 The native HLE bridge in `src/cpu/native_hle_trampoline.cpp` adapts the
 register-pack and host-call boundary from pinned SharpEmu
 `src/SharpEmu.Core/Cpu/Native/DirectExecutionBackend.Imports.cs`. Its shared

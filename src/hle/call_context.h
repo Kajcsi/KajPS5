@@ -99,8 +99,14 @@ class HleCallContext final {
                                              std::uint32_t value) noexcept;
   [[nodiscard]] HleContextStatus WriteUInt64(std::uint64_t address,
                                              std::uint64_t value) noexcept;
+  [[nodiscard]] HleContextStatus ReadMemory(
+      std::uint64_t address, std::span<std::byte> value) const noexcept;
   [[nodiscard]] HleContextStatus WriteMemory(
       std::uint64_t address, std::span<const std::byte> value) noexcept;
+  [[nodiscard]] HleContextStatus FillMemory(
+      std::uint64_t address, std::uint64_t length, std::byte value) noexcept;
+  [[nodiscard]] bool CanReadMemory(std::uint64_t address,
+                                   std::uint64_t length) const noexcept;
   [[nodiscard]] bool CanWriteMemory(std::uint64_t address,
                                     std::uint64_t length) const noexcept;
   [[nodiscard]] std::optional<std::uint64_t> FindUnmappedMemory(

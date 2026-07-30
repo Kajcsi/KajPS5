@@ -207,6 +207,15 @@ HleContextStatus HleCallContext::WriteUInt64(std::uint64_t address,
                                        : HleContextStatus::kMemoryFault;
 }
 
+HleContextStatus HleCallContext::ReadMemory(
+    std::uint64_t address, std::span<std::byte> value) const noexcept {
+  if (value.empty()) {
+    return HleContextStatus::kInvalidArgument;
+  }
+  return memory_.Read(address, value) ? HleContextStatus::kOk
+                                      : HleContextStatus::kMemoryFault;
+}
+
 HleContextStatus HleCallContext::WriteMemory(
     std::uint64_t address, std::span<const std::byte> value) noexcept {
   if (value.empty()) {
@@ -214,6 +223,23 @@ HleContextStatus HleCallContext::WriteMemory(
   }
   return memory_.Write(address, value) ? HleContextStatus::kOk
                                        : HleContextStatus::kMemoryFault;
+}
+
+HleContextStatus HleCallContext::FillMemory(
+    std::uint64_t address, std::uint64_t length, std::byte value) noexcept {
+  if (length == 0) {
+    return HleContextStatus::kInvalidArgument;
+  }
+  return memory_.Fill(address, length, value) ? HleContextStatus::kOk
+                                              : HleContextStatus::kMemoryFault;
+}
+
+bool HleCallContext::CanReadMemory(std::uint64_t address,
+                                   std::uint64_t length) const noexcept {
+  return length == 0 ||
+         (address != 0 &&
+          memory_.CanAccess(address, length,
+                            memory::GuestMemoryProtection::kRead));
 }
 
 bool HleCallContext::CanWriteMemory(std::uint64_t address,

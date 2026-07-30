@@ -115,6 +115,20 @@ int main() {
   Check(context.ReadUInt32(0x1008, value32) == HleContextStatus::kOk &&
             value32 == 0xaabbccdd,
         "checked 32-bit read failed");
+  const std::array block = {std::byte{1}, std::byte{2}, std::byte{3}};
+  std::array<std::byte, block.size()> read_block{};
+  Check(context.WriteMemory(0x100c, block) == HleContextStatus::kOk &&
+            context.CanReadMemory(0x100c, block.size()) &&
+            context.ReadMemory(0x100c, read_block) == HleContextStatus::kOk &&
+            read_block == block &&
+            context.FillMemory(0x100c, block.size(), std::byte{0x5a}) ==
+                HleContextStatus::kOk,
+        "checked memory block access failed");
+  Check(context.ReadMemory(0x100c, {}) ==
+            HleContextStatus::kInvalidArgument &&
+            context.FillMemory(0x100c, 0, std::byte{0}) ==
+                HleContextStatus::kInvalidArgument,
+        "empty checked memory access was accepted");
 
   const std::array text = {std::byte{'h'}, std::byte{'e'}, std::byte{'l'},
                            std::byte{'l'}, std::byte{'o'}, std::byte{0}};

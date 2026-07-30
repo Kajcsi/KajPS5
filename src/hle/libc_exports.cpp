@@ -4,9 +4,15 @@
 
 #include "hle/libc_exports.h"
 
+#include <algorithm>
+#include <array>
 #include <bit>
+#include <cmath>
+#include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <limits>
+#include <span>
 #include <utility>
 #include <vector>
 
@@ -23,6 +29,7 @@ constexpr std::uint64_t kGuardStateMask = 0xffff;
 constexpr std::int32_t kMaximumInitArgumentCount = 2;
 constexpr std::uint64_t kPosixEinval = 22;
 constexpr std::uint64_t kPosixEnomem = 12;
+constexpr std::size_t kMemoryCopyChunkBytes = 4096;
 
 bool IsPowerOfTwo(std::uint64_t value) noexcept {
   return value != 0 && (value & (value - 1)) == 0;
@@ -294,6 +301,144 @@ HleContextStatus MallocUsableSize(HleCallContext& context,
   return HleContextStatus::kOk;
 }
 
+HleContextStatus Memset(HleCallContext& context) {
+  const auto destination = context.Argument(0).value_or(0);
+  const auto value = static_cast<std::byte>(
+      context.Argument(1).value_or(0) & 0xffU);
+  const auto length = context.Argument(2).value_or(0);
+  context.SetReturn(destination);
+  if (length == 0) {
+    return HleContextStatus::kOk;
+  }
+  if (!context.CanWriteMemory(destination, length)) {
+    return HleContextStatus::kMemoryFault;
+  }
+  return context.FillMemory(destination, length, value);
+}
+
+HleContextStatus Memcpy(HleCallContext& context) {
+  const auto destination = context.Argument(0).value_or(0);
+  const auto source = context.Argument(1).value_or(0);
+  const auto length = context.Argument(2).value_or(0);
+  context.SetReturn(destination);
+  if (length == 0) {
+    return HleContextStatus::kOk;
+  }
+  if (!context.CanReadMemory(source, length) ||
+      !context.CanWriteMemory(destination, length)) {
+    return HleContextStatus::kMemoryFault;
+  }
+
+  std::array<std::byte, kMemoryCopyChunkBytes> bytes{};
+  std::uint64_t copied = 0;
+  while (copied < length) {
+    const auto chunk = static_cast<std::size_t>(std::min<std::uint64_t>(
+        bytes.size(), length - copied));
+    const auto view = std::span(bytes).first(chunk);
+    if (context.ReadMemory(source + copied, view) != HleContextStatus::kOk ||
+        context.WriteMemory(destination + copied, view) !=
+            HleContextStatus::kOk) {
+      return HleContextStatus::kMemoryFault;
+    }
+    copied += chunk;
+  }
+  return HleContextStatus::kOk;
+}
+
+HleContextStatus Strcmp(HleCallContext& context) {
+  const auto left = context.ReadNullTerminatedString(
+      context.Argument(0).value_or(0), kMaximumHleStringBytes);
+  if (!left) {
+    context.SetReturn(0);
+    return left.status;
+  }
+  const auto right = context.ReadNullTerminatedString(
+      context.Argument(1).value_or(0), kMaximumHleStringBytes);
+  if (!right) {
+    context.SetReturn(0);
+    return right.status;
+  }
+
+  const auto common = std::min(left.value.size(), right.value.size());
+  std::int32_t result = 0;
+  for (std::size_t index = 0; index < common; ++index) {
+    const auto left_byte =
+        static_cast<unsigned char>(left.value[index]);
+    const auto right_byte =
+        static_cast<unsigned char>(right.value[index]);
+    if (left_byte != right_byte) {
+      result = static_cast<std::int32_t>(left_byte) -
+               static_cast<std::int32_t>(right_byte);
+      break;
+    }
+  }
+  if (result == 0 && left.value.size() != right.value.size()) {
+    result = left.value.size() < right.value.size() ? -1 : 1;
+  }
+  context.SetReturn(static_cast<std::uint64_t>(
+      static_cast<std::int64_t>(result)));
+  return HleContextStatus::kOk;
+}
+
+template <typename T>
+std::optional<T> ScalarArgument(const HleCallContext& context,
+                                std::size_t index) noexcept {
+  const auto vector = context.VectorArgument(index);
+  if (!vector) {
+    return std::nullopt;
+  }
+  T value{};
+  static_assert(sizeof(value) <= kHleVectorRegisterBytes);
+  std::memcpy(&value, vector->data(), sizeof(value));
+  return value;
+}
+
+template <typename T>
+HleContextStatus SetScalarReturn(HleCallContext& context, T value) noexcept {
+  HleVectorValue result{};
+  static_assert(sizeof(value) <= kHleVectorRegisterBytes);
+  std::memcpy(result.data(), &value, sizeof(value));
+  return context.SetVectorReturn(0, result)
+             ? HleContextStatus::kOk
+             : HleContextStatus::kInvalidArgument;
+}
+
+template <typename T, typename Operation>
+HleContextStatus UnaryMath(HleCallContext& context, Operation operation) {
+  const auto input = ScalarArgument<T>(context, 0);
+  if (!input) {
+    return HleContextStatus::kInvalidArgument;
+  }
+  return SetScalarReturn(context, static_cast<T>(operation(*input)));
+}
+
+HleContextStatus Atan2(HleCallContext& context) {
+  const auto left = ScalarArgument<double>(context, 0);
+  const auto right = ScalarArgument<double>(context, 1);
+  if (!left || !right) {
+    return HleContextStatus::kInvalidArgument;
+  }
+  return SetScalarReturn(context, std::atan2(*left, *right));
+}
+
+HleContextStatus OperatorNew(HleCallContext& context,
+                             kernel::LibcHeapService& heap,
+                             memory::GuestMemory& memory) {
+  const auto allocated = heap.Allocate(
+      memory, context.Argument(0).value_or(0));
+  context.SetReturn(allocated ? allocated.address : 0);
+  return allocated ? HleContextStatus::kOk
+                   : HleContextStatus::kResourceLimit;
+}
+
+HleContextStatus OperatorDelete(HleCallContext& context,
+                                kernel::LibcHeapService& heap,
+                                memory::GuestMemory& memory) {
+  (void)heap.Release(memory, context.Argument(0).value_or(0));
+  context.SetReturn(0);
+  return HleContextStatus::kOk;
+}
+
 HleContextStatus CreateMspace(HleCallContext& context,
                               kernel::LibcHeapService& heap,
                               memory::GuestMemory& memory) {
@@ -455,7 +600,7 @@ ExportRegistryStatus RegisterLibcExports(ExportRegistry& registry,
   auto* const heap_view = &heap;
   auto* const memory_view = &memory;
   std::vector<HleExportDefinition> exports;
-  exports.reserve(58);
+  exports.reserve(82);
   AddAliases(exports, kCxaGuardAcquireName, kCxaGuardAcquireNid,
              [guard_view](HleCallContext& context) {
                return CxaGuardAcquire(context, *guard_view);
@@ -529,6 +674,54 @@ ExportRegistryStatus RegisterLibcExports(ExportRegistry& registry,
              kLibcMallocUsableSizeNid,
              [heap_view, memory_view](HleCallContext& context) {
                return MallocUsableSize(context, *heap_view, *memory_view);
+             });
+  AddAliases(exports, kLibcMemsetName, kLibcMemsetNid, Memset);
+  AddAliases(exports, kLibcMemcpyName, kLibcMemcpyNid, Memcpy);
+  AddAliases(exports, kLibcStrcmpName, kLibcStrcmpNid, Strcmp);
+  AddAliases(exports, kLibcExp2fName, kLibcExp2fNid,
+             [](HleCallContext& context) {
+               return UnaryMath<float>(context, [](float value) {
+                 return std::exp2(value);
+               });
+             });
+  AddAliases(exports, kLibcSinfName, kLibcSinfNid,
+             [](HleCallContext& context) {
+               return UnaryMath<float>(context, [](float value) {
+                 return std::sin(value);
+               });
+             });
+  AddAliases(exports, kLibcCosfName, kLibcCosfNid,
+             [](HleCallContext& context) {
+               return UnaryMath<float>(context, [](float value) {
+                 return std::cos(value);
+               });
+             });
+  AddAliases(exports, kLibcAtanName, kLibcAtanNid,
+             [](HleCallContext& context) {
+               return UnaryMath<double>(context, [](double value) {
+                 return std::atan(value);
+               });
+             });
+  AddAliases(exports, kLibcAtan2Name, kLibcAtan2Nid, Atan2);
+  AddAliases(exports, kLibcAcosfName, kLibcAcosfNid,
+             [](HleCallContext& context) {
+               return UnaryMath<float>(context, [](float value) {
+                 return std::acos(value);
+               });
+             });
+  AddAliases(exports, kLibcTanfName, kLibcTanfNid,
+             [](HleCallContext& context) {
+               return UnaryMath<float>(context, [](float value) {
+                 return std::tan(value);
+               });
+             });
+  AddAliases(exports, kLibcOperatorNewName, kLibcOperatorNewNid,
+             [heap_view, memory_view](HleCallContext& context) {
+               return OperatorNew(context, *heap_view, *memory_view);
+             });
+  AddAliases(exports, kLibcOperatorDeleteName, kLibcOperatorDeleteNid,
+             [heap_view, memory_view](HleCallContext& context) {
+               return OperatorDelete(context, *heap_view, *memory_view);
              });
   AddAliases(exports, kLibcMspaceCreateName, kLibcMspaceCreateNid,
              [heap_view, memory_view](HleCallContext& context) {

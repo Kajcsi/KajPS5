@@ -76,7 +76,7 @@ int main() {
   ExportRegistry registry;
   Check(kajps5::hle::RegisterKernelExports(registry, runtime) ==
             ExportRegistryStatus::kOk &&
-            registry.size() == 216,
+            registry.size() == 218,
         "default kernel exports did not register atomically");
 
   GuestMemory memory(0x1000, 0x1000);
@@ -94,6 +94,11 @@ int main() {
             clock_context.GetRegister(HleRegister::kRax).value_or(0) ==
                 500'000'000,
         "default clock export did not use the shared runtime");
+  HleCallContext stack_failure(memory);
+  Check(registry.Dispatch(kajps5::hle::kKernelStackCheckFailNid,
+                          libraries, stack_failure)
+                .handler_status == HleContextStatus::kFatalGuestError,
+        "stack corruption did not stop guest execution");
 
   auto path = Bytes("/app0/default.bin");
   path.push_back(std::byte{0});
@@ -126,7 +131,7 @@ int main() {
 
   Check(kajps5::hle::RegisterKernelExports(registry, runtime) ==
             ExportRegistryStatus::kAlreadyExists &&
-            registry.size() == 216,
+            registry.size() == 218,
         "duplicate default registration changed the registry");
 
   ExportRegistry conflict_registry;

@@ -34,7 +34,7 @@ ExportRegistryStatus RegisterKernelExports(ExportRegistry& registry,
   clock_exports.reserve(clock_exports.size() + event_queue_exports.size() +
                         event_flag_exports.size() + file_exports.size() +
                         memory_exports.size() + pthread_exports.size() +
-                        semaphore_exports.size());
+                        semaphore_exports.size() + 2);
   clock_exports.insert(clock_exports.end(),
                        std::make_move_iterator(event_queue_exports.begin()),
                        std::make_move_iterator(event_queue_exports.end()));
@@ -53,6 +53,13 @@ ExportRegistryStatus RegisterKernelExports(ExportRegistry& registry,
   clock_exports.insert(clock_exports.end(),
                        std::make_move_iterator(semaphore_exports.begin()),
                        std::make_move_iterator(semaphore_exports.end()));
+  const auto stack_check_fail = [](HleCallContext&) {
+    return HleContextStatus::kFatalGuestError;
+  };
+  clock_exports.push_back(
+      {kLibKernelName, kKernelStackCheckFailName, stack_check_fail});
+  clock_exports.push_back(
+      {kLibKernelName, kKernelStackCheckFailNid, stack_check_fail});
   return registry.RegisterBatch(std::move(clock_exports));
 }
 

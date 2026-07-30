@@ -47,6 +47,13 @@ Caller-owned mspaces use the same service but keep their own bounded free
 ranges and allocation records. Destroying an mspace does not unmap the memory
 that its caller supplied.
 
+Common `memcpy`, `memset`, and `strcmp` calls use whole-range guest-memory
+checks. Failed copies do not change the destination. Scalar libc math reads
+its System V inputs from XMM registers and returns results through XMM0. The
+C++ scalar allocation calls use the same checked libc heap. A stack-canary
+failure returns a fatal guest status instead of pretending that execution can
+continue.
+
 The HLE export registry keeps C++ context handlers separate from executable
 import targets. Dispatch uses the same ordered library scope as linking. An
 ambiguous unscoped name does not run. The registry copies the selected handler
