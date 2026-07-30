@@ -10,6 +10,10 @@
 #include "hle/export_registry.h"
 #include "hle/kernel_exports.h"
 
+namespace kajps5::kernel {
+class DirectMemoryService;
+}
+
 namespace kajps5::hle {
 
 inline constexpr auto kKernelMprotectName = "sceKernelMprotect";
@@ -27,6 +31,24 @@ inline constexpr auto kKernelMapFlexibleMemoryNid = "IWIBBdTHit4";
 inline constexpr auto kKernelMapFlexibleMemoryInternalName =
     "sceKernelMapNamedFlexibleMemoryInternal";
 inline constexpr auto kKernelMapFlexibleMemoryInternalNid = "4h6F1LLbTiw";
+inline constexpr auto kKernelGetDirectMemorySizeName =
+    "sceKernelGetDirectMemorySize";
+inline constexpr auto kKernelGetDirectMemorySizeNid = "pO96TwzOm5E";
+inline constexpr auto kKernelAvailableDirectMemorySizeName =
+    "sceKernelAvailableDirectMemorySize";
+inline constexpr auto kKernelAvailableDirectMemorySizeNid = "C0f7TJcbfac";
+inline constexpr auto kKernelAllocateDirectMemoryName =
+    "sceKernelAllocateDirectMemory";
+inline constexpr auto kKernelAllocateDirectMemoryNid = "rTXw65xmLIA";
+inline constexpr auto kKernelAllocateMainDirectMemoryName =
+    "sceKernelAllocateMainDirectMemory";
+inline constexpr auto kKernelAllocateMainDirectMemoryNid = "B+vc2AO2Zrc";
+inline constexpr auto kKernelReleaseDirectMemoryName =
+    "sceKernelReleaseDirectMemory";
+inline constexpr auto kKernelReleaseDirectMemoryNid = "MBuItvba6z8";
+inline constexpr auto kKernelCheckedReleaseDirectMemoryName =
+    "sceKernelCheckedReleaseDirectMemory";
+inline constexpr auto kKernelCheckedReleaseDirectMemoryNid = "hwVSPCmp5tM";
 inline constexpr auto kPosixMunmapName = "munmap";
 inline constexpr auto kPosixMunmapNid = "UqDGjXA5yUM";
 inline constexpr auto kPosixGetPageSizeName = "getpagesize";
@@ -44,10 +66,11 @@ inline constexpr std::uint32_t kKernelMapFixed = 0x10;
 inline constexpr std::uint32_t kKernelMapNoOverwrite = 0x80;
 
 namespace detail {
-[[nodiscard]] std::vector<HleExportDefinition> MakeKernelMemoryExports();
+[[nodiscard]] std::vector<HleExportDefinition> MakeKernelMemoryExports(
+    kernel::DirectMemoryService& direct_memory);
 }
 
 [[nodiscard]] ExportRegistryStatus RegisterKernelMemoryExports(
-    ExportRegistry& registry);
+    ExportRegistry& registry, kernel::DirectMemoryService& direct_memory);
 
 }  // namespace kajps5::hle

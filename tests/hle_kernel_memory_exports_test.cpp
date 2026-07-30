@@ -14,6 +14,7 @@
 #include "hle/call_context.h"
 #include "hle/export_registry.h"
 #include "hle/kernel_memory_exports.h"
+#include "kernel/direct_memory.h"
 
 namespace {
 
@@ -46,20 +47,137 @@ int main() {
   using kajps5::hle::ExportRegistryStatus;
   using kajps5::hle::HleCallContext;
   using kajps5::hle::HleRegister;
+  using kajps5::kernel::DirectMemoryService;
   using kajps5::memory::GuestMemory;
   using kajps5::memory::GuestMemoryProtection;
 
   GuestMemory memory(0x4000, 0xc000);
+  DirectMemoryService direct_memory;
   ExportRegistry registry;
-  Check(kajps5::hle::RegisterKernelMemoryExports(registry) ==
+  Check(kajps5::hle::RegisterKernelMemoryExports(registry, direct_memory) ==
             ExportRegistryStatus::kOk &&
-            registry.size() == 18,
+            registry.size() == 30,
         "memory exports did not register atomically");
 
   HleCallContext page_size_context(memory);
   Check(Dispatch(registry, kajps5::hle::kPosixGetPageSizeNid,
                  page_size_context) == kajps5::hle::kKernelMemoryPageSize,
         "getpagesize returned the wrong guest page size");
+
+  HleCallContext direct_size_context(memory);
+  Check(Dispatch(registry, kajps5::hle::kKernelGetDirectMemorySizeNid,
+                 direct_size_context) == direct_memory.size(),
+        "direct-memory size export returned the wrong value");
+
+  HleCallContext available_context(memory);
+  Check(available_context.SetRegister(HleRegister::kRdi, 0) &&
+            available_context.SetRegister(HleRegister::kRsi,
+                                          direct_memory.size()) &&
+            available_context.SetRegister(HleRegister::kRdx, 0x4000) &&
+            available_context.SetRegister(HleRegister::kRcx, 0x4100) &&
+            available_context.SetRegister(HleRegister::kR8, 0x4108),
+        "available direct-memory setup failed");
+  std::uint64_t available_address = 1;
+  std::uint64_t available_size = 0;
+  Check(Dispatch(registry,
+                 kajps5::hle::kKernelAvailableDirectMemorySizeNid,
+                 available_context) == 0 &&
+            available_context.ReadUInt64(0x4100, available_address) ==
+                kajps5::hle::HleContextStatus::kOk &&
+            available_context.ReadUInt64(0x4108, available_size) ==
+                kajps5::hle::HleContextStatus::kOk &&
+            available_address == 0 &&
+            available_size == direct_memory.size(),
+        "available direct-memory export returned the wrong range");
+
+  HleCallContext allocate_context(memory);
+  Check(allocate_context.SetRegister(HleRegister::kRdi, 0) &&
+            allocate_context.SetRegister(HleRegister::kRsi,
+                                         direct_memory.size()) &&
+            allocate_context.SetRegister(HleRegister::kRdx, 0x8000) &&
+            allocate_context.SetRegister(HleRegister::kRcx, 0x4000) &&
+            allocate_context.SetRegister(HleRegister::kR8, 42) &&
+            allocate_context.SetRegister(HleRegister::kR9, 0x4120),
+        "direct-memory allocation setup failed");
+  std::uint64_t direct_address = 1;
+  Check(Dispatch(registry, kajps5::hle::kKernelAllocateDirectMemoryNid,
+                 allocate_context) == 0 &&
+            allocate_context.ReadUInt64(0x4120, direct_address) ==
+                kajps5::hle::HleContextStatus::kOk &&
+            direct_address == 0 &&
+            direct_memory.ContainsAllocatedRange(0, 0x8000),
+        "direct-memory allocation returned the wrong range");
+
+  HleCallContext main_allocate_context(memory);
+  Check(main_allocate_context.SetRegister(HleRegister::kRdi, 0x4000) &&
+            main_allocate_context.SetRegister(HleRegister::kRsi, 0x8000) &&
+            main_allocate_context.SetRegister(HleRegister::kRdx, 7) &&
+            main_allocate_context.SetRegister(HleRegister::kRcx, 0x4128),
+        "main direct-memory allocation setup failed");
+  Check(Dispatch(registry,
+                 kajps5::hle::kKernelAllocateMainDirectMemoryName,
+                 main_allocate_context) == 0 &&
+            main_allocate_context.ReadUInt64(0x4128, direct_address) ==
+                kajps5::hle::HleContextStatus::kOk &&
+            direct_address == 0x8000 &&
+            direct_memory.ContainsAllocatedRange(0x8000, 0x4000),
+        "main direct-memory allocation did not use first fit");
+
+  const auto allocations_before_fault = direct_memory.allocation_count();
+  HleCallContext allocation_fault_context(memory);
+  Check(allocation_fault_context.SetRegister(HleRegister::kRsi,
+                                             direct_memory.size()) &&
+            allocation_fault_context.SetRegister(HleRegister::kRdx, 0x4000) &&
+            allocation_fault_context.SetRegister(HleRegister::kR9, 0x1000),
+        "direct-memory output fault setup failed");
+  Check(Dispatch(registry, kajps5::hle::kKernelAllocateDirectMemoryName,
+                 allocation_fault_context) ==
+                KernelResult(kajps5::hle::kKernelHleErrorFault) &&
+            direct_memory.allocation_count() == allocations_before_fault,
+        "invalid direct-memory output changed allocations");
+
+  HleCallContext exhausted_context(memory);
+  Check(exhausted_context.SetRegister(HleRegister::kRsi,
+                                      direct_memory.size()) &&
+            exhausted_context.SetRegister(HleRegister::kRdx,
+                                          direct_memory.size()) &&
+            exhausted_context.SetRegister(HleRegister::kR9, 0x4130),
+        "direct-memory exhaustion setup failed");
+  Check(Dispatch(registry, kajps5::hle::kKernelAllocateDirectMemoryNid,
+                 exhausted_context) ==
+            KernelResult(kajps5::hle::kKernelHleErrorTryAgain),
+        "direct-memory exhaustion returned the wrong error");
+
+  HleCallContext checked_release_context(memory);
+  Check(checked_release_context.SetRegister(HleRegister::kRdi, 0x4000) &&
+            checked_release_context.SetRegister(HleRegister::kRsi, 0x4000),
+        "checked direct-memory release setup failed");
+  Check(Dispatch(registry,
+                 kajps5::hle::kKernelCheckedReleaseDirectMemoryNid,
+                 checked_release_context) == 0 &&
+            !direct_memory.ContainsAllocatedRange(0x4000, 0x4000) &&
+            direct_memory.ContainsAllocatedRange(0, 0x4000),
+        "checked direct-memory release did not split its allocation");
+
+  HleCallContext invalid_release_context(memory);
+  Check(invalid_release_context.SetRegister(HleRegister::kRdi, 1) &&
+            invalid_release_context.SetRegister(HleRegister::kRsi, 0x4000),
+        "invalid direct-memory release setup failed");
+  Check(Dispatch(registry,
+                 kajps5::hle::kKernelCheckedReleaseDirectMemoryName,
+                 invalid_release_context) ==
+                KernelResult(kajps5::hle::kKernelHleErrorInvalidArgument) &&
+            direct_memory.ContainsAllocatedRange(0, 0x4000),
+        "unaligned checked release changed direct memory");
+
+  HleCallContext missing_release_context(memory);
+  Check(missing_release_context.SetRegister(HleRegister::kRdi, 0x10000) &&
+            missing_release_context.SetRegister(HleRegister::kRsi, 0x4000),
+        "missing direct-memory release setup failed");
+  Check(Dispatch(registry, kajps5::hle::kKernelReleaseDirectMemoryNid,
+                 missing_release_context) ==
+            KernelResult(kajps5::hle::kKernelHleErrorPermissionDenied),
+        "unknown direct-memory release returned the wrong error");
 
   GuestMemory flexible_memory(0x10000, 0x20000,
                               GuestMemoryProtection::kNone);
@@ -375,9 +493,9 @@ int main() {
             KernelResult(kajps5::hle::kKernelHleErrorInvalidArgument),
         "zero-address munmap was accepted");
 
-  Check(kajps5::hle::RegisterKernelMemoryExports(registry) ==
+  Check(kajps5::hle::RegisterKernelMemoryExports(registry, direct_memory) ==
             ExportRegistryStatus::kAlreadyExists &&
-            registry.size() == 18,
+            registry.size() == 30,
         "duplicate memory export batch changed the registry");
   return failures == 0 ? 0 : 1;
 }

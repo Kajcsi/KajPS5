@@ -25,7 +25,7 @@ ExportRegistryStatus RegisterKernelExports(ExportRegistry& registry,
   auto event_flag_exports =
       detail::MakeKernelEventFlagExports(runtime.event_flags());
   auto file_exports = detail::MakeKernelFileExports(runtime.files());
-  auto memory_exports = detail::MakeKernelMemoryExports();
+  auto memory_exports = detail::MakeKernelMemoryExports(runtime.direct_memory());
   auto semaphore_exports =
       detail::MakeKernelSemaphoreExports(runtime.semaphores());
   clock_exports.reserve(clock_exports.size() + event_queue_exports.size() +

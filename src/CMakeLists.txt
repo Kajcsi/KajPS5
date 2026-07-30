@@ -13,6 +13,7 @@ add_library(kajps5_core STATIC
   hle/kernel_memory_exports.cpp
   hle/kernel_semaphore_exports.cpp
   kernel/clock.cpp
+  kernel/direct_memory.cpp
   kernel/event_queue.cpp
   kernel/event_flag.cpp
   kernel/file.cpp

@@ -220,6 +220,13 @@ kajps5_deploy_msvc_asan_runtime(kajps5_kernel_clock_test)
 
 add_test(NAME kajps5_kernel_clock COMMAND kajps5_kernel_clock_test)
 
+add_executable(kajps5_kernel_direct_memory_test kernel_direct_memory_test.cpp)
+target_link_libraries(kajps5_kernel_direct_memory_test PRIVATE kajps5_core)
+kajps5_deploy_msvc_asan_runtime(kajps5_kernel_direct_memory_test)
+
+add_test(NAME kajps5_kernel_direct_memory
+         COMMAND kajps5_kernel_direct_memory_test)
+
 add_executable(kajps5_kernel_file_test kernel_file_test.cpp)
 target_link_libraries(kajps5_kernel_file_test PRIVATE kajps5_core)
 kajps5_deploy_msvc_asan_runtime(kajps5_kernel_file_test)

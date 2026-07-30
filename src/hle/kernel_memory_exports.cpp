@@ -8,6 +8,8 @@
 #include <limits>
 #include <vector>
 
+#include "kernel/direct_memory.h"
+
 namespace kajps5::hle {
 namespace {
 
@@ -73,6 +75,17 @@ bool DecodeProtection(std::uint32_t value,
 std::uint32_t EncodeProtection(
     memory::GuestMemoryProtection protection) noexcept {
   return static_cast<std::uint32_t>(protection);
+}
+
+std::int32_t DirectMemoryReleaseResult(
+    kernel::KernelStatus status) noexcept {
+  if (status == kernel::KernelStatus::kOk) {
+    return 0;
+  }
+  if (status == kernel::KernelStatus::kInvalidArgument) {
+    return kKernelHleErrorInvalidArgument;
+  }
+  return kKernelHleErrorPermissionDenied;
 }
 
 HleContextStatus KernelMprotect(HleCallContext& context) {
@@ -201,6 +214,140 @@ HleContextStatus KernelMapUnnamedFlexibleMemory(HleCallContext& context) {
   return KernelMapFlexibleMemory(context, false);
 }
 
+HleContextStatus KernelGetDirectMemorySize(
+    HleCallContext& context, kernel::DirectMemoryService& direct_memory) {
+  context.SetReturn(direct_memory.size());
+  return HleContextStatus::kOk;
+}
+
+HleContextStatus KernelAvailableDirectMemorySize(
+    HleCallContext& context, kernel::DirectMemoryService& direct_memory) {
+  const auto search_start = context.Argument(0).value_or(0);
+  const auto search_end = context.Argument(1).value_or(0);
+  const auto alignment = context.Argument(2).value_or(0);
+  const auto address_output = context.Argument(3).value_or(0);
+  const auto size_output = context.Argument(4).value_or(0);
+  if (address_output == 0 || size_output == 0 ||
+      search_start > static_cast<std::uint64_t>(
+                         std::numeric_limits<std::int64_t>::max()) ||
+      search_end > static_cast<std::uint64_t>(
+                       std::numeric_limits<std::int64_t>::max())) {
+    SetKernelResult(context, kKernelHleErrorInvalidArgument);
+    return HleContextStatus::kOk;
+  }
+  if (!context.CanWriteMemory(address_output, sizeof(std::uint64_t)) ||
+      !context.CanWriteMemory(size_output, sizeof(std::uint64_t))) {
+    SetKernelResult(context, kKernelHleErrorFault);
+    return HleContextStatus::kOk;
+  }
+
+  const auto available =
+      direct_memory.Available(search_start, search_end, alignment);
+  if (!available) {
+    SetKernelResult(context, kKernelHleErrorNoMemory);
+    return HleContextStatus::kOk;
+  }
+  const auto write_failed =
+      context.WriteUInt64(address_output, available.address) !=
+          HleContextStatus::kOk ||
+      context.WriteUInt64(size_output, available.size) !=
+          HleContextStatus::kOk;
+  SetKernelResult(context, write_failed ? kKernelHleErrorFault : 0);
+  return HleContextStatus::kOk;
+}
+
+HleContextStatus AllocateDirectMemory(
+    HleCallContext& context, kernel::DirectMemoryService& direct_memory,
+    std::uint64_t search_start, std::uint64_t search_end,
+    std::uint64_t length, std::uint64_t alignment, std::int32_t memory_type,
+    std::uint64_t address_output) {
+  if (length == 0 || address_output == 0 || search_start >= search_end ||
+      search_start > static_cast<std::uint64_t>(
+                         std::numeric_limits<std::int64_t>::max()) ||
+      search_end > static_cast<std::uint64_t>(
+                       std::numeric_limits<std::int64_t>::max())) {
+    SetKernelResult(context, kKernelHleErrorInvalidArgument);
+    return HleContextStatus::kOk;
+  }
+  if (!context.CanWriteMemory(address_output, sizeof(std::uint64_t))) {
+    SetKernelResult(context, kKernelHleErrorFault);
+    return HleContextStatus::kOk;
+  }
+
+  const auto allocated = direct_memory.Allocate(
+      search_start, search_end, length, alignment, memory_type);
+  if (!allocated) {
+    SetKernelResult(
+        context, allocated.status == kernel::KernelStatus::kInvalidArgument
+                     ? kKernelHleErrorInvalidArgument
+                     : kKernelHleErrorTryAgain);
+    return HleContextStatus::kOk;
+  }
+  if (context.WriteUInt64(address_output, allocated.address) !=
+      HleContextStatus::kOk) {
+    (void)direct_memory.Release(allocated.address, allocated.size);
+    SetKernelResult(context, kKernelHleErrorFault);
+    return HleContextStatus::kOk;
+  }
+  SetKernelResult(context, 0);
+  return HleContextStatus::kOk;
+}
+
+HleContextStatus KernelAllocateDirectMemory(
+    HleCallContext& context, kernel::DirectMemoryService& direct_memory) {
+  return AllocateDirectMemory(
+      context, direct_memory, context.Argument(0).value_or(0),
+      context.Argument(1).value_or(0), context.Argument(2).value_or(0),
+      context.Argument(3).value_or(0),
+      static_cast<std::int32_t>(context.Argument(4).value_or(0)),
+      context.Argument(5).value_or(0));
+}
+
+HleContextStatus KernelAllocateMainDirectMemory(
+    HleCallContext& context, kernel::DirectMemoryService& direct_memory) {
+  return AllocateDirectMemory(
+      context, direct_memory, 0, direct_memory.size(),
+      context.Argument(0).value_or(0), context.Argument(1).value_or(0),
+      static_cast<std::int32_t>(context.Argument(2).value_or(0)),
+      context.Argument(3).value_or(0));
+}
+
+HleContextStatus ReleaseDirectMemory(
+    HleCallContext& context, kernel::DirectMemoryService& direct_memory,
+    bool checked) {
+  const auto start = context.Argument(0).value_or(0);
+  const auto length = context.Argument(1).value_or(0);
+  if (start > static_cast<std::uint64_t>(
+                  std::numeric_limits<std::int64_t>::max()) ||
+      (checked && ((start & (kKernelMemoryPageSize - 1)) != 0 ||
+                   (length & (kKernelMemoryPageSize - 1)) != 0))) {
+    SetKernelResult(context, kKernelHleErrorInvalidArgument);
+    return HleContextStatus::kOk;
+  }
+  if (checked && length == 0) {
+    SetKernelResult(context, 0);
+    return HleContextStatus::kOk;
+  }
+  if (length == 0) {
+    SetKernelResult(context, kKernelHleErrorInvalidArgument);
+    return HleContextStatus::kOk;
+  }
+
+  const auto released = direct_memory.Release(start, length);
+  SetKernelResult(context, DirectMemoryReleaseResult(released));
+  return HleContextStatus::kOk;
+}
+
+HleContextStatus KernelReleaseDirectMemory(
+    HleCallContext& context, kernel::DirectMemoryService& direct_memory) {
+  return ReleaseDirectMemory(context, direct_memory, false);
+}
+
+HleContextStatus KernelCheckedReleaseDirectMemory(
+    HleCallContext& context, kernel::DirectMemoryService& direct_memory) {
+  return ReleaseDirectMemory(context, direct_memory, true);
+}
+
 HleContextStatus PosixGetPageSize(HleCallContext& context) {
   context.SetReturn(kKernelMemoryPageSize);
   return HleContextStatus::kOk;
@@ -246,9 +393,10 @@ HleContextStatus KernelQueryMemoryProtection(HleCallContext& context) {
 
 }  // namespace
 
-std::vector<HleExportDefinition> detail::MakeKernelMemoryExports() {
+std::vector<HleExportDefinition> detail::MakeKernelMemoryExports(
+    kernel::DirectMemoryService& direct_memory) {
   std::vector<HleExportDefinition> exports;
-  exports.reserve(18);
+  exports.reserve(30);
   exports.push_back({kLibKernelName, kKernelMprotectName, KernelMprotect});
   exports.push_back({kLibKernelName, kKernelMprotectNid, KernelMprotect});
   exports.push_back({kLibKernelName, kPosixMprotectName, KernelMprotect});
@@ -270,6 +418,66 @@ std::vector<HleExportDefinition> detail::MakeKernelMemoryExports() {
   exports.push_back({kLibKernelName, kKernelMapFlexibleMemoryInternalNid,
                      KernelMapUnnamedFlexibleMemory});
   exports.push_back(
+      {kLibKernelName, kKernelGetDirectMemorySizeName,
+       [&direct_memory](HleCallContext& context) {
+         return KernelGetDirectMemorySize(context, direct_memory);
+       }});
+  exports.push_back(
+      {kLibKernelName, kKernelGetDirectMemorySizeNid,
+       [&direct_memory](HleCallContext& context) {
+         return KernelGetDirectMemorySize(context, direct_memory);
+       }});
+  exports.push_back(
+      {kLibKernelName, kKernelAvailableDirectMemorySizeName,
+       [&direct_memory](HleCallContext& context) {
+         return KernelAvailableDirectMemorySize(context, direct_memory);
+       }});
+  exports.push_back(
+      {kLibKernelName, kKernelAvailableDirectMemorySizeNid,
+       [&direct_memory](HleCallContext& context) {
+         return KernelAvailableDirectMemorySize(context, direct_memory);
+       }});
+  exports.push_back(
+      {kLibKernelName, kKernelAllocateDirectMemoryName,
+       [&direct_memory](HleCallContext& context) {
+         return KernelAllocateDirectMemory(context, direct_memory);
+       }});
+  exports.push_back(
+      {kLibKernelName, kKernelAllocateDirectMemoryNid,
+       [&direct_memory](HleCallContext& context) {
+         return KernelAllocateDirectMemory(context, direct_memory);
+       }});
+  exports.push_back(
+      {kLibKernelName, kKernelAllocateMainDirectMemoryName,
+       [&direct_memory](HleCallContext& context) {
+         return KernelAllocateMainDirectMemory(context, direct_memory);
+       }});
+  exports.push_back(
+      {kLibKernelName, kKernelAllocateMainDirectMemoryNid,
+       [&direct_memory](HleCallContext& context) {
+         return KernelAllocateMainDirectMemory(context, direct_memory);
+       }});
+  exports.push_back(
+      {kLibKernelName, kKernelReleaseDirectMemoryName,
+       [&direct_memory](HleCallContext& context) {
+         return KernelReleaseDirectMemory(context, direct_memory);
+       }});
+  exports.push_back(
+      {kLibKernelName, kKernelReleaseDirectMemoryNid,
+       [&direct_memory](HleCallContext& context) {
+         return KernelReleaseDirectMemory(context, direct_memory);
+       }});
+  exports.push_back(
+      {kLibKernelName, kKernelCheckedReleaseDirectMemoryName,
+       [&direct_memory](HleCallContext& context) {
+         return KernelCheckedReleaseDirectMemory(context, direct_memory);
+       }});
+  exports.push_back(
+      {kLibKernelName, kKernelCheckedReleaseDirectMemoryNid,
+       [&direct_memory](HleCallContext& context) {
+         return KernelCheckedReleaseDirectMemory(context, direct_memory);
+       }});
+  exports.push_back(
       {kLibKernelName, kPosixGetPageSizeName, PosixGetPageSize});
   exports.push_back(
       {kLibKernelName, kPosixGetPageSizeNid, PosixGetPageSize});
@@ -280,8 +488,10 @@ std::vector<HleExportDefinition> detail::MakeKernelMemoryExports() {
   return exports;
 }
 
-ExportRegistryStatus RegisterKernelMemoryExports(ExportRegistry& registry) {
-  return registry.RegisterBatch(detail::MakeKernelMemoryExports());
+ExportRegistryStatus RegisterKernelMemoryExports(
+    ExportRegistry& registry, kernel::DirectMemoryService& direct_memory) {
+  return registry.RegisterBatch(
+      detail::MakeKernelMemoryExports(direct_memory));
 }
 
 }  // namespace kajps5::hle

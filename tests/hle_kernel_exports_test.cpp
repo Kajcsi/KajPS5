@@ -17,6 +17,7 @@
 #include "hle/kernel_event_flag_exports.h"
 #include "hle/kernel_exports.h"
 #include "hle/kernel_file_exports.h"
+#include "hle/kernel_memory_exports.h"
 #include "kernel/clock.h"
 #include "kernel/runtime.h"
 
@@ -74,12 +75,18 @@ int main() {
   ExportRegistry registry;
   Check(kajps5::hle::RegisterKernelExports(registry, runtime) ==
             ExportRegistryStatus::kOk &&
-            registry.size() == 78,
+            registry.size() == 90,
         "default kernel exports did not register atomically");
 
   GuestMemory memory(0x1000, 0x1000);
   HleCallContext clock_context(memory);
   const std::vector<std::string> libraries = {kajps5::hle::kLibKernelName};
+  HleCallContext direct_memory_context(memory);
+  Check(registry.Dispatch(kajps5::hle::kKernelGetDirectMemorySizeNid,
+                          libraries, direct_memory_context) &&
+            direct_memory_context.GetRegister(HleRegister::kRax).value_or(0) ==
+                runtime.direct_memory().size(),
+        "default direct-memory export did not use the shared runtime");
   Check(registry.Dispatch(kajps5::hle::kKernelGetProcessTimeCounterNid,
                           libraries, clock_context) &&
             clock_context.GetRegister(HleRegister::kRax).value_or(0) ==
@@ -117,7 +124,7 @@ int main() {
 
   Check(kajps5::hle::RegisterKernelExports(registry, runtime) ==
             ExportRegistryStatus::kAlreadyExists &&
-            registry.size() == 78,
+            registry.size() == 90,
         "duplicate default registration changed the registry");
 
   ExportRegistry conflict_registry;

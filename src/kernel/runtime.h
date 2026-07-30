@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "kernel/clock.h"
+#include "kernel/direct_memory.h"
 #include "kernel/event_queue.h"
 #include "kernel/event_flag.h"
 #include "kernel/file.h"
@@ -42,6 +43,9 @@ public:
   [[nodiscard]] SemaphoreService &semaphores() noexcept { return semaphores_; }
   [[nodiscard]] FileService &files() noexcept { return files_; }
   [[nodiscard]] KernelClockService &clock() noexcept { return clock_; }
+  [[nodiscard]] DirectMemoryService &direct_memory() noexcept {
+    return direct_memory_;
+  }
 
 private:
   HandleTable handles_;
@@ -51,6 +55,7 @@ private:
   SemaphoreService semaphores_;
   FileService files_;
   KernelClockService clock_;
+  DirectMemoryService direct_memory_;
 };
 
 } // namespace kajps5::kernel

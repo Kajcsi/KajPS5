@@ -71,3 +71,11 @@ default window, then the available guest range. Fixed mappings require an
 aligned free range; they never replace an existing mapping. The handler checks
 the output pointer, flags, protection, size, and optional 31-byte name before
 mapping. A rejected request does not change the range table or output value.
+
+The kernel runtime also owns one 13.5 GiB direct-memory range allocator.
+`sceKernelGetDirectMemorySize`, availability queries, direct and main-direct
+allocation, and checked or unchecked release use that shared allocator.
+Allocation is first fit inside the requested physical range. Availability
+returns the largest aligned gap. Partial release splits an allocation and
+adjacent free ranges coalesce. Invalid output pointers cannot consume a range.
+Direct-memory aliases into the guest address space are not implemented yet.

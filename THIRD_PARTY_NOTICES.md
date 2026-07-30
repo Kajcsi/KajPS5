@@ -76,8 +76,12 @@ They use the 16 KiB guest page size and the `mprotect`, `munmap`,
 `getpagesize`, and memory-protection query names and NIDs confirmed by both
 references. Flexible mappings use the names and NIDs confirmed by both
 references, KytyPS5's page, flag, protection, and name checks, and SharpEmu's
-checked first-fit address search. The query uses KytyPS5's exclusive range end.
-No memory-export source was copied.
+checked first-fit address search. The direct-memory range service in
+`src/kernel/direct_memory.cpp` uses KytyPS5's physical-memory size, first-fit
+allocation, largest-gap query, and partial-release rules. Its fragmentation
+tests also adapt SharpEmu's checked split and coalesce behavior. The protection
+query uses KytyPS5's exclusive range end. No memory-export or allocator source
+was copied.
 
 ## Native execution, imports, and HLE
 
