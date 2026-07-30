@@ -294,6 +294,148 @@ HleContextStatus MallocUsableSize(HleCallContext& context,
   return HleContextStatus::kOk;
 }
 
+HleContextStatus CreateMspace(HleCallContext& context,
+                              kernel::LibcHeapService& heap,
+                              memory::GuestMemory& memory) {
+  const auto name_address = context.Argument(0).value_or(0);
+  const auto name = context.ReadNullTerminatedString(name_address, 64);
+  if (name_address == 0 || !name ||
+      context.Argument(3).value_or(0) != 0) {
+    context.SetReturn(0);
+    return HleContextStatus::kOk;
+  }
+  const auto created = heap.CreateMspace(
+      memory, context.Argument(1).value_or(0),
+      context.Argument(2).value_or(0));
+  context.SetReturn(created ? created.address : 0);
+  return HleContextStatus::kOk;
+}
+
+HleContextStatus DestroyMspace(HleCallContext& context,
+                               kernel::LibcHeapService& heap,
+                               memory::GuestMemory& memory) {
+  const auto status = heap.DestroyMspace(
+      memory, context.Argument(0).value_or(0));
+  context.SetReturn(status == kernel::KernelStatus::kOk ? 0 : 1);
+  return HleContextStatus::kOk;
+}
+
+HleContextStatus AllocateMspace(HleCallContext& context,
+                                kernel::LibcHeapService& heap,
+                                memory::GuestMemory& memory,
+                                std::uint64_t size,
+                                std::uint64_t alignment,
+                                bool zero_fill) {
+  const auto allocated = heap.AllocateMspace(
+      memory, context.Argument(0).value_or(0), size, alignment, zero_fill);
+  context.SetReturn(allocated ? allocated.address : 0);
+  return HleContextStatus::kOk;
+}
+
+HleContextStatus MspaceMalloc(HleCallContext& context,
+                              kernel::LibcHeapService& heap,
+                              memory::GuestMemory& memory) {
+  return AllocateMspace(context, heap, memory,
+                        context.Argument(1).value_or(0),
+                        kernel::kDefaultLibcHeapAlignment, false);
+}
+
+HleContextStatus MspaceFree(HleCallContext& context,
+                            kernel::LibcHeapService& heap,
+                            memory::GuestMemory& memory) {
+  (void)heap.ReleaseMspace(memory, context.Argument(0).value_or(0),
+                           context.Argument(1).value_or(0));
+  context.SetReturn(0);
+  return HleContextStatus::kOk;
+}
+
+HleContextStatus MspaceCalloc(HleCallContext& context,
+                              kernel::LibcHeapService& heap,
+                              memory::GuestMemory& memory) {
+  const auto count = context.Argument(1).value_or(0);
+  const auto element_size = context.Argument(2).value_or(0);
+  if (count != 0 &&
+      element_size > std::numeric_limits<std::uint64_t>::max() / count) {
+    context.SetReturn(0);
+    return HleContextStatus::kOk;
+  }
+  return AllocateMspace(context, heap, memory, count * element_size,
+                        kernel::kDefaultLibcHeapAlignment, true);
+}
+
+HleContextStatus MspaceRealloc(HleCallContext& context,
+                               kernel::LibcHeapService& heap,
+                               memory::GuestMemory& memory,
+                               bool aligned) {
+  const auto alignment =
+      aligned ? context.Argument(2).value_or(0)
+              : kernel::kDefaultLibcHeapAlignment;
+  const auto size_argument = aligned ? 3 : 2;
+  const auto resized = heap.ReallocateMspace(
+      memory, context.Argument(0).value_or(0),
+      context.Argument(1).value_or(0),
+      context.Argument(size_argument).value_or(0), alignment);
+  context.SetReturn(resized ? resized.address : 0);
+  return HleContextStatus::kOk;
+}
+
+HleContextStatus MspaceMemalign(HleCallContext& context,
+                                kernel::LibcHeapService& heap,
+                                memory::GuestMemory& memory) {
+  const auto alignment = context.Argument(1).value_or(0);
+  if (!IsPowerOfTwo(alignment)) {
+    context.SetReturn(0);
+    return HleContextStatus::kOk;
+  }
+  return AllocateMspace(context, heap, memory,
+                        context.Argument(2).value_or(0), alignment, false);
+}
+
+HleContextStatus MspacePosixMemalign(HleCallContext& context,
+                                     kernel::LibcHeapService& heap,
+                                     memory::GuestMemory& memory) {
+  const auto handle = context.Argument(0).value_or(0);
+  const auto output = context.Argument(1).value_or(0);
+  const auto alignment = context.Argument(2).value_or(0);
+  const auto size = context.Argument(3).value_or(0);
+  if (output == 0 || !IsPowerOfTwo(alignment) ||
+      alignment % sizeof(std::uint64_t) != 0) {
+    if (output != 0 &&
+        context.WriteUInt64(output, 0) != HleContextStatus::kOk) {
+      context.SetReturn(kPosixEinval);
+      return HleContextStatus::kMemoryFault;
+    }
+    context.SetReturn(kPosixEinval);
+    return HleContextStatus::kOk;
+  }
+  const auto allocated =
+      heap.AllocateMspace(memory, handle, size, alignment, false);
+  if (!allocated) {
+    (void)context.WriteUInt64(output, 0);
+    context.SetReturn(kPosixEnomem);
+    return HleContextStatus::kOk;
+  }
+  if (context.WriteUInt64(output, allocated.address) !=
+      HleContextStatus::kOk) {
+    (void)heap.ReleaseMspace(memory, handle, allocated.address);
+    context.SetReturn(kPosixEinval);
+    return HleContextStatus::kMemoryFault;
+  }
+  context.SetReturn(0);
+  return HleContextStatus::kOk;
+}
+
+HleContextStatus MspaceIsHeapEmpty(HleCallContext& context,
+                                   kernel::LibcHeapService& heap,
+                                   memory::GuestMemory& memory) {
+  context.SetReturn(
+      heap.MspaceIsEmpty(memory, context.Argument(0).value_or(0))
+          .value_or(false)
+          ? 1
+          : 0);
+  return HleContextStatus::kOk;
+}
+
 template <typename Handler>
 void AddAliases(std::vector<HleExportDefinition>& exports, const char* name,
                 const char* nid, Handler handler) {
@@ -313,7 +455,7 @@ ExportRegistryStatus RegisterLibcExports(ExportRegistry& registry,
   auto* const heap_view = &heap;
   auto* const memory_view = &memory;
   std::vector<HleExportDefinition> exports;
-  exports.reserve(36);
+  exports.reserve(58);
   AddAliases(exports, kCxaGuardAcquireName, kCxaGuardAcquireNid,
              [guard_view](HleCallContext& context) {
                return CxaGuardAcquire(context, *guard_view);
@@ -387,6 +529,57 @@ ExportRegistryStatus RegisterLibcExports(ExportRegistry& registry,
              kLibcMallocUsableSizeNid,
              [heap_view, memory_view](HleCallContext& context) {
                return MallocUsableSize(context, *heap_view, *memory_view);
+             });
+  AddAliases(exports, kLibcMspaceCreateName, kLibcMspaceCreateNid,
+             [heap_view, memory_view](HleCallContext& context) {
+               return CreateMspace(context, *heap_view, *memory_view);
+             });
+  AddAliases(exports, kLibcMspaceDestroyName, kLibcMspaceDestroyNid,
+             [heap_view, memory_view](HleCallContext& context) {
+               return DestroyMspace(context, *heap_view, *memory_view);
+             });
+  AddAliases(exports, kLibcMspaceMallocName, kLibcMspaceMallocNid,
+             [heap_view, memory_view](HleCallContext& context) {
+               return MspaceMalloc(context, *heap_view, *memory_view);
+             });
+  AddAliases(exports, kLibcMspaceFreeName, kLibcMspaceFreeNid,
+             [heap_view, memory_view](HleCallContext& context) {
+               return MspaceFree(context, *heap_view, *memory_view);
+             });
+  AddAliases(exports, kLibcMspaceCallocName, kLibcMspaceCallocNid,
+             [heap_view, memory_view](HleCallContext& context) {
+               return MspaceCalloc(context, *heap_view, *memory_view);
+             });
+  AddAliases(exports, kLibcMspaceReallocName, kLibcMspaceReallocNid,
+             [heap_view, memory_view](HleCallContext& context) {
+               return MspaceRealloc(context, *heap_view, *memory_view,
+                                    false);
+             });
+  AddAliases(exports, kLibcMspaceMemalignName, kLibcMspaceMemalignNid,
+             [heap_view, memory_view](HleCallContext& context) {
+               return MspaceMemalign(context, *heap_view, *memory_view);
+             });
+  AddAliases(exports, kLibcMspacePosixMemalignName,
+             kLibcMspacePosixMemalignNid,
+             [heap_view, memory_view](HleCallContext& context) {
+               return MspacePosixMemalign(context, *heap_view,
+                                          *memory_view);
+             });
+  AddAliases(exports, kLibcMspaceReallocalignName,
+             kLibcMspaceReallocalignNid,
+             [heap_view, memory_view](HleCallContext& context) {
+               return MspaceRealloc(context, *heap_view, *memory_view,
+                                    true);
+             });
+  AddAliases(exports, kLibcMspaceMallocUsableSizeName,
+             kLibcMspaceMallocUsableSizeNid,
+             [heap_view, memory_view](HleCallContext& context) {
+               return MallocUsableSize(context, *heap_view, *memory_view);
+             });
+  AddAliases(exports, kLibcMspaceIsHeapEmptyName,
+             kLibcMspaceIsHeapEmptyNid,
+             [heap_view, memory_view](HleCallContext& context) {
+               return MspaceIsHeapEmpty(context, *heap_view, *memory_view);
              });
   return registry.RegisterBatch(std::move(exports));
 }

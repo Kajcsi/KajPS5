@@ -55,6 +55,32 @@ inline constexpr auto kLibcPosixMemalignName = "posix_memalign";
 inline constexpr auto kLibcPosixMemalignNid = "cVSk9y8URbc";
 inline constexpr auto kLibcMallocUsableSizeName = "malloc_usable_size";
 inline constexpr auto kLibcMallocUsableSizeNid = "NDcSfcYZRC8";
+inline constexpr auto kLibcMspaceCreateName = "sceLibcMspaceCreate";
+inline constexpr auto kLibcMspaceCreateNid = "-hn1tcVHq5Q";
+inline constexpr auto kLibcMspaceDestroyName = "sceLibcMspaceDestroy";
+inline constexpr auto kLibcMspaceDestroyNid = "W6SiVSiCDtI";
+inline constexpr auto kLibcMspaceMallocName = "sceLibcMspaceMalloc";
+inline constexpr auto kLibcMspaceMallocNid = "OJjm-QOIHlI";
+inline constexpr auto kLibcMspaceFreeName = "sceLibcMspaceFree";
+inline constexpr auto kLibcMspaceFreeNid = "Vla-Z+eXlxo";
+inline constexpr auto kLibcMspaceCallocName = "sceLibcMspaceCalloc";
+inline constexpr auto kLibcMspaceCallocNid = "LYo3GhIlB38";
+inline constexpr auto kLibcMspaceReallocName = "sceLibcMspaceRealloc";
+inline constexpr auto kLibcMspaceReallocNid = "gigoVHZvVPE";
+inline constexpr auto kLibcMspaceMemalignName = "sceLibcMspaceMemalign";
+inline constexpr auto kLibcMspaceMemalignNid = "iF1iQHzxBJU";
+inline constexpr auto kLibcMspacePosixMemalignName =
+    "sceLibcMspacePosixMemalign";
+inline constexpr auto kLibcMspacePosixMemalignNid = "qWESlyXMI3E";
+inline constexpr auto kLibcMspaceReallocalignName =
+    "sceLibcMspaceReallocalign";
+inline constexpr auto kLibcMspaceReallocalignNid = "p6lrRW8-MLY";
+inline constexpr auto kLibcMspaceMallocUsableSizeName =
+    "sceLibcMspaceMallocUsableSize";
+inline constexpr auto kLibcMspaceMallocUsableSizeNid = "fEoW6BJsPt4";
+inline constexpr auto kLibcMspaceIsHeapEmptyName =
+    "sceLibcMspaceIsHeapEmpty";
+inline constexpr auto kLibcMspaceIsHeapEmptyNid = "pzUa7KEoydw";
 
 [[nodiscard]] ExportRegistryStatus RegisterLibcExports(
     ExportRegistry& registry, kernel::CxaGuardService& guards,

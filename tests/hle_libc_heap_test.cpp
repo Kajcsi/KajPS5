@@ -33,7 +33,8 @@ void SetArguments(kajps5::hle::HleCallContext& context,
   constexpr std::array registers = {
       kajps5::hle::HleRegister::kRdi,
       kajps5::hle::HleRegister::kRsi,
-      kajps5::hle::HleRegister::kRdx};
+      kajps5::hle::HleRegister::kRdx,
+      kajps5::hle::HleRegister::kRcx};
   std::size_t index = 0;
   for (const auto argument : arguments) {
     Check(index < registers.size() &&
@@ -59,7 +60,7 @@ int main() {
 
   constexpr std::uint64_t kOutputAddress = 0x10000;
   GuestMemory memory(0x10000, 0x10000, GuestMemoryProtection::kNone);
-  Check(memory.Map(kOutputAddress, 8,
+  Check(memory.Map(kOutputAddress, 0x100,
                    GuestMemoryProtection::kRead |
                        GuestMemoryProtection::kWrite),
         "heap output cell did not map");
@@ -69,7 +70,7 @@ int main() {
   Check(kajps5::hle::RegisterLibcExports(
             registry, runtime.cxa_guards(), runtime.process_lifecycle(),
             runtime.libc_heap(), memory) == ExportRegistryStatus::kOk &&
-            registry.size() == 36,
+            registry.size() == 58,
         "libc heap exports did not register atomically");
   const std::vector<std::string> libc_scope = {kajps5::hle::kLibcName};
 
@@ -194,6 +195,149 @@ int main() {
                           unknown_free) &&
             runtime.libc_heap().allocation_count() == 0,
         "unknown free changed the guest heap");
+
+  constexpr std::uint64_t kMspaceNameAddress = 0x10020;
+  constexpr std::uint64_t kMspaceBase = 0x18000;
+  constexpr std::uint64_t kMspaceSize = 0x4000;
+  const std::array mspace_name = {
+      std::byte{0x74}, std::byte{0x65}, std::byte{0x73}, std::byte{0x74},
+      std::byte{0}};
+  Check(memory.Write(kMspaceNameAddress, mspace_name) &&
+            memory.Map(kMspaceBase, kMspaceSize,
+                       GuestMemoryProtection::kRead |
+                           GuestMemoryProtection::kWrite),
+        "mspace backing range setup failed");
+  HleCallContext create_mspace(memory);
+  SetArguments(create_mspace,
+               {kMspaceNameAddress, kMspaceBase, kMspaceSize, 0});
+  Check(registry.Dispatch(kajps5::hle::kLibcMspaceCreateNid,
+                          libc_scope, create_mspace) &&
+            ReturnValue(create_mspace) == kMspaceBase &&
+            runtime.libc_heap().mspace_count() == 1,
+        "mspace creation did not retain its guest range");
+
+  HleCallContext mspace_malloc(memory);
+  SetArguments(mspace_malloc, {kMspaceBase, 24});
+  Check(static_cast<bool>(registry.Dispatch(
+            kajps5::hle::kLibcMspaceMallocNid, libc_scope,
+            mspace_malloc)),
+        "mspace malloc dispatch failed");
+  const auto mspace_first = ReturnValue(mspace_malloc);
+  Check(mspace_first >= kMspaceBase +
+                            kajps5::kernel::kLibcMspaceMetadataBytes &&
+            mspace_first % 16 == 0 &&
+            memory.Write(mspace_first, pattern),
+        "mspace malloc did not return writable guest memory");
+
+  HleCallContext mspace_realloc(memory);
+  SetArguments(mspace_realloc, {kMspaceBase, mspace_first, 64});
+  Check(static_cast<bool>(registry.Dispatch(
+            kajps5::hle::kLibcMspaceReallocName, libc_scope,
+            mspace_realloc)),
+        "mspace realloc dispatch failed");
+  const auto mspace_resized = ReturnValue(mspace_realloc);
+  copied.fill(std::byte{0});
+  Check(mspace_resized != 0 && memory.Read(mspace_resized, copied) &&
+            copied == pattern,
+        "mspace realloc did not preserve allocation contents");
+
+  HleCallContext mspace_reallocalign(memory);
+  SetArguments(mspace_reallocalign,
+               {kMspaceBase, mspace_resized, 256, 80});
+  Check(static_cast<bool>(registry.Dispatch(
+            kajps5::hle::kLibcMspaceReallocalignNid, libc_scope,
+            mspace_reallocalign)),
+        "mspace reallocalign dispatch failed");
+  const auto mspace_realigned = ReturnValue(mspace_reallocalign);
+  copied.fill(std::byte{0});
+  Check(mspace_realigned != 0 && mspace_realigned % 256 == 0 &&
+            memory.Read(mspace_realigned, copied) && copied == pattern,
+        "mspace reallocalign lost its alignment or contents");
+
+  HleCallContext mspace_calloc(memory);
+  SetArguments(mspace_calloc, {kMspaceBase, 4, 8});
+  Check(static_cast<bool>(registry.Dispatch(
+            kajps5::hle::kLibcMspaceCallocNid, libc_scope,
+            mspace_calloc)),
+        "mspace calloc dispatch failed");
+  const auto mspace_cleared = ReturnValue(mspace_calloc);
+  cleared_bytes.fill(std::byte{0xff});
+  Check(mspace_cleared != 0 &&
+            memory.Read(mspace_cleared, cleared_bytes) &&
+            cleared_bytes == zero_bytes,
+        "mspace calloc did not clear its allocation");
+
+  HleCallContext mspace_memalign(memory);
+  SetArguments(mspace_memalign, {kMspaceBase, 64, 17});
+  Check(static_cast<bool>(registry.Dispatch(
+            kajps5::hle::kLibcMspaceMemalignName, libc_scope,
+            mspace_memalign)),
+        "mspace memalign dispatch failed");
+  const auto mspace_aligned = ReturnValue(mspace_memalign);
+  Check(mspace_aligned != 0 && mspace_aligned % 64 == 0,
+        "mspace memalign returned a misaligned address");
+
+  HleCallContext mspace_posix(memory);
+  SetArguments(mspace_posix,
+               {kMspaceBase, kOutputAddress, 128, 9});
+  Check(registry.Dispatch(kajps5::hle::kLibcMspacePosixMemalignNid,
+                          libc_scope, mspace_posix) &&
+            ReturnValue(mspace_posix) == 0 &&
+            memory.Read(kOutputAddress,
+                        std::as_writable_bytes(std::span(&output, 1))) &&
+            output != 0 && output % 128 == 0,
+        "mspace posix_memalign did not return aligned memory");
+  const auto mspace_posix_allocation = output;
+
+  HleCallContext mspace_usable(memory);
+  SetArguments(mspace_usable, {mspace_realigned});
+  const auto stats =
+      runtime.libc_heap().MspaceStats(memory, kMspaceBase);
+  Check(registry.Dispatch(
+            kajps5::hle::kLibcMspaceMallocUsableSizeNid, libc_scope,
+            mspace_usable) &&
+            ReturnValue(mspace_usable) == 80 && stats.has_value() &&
+            stats->capacity == kMspaceSize &&
+            stats->current_in_use == 138 &&
+            stats->maximum_in_use >= stats->current_in_use,
+        "mspace size accounting is incorrect");
+
+  HleCallContext mspace_not_empty(memory);
+  SetArguments(mspace_not_empty, {kMspaceBase});
+  HleCallContext busy_destroy(memory);
+  SetArguments(busy_destroy, {kMspaceBase});
+  Check(registry.Dispatch(kajps5::hle::kLibcMspaceIsHeapEmptyNid,
+                          libc_scope, mspace_not_empty) &&
+            ReturnValue(mspace_not_empty) == 0 &&
+            registry.Dispatch(kajps5::hle::kLibcMspaceDestroyNid,
+                              libc_scope, busy_destroy) &&
+            ReturnValue(busy_destroy) == 1,
+        "live mspace allocations did not block destruction");
+
+  const std::array mspace_allocations = {
+      mspace_realigned, mspace_cleared, mspace_aligned,
+      mspace_posix_allocation};
+  for (const auto allocation : mspace_allocations) {
+    HleCallContext mspace_free(memory);
+    SetArguments(mspace_free, {kMspaceBase, allocation});
+    Check(static_cast<bool>(registry.Dispatch(
+              kajps5::hle::kLibcMspaceFreeNid, libc_scope,
+              mspace_free)),
+          "mspace free dispatch failed");
+  }
+  HleCallContext mspace_empty(memory);
+  SetArguments(mspace_empty, {kMspaceBase});
+  HleCallContext destroy_mspace(memory);
+  SetArguments(destroy_mspace, {kMspaceBase});
+  Check(registry.Dispatch(kajps5::hle::kLibcMspaceIsHeapEmptyName,
+                          libc_scope, mspace_empty) &&
+            ReturnValue(mspace_empty) == 1 &&
+            registry.Dispatch(kajps5::hle::kLibcMspaceDestroyName,
+                              libc_scope, destroy_mspace) &&
+            ReturnValue(destroy_mspace) == 0 &&
+            runtime.libc_heap().mspace_count() == 0 &&
+            memory.QueryRegion(kMspaceBase).has_value(),
+        "empty mspace destruction changed caller-owned memory");
 
   const std::vector<std::string> wrong_scope = {"libkernel"};
   Check(registry.Dispatch(kajps5::hle::kLibcMallocNid, wrong_scope,

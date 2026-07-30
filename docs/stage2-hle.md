@@ -43,6 +43,9 @@ The libc heap service reserves checked read-write ranges inside guest memory.
 It supports allocation, release, clearing, resizing, aligned allocation, and
 usable-size queries. Allocation counts and copy sizes are bounded. Failed
 requests return the libc result without mapping partial guest ranges.
+Caller-owned mspaces use the same service but keep their own bounded free
+ranges and allocation records. Destroying an mspace does not unmap the memory
+that its caller supplied.
 
 The HLE export registry keeps C++ context handlers separate from executable
 import targets. Dispatch uses the same ordered library scope as linking. An

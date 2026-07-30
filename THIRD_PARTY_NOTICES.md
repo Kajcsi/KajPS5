@@ -192,6 +192,13 @@ heap addresses. The default 16-byte alignment follows the application-heap
 boundary in pinned KytyPS5 `src/libs/libKernel.cpp`. No upstream allocator
 source was copied.
 
+The caller-owned mspace model in the same files extends that checked heap
+behavior with fixed guest ranges, bounded allocation records, and in-place or
+moving resize operations. Its export names and NIDs are confirmed by pinned
+SharpEmu `scripts/ps5_names.txt` and `scripts/aerolib_catalog.py`. Mspace
+backing remains under the existing KajPS5 guest-memory owner. No upstream
+mspace implementation was copied.
+
 The native HLE bridge in `src/cpu/native_hle_trampoline.cpp` adapts the
 register-pack and host-call boundary from pinned SharpEmu
 `src/SharpEmu.Core/Cpu/Native/DirectExecutionBackend.Imports.cs`. Its shared
