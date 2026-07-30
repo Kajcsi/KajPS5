@@ -45,6 +45,8 @@
 - [x] Add checked guest paths and memory-backed read-only files.
 - [x] Add deterministic directory reads for the memory-backed namespace.
 - [x] Add deterministic thread-exit joins.
+- [x] Add checked pthread attributes, bounded TLS keys, and scheduler-aware
+      thread identity and yielding.
 - [x] Add deterministic library-scoped HLE import lookup.
 - [x] Connect checked import lookup to standard relocation targets.
 - [x] Resolve scoped PS5 NID symbols through parsed module and library IDs.

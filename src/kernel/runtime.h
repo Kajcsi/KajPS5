@@ -13,6 +13,7 @@
 #include "kernel/file.h"
 #include "kernel/guest_scheduler.h"
 #include "kernel/handle_table.h"
+#include "kernel/pthread.h"
 #include "kernel/semaphore.h"
 
 namespace kajps5::kernel {
@@ -20,11 +21,13 @@ namespace kajps5::kernel {
 class KernelRuntime final {
 public:
   KernelRuntime()
-      : scheduler_(handles_), event_queues_(handles_, scheduler_),
+      : scheduler_(handles_), pthreads_(scheduler_),
+        event_queues_(handles_, scheduler_),
         event_flags_(handles_, scheduler_),
         semaphores_(handles_, scheduler_), files_(handles_) {}
   explicit KernelRuntime(std::unique_ptr<KernelClockSource> clock_source)
-      : scheduler_(handles_), event_queues_(handles_, scheduler_),
+      : scheduler_(handles_), pthreads_(scheduler_),
+        event_queues_(handles_, scheduler_),
         event_flags_(handles_, scheduler_),
         semaphores_(handles_, scheduler_), files_(handles_),
         clock_(std::move(clock_source)) {}
@@ -34,6 +37,7 @@ public:
 
   [[nodiscard]] HandleTable &handles() noexcept { return handles_; }
   [[nodiscard]] GuestScheduler &scheduler() noexcept { return scheduler_; }
+  [[nodiscard]] PthreadService& pthreads() noexcept { return pthreads_; }
   [[nodiscard]] EventQueueService &event_queues() noexcept {
     return event_queues_;
   }
@@ -50,6 +54,7 @@ public:
 private:
   HandleTable handles_;
   GuestScheduler scheduler_;
+  PthreadService pthreads_;
   EventQueueService event_queues_;
   EventFlagService event_flags_;
   SemaphoreService semaphores_;

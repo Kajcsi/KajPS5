@@ -163,6 +163,15 @@ kajps5_deploy_msvc_asan_runtime(kajps5_hle_kernel_memory_exports_test)
 add_test(NAME kajps5_hle_kernel_memory_exports
          COMMAND kajps5_hle_kernel_memory_exports_test)
 
+add_executable(kajps5_hle_kernel_pthread_exports_test
+               hle_kernel_pthread_exports_test.cpp)
+target_link_libraries(kajps5_hle_kernel_pthread_exports_test
+                      PRIVATE kajps5_core)
+kajps5_deploy_msvc_asan_runtime(kajps5_hle_kernel_pthread_exports_test)
+
+add_test(NAME kajps5_hle_kernel_pthread_exports
+         COMMAND kajps5_hle_kernel_pthread_exports_test)
+
 add_executable(kajps5_hle_kernel_semaphore_exports_test
                hle_kernel_semaphore_exports_test.cpp)
 target_link_libraries(kajps5_hle_kernel_semaphore_exports_test

@@ -17,10 +17,11 @@ The behavior review used these pinned upstream files:
   KytyPS5 commit.
 - SharpEmu `src/SharpEmu.Libs/Kernel/KernelSemaphoreCompatExports.cs` at the
   pinned SharpEmu commit.
-- KytyPS5 `src/kernel/pthread.h` and the clock functions in
-  `src/kernel/pthread.cpp` at the pinned KytyPS5 commit.
-- SharpEmu `src/SharpEmu.Libs/Kernel/KernelRuntimeCompatExports.cs` at the
-  pinned SharpEmu commit.
+- KytyPS5 `src/kernel/pthread.h` and `src/kernel/pthread.cpp` at the pinned
+  KytyPS5 commit.
+- SharpEmu `src/SharpEmu.Libs/Kernel/KernelRuntimeCompatExports.cs`,
+  `KernelPthreadCompatExports.cs`, and
+  `KernelPthreadExtendedCompatExports.cs` at the pinned SharpEmu commit.
 - KytyPS5 `src/kernel/fileSystem.h` and `src/kernel/fileSystem.cpp` at the
   pinned KytyPS5 commit.
 - SharpEmu open, close, read, seek, stat, and directory-read behavior in
@@ -43,6 +44,14 @@ The tests capture the behavior below.
 - Thread exit keeps the return value and wakes every joiner. Joining a live
   thread blocks; joining an exited thread returns its saved value. Self joins
   and stale handles leave scheduler state unchanged.
+- Pthread attributes use guest-visible synthetic handles instead of exposing
+  host pointers. Their default affinity, guard size, stack size, scheduler
+  policy, and priority match KytyPS5. Stack sizes below 16 KiB are rejected.
+- Pthread TLS has 256 reusable keys. Values belong to the current guest thread,
+  key deletion clears every stored value, and no host thread-local state leaks
+  into the guest model.
+- Pthread identity and equality use guest scheduler handles. Pthread yield
+  returns the current thread to the shared ready queue.
 - Setting an event flag uses bitwise OR. Clearing retains the bits selected by
   the supplied mask. Poll supports all-bit and any-bit conditions and can clear
   all bits or only the requested pattern after returning the observed value.
@@ -101,8 +110,8 @@ The tests capture the behavior below.
 ## HLE registration
 
 - One atomic batch binds the current clock, event-queue, event-flag, file,
-  memory, and semaphore handlers to the same kernel runtime. A conflict leaves
-  the registry unchanged.
+  memory, pthread, and semaphore handlers to the same kernel runtime. A
+  conflict leaves the registry unchanged.
 - Semaphore handlers create, delete, poll, and signal the same objects used by
   the scheduler. Event-flag handlers create, delete, set, clear, and poll their
   shared objects. Handle and result outputs are checked before state changes.

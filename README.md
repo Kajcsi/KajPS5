@@ -35,7 +35,9 @@ The current core includes:
   dispatch, with bounded diagnostics for unresolved symbols, deterministic
   dependency order, and checked guest register and memory access.
 - Typed kernel handles and one cooperative scheduler for ready, running,
-  blocked, and exited guest threads.
+  blocked, and exited guest threads. Initial pthread support includes guest
+  attributes, bounded thread-local keys, per-thread values, identity, equality,
+  and scheduler-aware yielding.
 - Event flags, semaphores, user-event queues, portable clocks, guest memory
   protection, flexible and direct-memory mappings, direct-memory range
   allocation, and a read-only in-memory file namespace. The matching

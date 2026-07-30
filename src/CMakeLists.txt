@@ -12,6 +12,7 @@ add_library(kajps5_core STATIC
   hle/kernel_exports.cpp
   hle/kernel_file_exports.cpp
   hle/kernel_memory_exports.cpp
+  hle/kernel_pthread_exports.cpp
   hle/kernel_semaphore_exports.cpp
   kernel/clock.cpp
   kernel/direct_memory.cpp
@@ -20,6 +21,7 @@ add_library(kajps5_core STATIC
   kernel/file.cpp
   kernel/guest_scheduler.cpp
   kernel/handle_table.cpp
+  kernel/pthread.cpp
   kernel/semaphore.cpp
   loader/elf.cpp
   loader/elf_trace.cpp

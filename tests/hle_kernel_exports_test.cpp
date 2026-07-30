@@ -18,6 +18,7 @@
 #include "hle/kernel_exports.h"
 #include "hle/kernel_file_exports.h"
 #include "hle/kernel_memory_exports.h"
+#include "hle/kernel_pthread_exports.h"
 #include "kernel/clock.h"
 #include "kernel/runtime.h"
 
@@ -75,7 +76,7 @@ int main() {
   ExportRegistry registry;
   Check(kajps5::hle::RegisterKernelExports(registry, runtime) ==
             ExportRegistryStatus::kOk &&
-            registry.size() == 96,
+            registry.size() == 140,
         "default kernel exports did not register atomically");
 
   GuestMemory memory(0x1000, 0x1000);
@@ -124,7 +125,7 @@ int main() {
 
   Check(kajps5::hle::RegisterKernelExports(registry, runtime) ==
             ExportRegistryStatus::kAlreadyExists &&
-            registry.size() == 96,
+            registry.size() == 140,
         "duplicate default registration changed the registry");
 
   ExportRegistry conflict_registry;
