@@ -7,10 +7,10 @@ Explain what changed, why it matters, and what evidence supports it.
 List the builds, tests, public fixtures, or traces you used. Write `N/A` only
 when the change cannot affect runtime behavior.
 
-## AI assistance
+## Contributor review
 
-If AI tools helped with the change, describe what they did and what you
-reviewed and tested yourself. Otherwise, write `N/A`.
+Describe what you reviewed yourself and note any part that still needs a
+second review. Write `N/A` only when no extra review note is needed.
 
 ## Checklist
 
@@ -19,6 +19,5 @@ reviewed and tested yourself. Otherwise, write `N/A`.
       words.
 - [ ] I tested the change or explained why runtime validation is not
       applicable.
-- [ ] I disclosed any AI assistance and described my own verification.
 - [ ] I did not add games, firmware, keys, proprietary modules, private crash
       data, or non-redistributable assets.

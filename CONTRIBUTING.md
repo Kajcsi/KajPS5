@@ -25,16 +25,13 @@ Write documentation, comments, logs, and errors in plain, direct language.
 Prefer specific behavior and test evidence over broad claims. Remove filler,
 repetition, and slogans.
 
-## AI-assisted contributions
+## Contribution quality
 
-AI tools may help with research, reverse engineering, code, tests, or
-documentation. You are still responsible for everything you submit. You must
-understand the change well enough to explain, modify, debug, and maintain it
-yourself.
+You are responsible for everything you submit. You must understand the change
+well enough to explain, modify, debug, and maintain it yourself.
 
-If a contribution used AI assistance:
+For every contribution:
 
-- Disclose the scope of the assistance in the pull request.
 - Explain the change, its purpose, and its evidence in your own words.
 - Describe the review and testing you completed yourself.
 - Keep comments focused on design decisions and non-obvious implementation
@@ -43,6 +40,6 @@ If a contribution used AI assistance:
 - Be ready to answer detailed questions about the implementation.
 
 Write and verify your own pull-request descriptions, review replies, code
-comments, and issue comments. Do not post unreviewed tool output as repository
-communication. Maintainers may close a generated change when its contributor
-cannot explain it or has not tested it.
+comments, and issue comments. Do not post raw tool output as repository
+communication. Maintainers may close a change when its contributor cannot
+explain it or has not tested it.
