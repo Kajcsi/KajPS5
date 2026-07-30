@@ -1,3 +1,5 @@
+// Copyright (C) 2026 KajPS5 contributors
+// Architecture reference: KytyPS5
 // Behavior reference: Copyright (C) 2026 SharpEmu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -6,11 +8,14 @@
 #include <cstdint>
 #include <iostream>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "core/memory/guest_memory.h"
+#include "hle/import_registry.h"
 #include "loader/elf.h"
 #include "loader/elf_trace.h"
+#include "loader/relocator.h"
 
 namespace {
 
@@ -19,6 +24,22 @@ constexpr std::size_t kSelfSegmentSize = 0x20;
 constexpr std::size_t kElfOffset = kSelfHeaderSize + kSelfSegmentSize;
 constexpr std::size_t kProgramHeaderOffset = kElfOffset + 0x40;
 constexpr std::size_t kPayloadOffset = 0x180;
+
+constexpr std::size_t kLinkedPayloadOffset = 0x500;
+constexpr std::size_t kLinkedPayloadSize = 0x400;
+constexpr std::uint64_t kLinkedLoadFileOffset = 0x200;
+constexpr std::uint64_t kLinkedLoadAddress = 0x4000;
+
+constexpr std::int64_t kTagSceNeededModule = 0x6100000f;
+constexpr std::int64_t kTagSceImportLibrary = 0x61000015;
+constexpr std::int64_t kTagSceJumpRela = 0x61000029;
+constexpr std::int64_t kTagSceJumpRelaSize = 0x6100002d;
+constexpr std::int64_t kTagSceRela = 0x6100002f;
+constexpr std::int64_t kTagSceRelaSize = 0x61000031;
+constexpr std::int64_t kTagSceStringTable = 0x61000035;
+constexpr std::int64_t kTagSceStringTableSize = 0x61000037;
+constexpr std::int64_t kTagSceSymbolTable = 0x61000039;
+constexpr std::int64_t kTagSceSymbolTableSize = 0x6100003f;
 
 int failures = 0;
 
@@ -51,6 +72,34 @@ void Write64(std::vector<std::byte>& image, std::size_t offset,
     image[offset + index] =
         static_cast<std::byte>((value >> (index * 8U)) & 0xffU);
   }
+}
+
+void WriteDynamic(std::vector<std::byte>& image, std::size_t base,
+                  std::size_t index, std::int64_t tag, std::uint64_t value) {
+  const auto offset = base + index * 16;
+  Write64(image, offset, static_cast<std::uint64_t>(tag));
+  Write64(image, offset + 8, value);
+}
+
+void WriteString(std::vector<std::byte>& image, std::size_t base,
+                 std::size_t offset, std::string_view value) {
+  for (std::size_t index = 0; index < value.size(); ++index) {
+    image[base + offset + index] = static_cast<std::byte>(value[index]);
+  }
+  image[base + offset + value.size()] = std::byte{0};
+}
+
+std::uint64_t PackModule(std::uint16_t id, std::uint8_t major,
+                         std::uint8_t minor, std::uint32_t name_offset) {
+  return (static_cast<std::uint64_t>(id) << 48U) |
+         (static_cast<std::uint64_t>(major) << 40U) |
+         (static_cast<std::uint64_t>(minor) << 32U) | name_offset;
+}
+
+std::uint64_t PackLibrary(std::uint16_t id, std::uint16_t version,
+                          std::uint32_t name_offset) {
+  return (static_cast<std::uint64_t>(id) << 48U) |
+         (static_cast<std::uint64_t>(version) << 32U) | name_offset;
 }
 
 std::vector<std::byte> MakeSelf(std::uint64_t segment_type = 0x800,
@@ -140,6 +189,115 @@ std::vector<std::byte> MakeContainedDynamicSelf() {
   return image;
 }
 
+std::vector<std::byte> MakeLinkedSelf() {
+  constexpr std::size_t dynamic_relative = 0x40;
+  constexpr std::size_t dynamic_count = 11;
+  constexpr std::size_t strings_relative = 0x180;
+  constexpr std::size_t strings_size = 0x60;
+  constexpr std::size_t symbols_relative = 0x240;
+  constexpr std::size_t rela_relative = 0x280;
+  constexpr std::size_t jump_rela_relative = 0x298;
+  constexpr std::size_t targets_relative = 0x300;
+
+  std::vector<std::byte> image(kLinkedPayloadOffset + kLinkedPayloadSize);
+
+  image[0] = std::byte{0x54};
+  image[1] = std::byte{0x14};
+  image[2] = std::byte{0xf5};
+  image[3] = std::byte{0xee};
+  image[4] = std::byte{0x10};
+  image[5] = std::byte{0x01};
+  image[6] = std::byte{0x01};
+  image[7] = std::byte{0x12};
+  Write16(image, 12, kSelfHeaderSize);
+  Write16(image, 14, kSelfHeaderSize);
+  Write64(image, 16, image.size());
+  Write16(image, 24, 1);
+
+  Write64(image, kSelfHeaderSize, 0x800);
+  Write64(image, kSelfHeaderSize + 8, kLinkedPayloadOffset);
+  Write64(image, kSelfHeaderSize + 16, kLinkedPayloadSize);
+  Write64(image, kSelfHeaderSize + 24, kLinkedPayloadSize);
+
+  image[kElfOffset] = std::byte{0x7f};
+  image[kElfOffset + 1] = std::byte{'E'};
+  image[kElfOffset + 2] = std::byte{'L'};
+  image[kElfOffset + 3] = std::byte{'F'};
+  image[kElfOffset + 4] = std::byte{2};
+  image[kElfOffset + 5] = std::byte{1};
+  image[kElfOffset + 6] = std::byte{1};
+  image[kElfOffset + 7] = std::byte{9};
+  image[kElfOffset + 8] = std::byte{2};
+  Write16(image, kElfOffset + 16, 0xfe10);
+  Write16(image, kElfOffset + 18, 62);
+  Write32(image, kElfOffset + 20, 1);
+  Write64(image, kElfOffset + 24, kLinkedLoadAddress);
+  Write64(image, kElfOffset + 32, 0x40);
+  Write16(image, kElfOffset + 52, 64);
+  Write16(image, kElfOffset + 54, 56);
+  Write16(image, kElfOffset + 56, 2);
+
+  Write32(image, kProgramHeaderOffset, 1);
+  Write32(image, kProgramHeaderOffset + 4, 6);
+  Write64(image, kProgramHeaderOffset + 8, kLinkedLoadFileOffset);
+  Write64(image, kProgramHeaderOffset + 16, kLinkedLoadAddress);
+  Write64(image, kProgramHeaderOffset + 24, kLinkedLoadAddress);
+  Write64(image, kProgramHeaderOffset + 32, kLinkedPayloadSize);
+  Write64(image, kProgramHeaderOffset + 40, kLinkedPayloadSize);
+  Write64(image, kProgramHeaderOffset + 48, 0x100);
+
+  const auto dynamic_header = kProgramHeaderOffset + 56;
+  Write32(image, dynamic_header, 2);
+  Write32(image, dynamic_header + 4, 4);
+  Write64(image, dynamic_header + 8,
+          kLinkedLoadFileOffset + dynamic_relative);
+  Write64(image, dynamic_header + 16,
+          kLinkedLoadAddress + dynamic_relative);
+  Write64(image, dynamic_header + 24,
+          kLinkedLoadAddress + dynamic_relative);
+  Write64(image, dynamic_header + 32, dynamic_count * 16);
+  Write64(image, dynamic_header + 40, dynamic_count * 16);
+  Write64(image, dynamic_header + 48, 8);
+
+  const auto dynamic = kLinkedPayloadOffset + dynamic_relative;
+  WriteDynamic(image, dynamic, 0, kTagSceStringTable,
+               kLinkedLoadAddress + strings_relative);
+  WriteDynamic(image, dynamic, 1, kTagSceStringTableSize, strings_size);
+  WriteDynamic(image, dynamic, 2, kTagSceSymbolTable,
+               kLinkedLoadAddress + symbols_relative);
+  WriteDynamic(image, dynamic, 3, kTagSceSymbolTableSize, 48);
+  WriteDynamic(image, dynamic, 4, kTagSceRela,
+               kLinkedLoadAddress + rela_relative);
+  WriteDynamic(image, dynamic, 5, kTagSceRelaSize, 24);
+  WriteDynamic(image, dynamic, 6, kTagSceJumpRela,
+               kLinkedLoadAddress + jump_rela_relative);
+  WriteDynamic(image, dynamic, 7, kTagSceJumpRelaSize, 24);
+  WriteDynamic(image, dynamic, 8, kTagSceNeededModule,
+               PackModule(0x0040, 1, 2, 1));
+  WriteDynamic(image, dynamic, 9, kTagSceImportLibrary,
+               PackLibrary(0x1234, 0x0100, 14));
+  WriteDynamic(image, dynamic, 10, 0, 0);
+
+  const auto strings = kLinkedPayloadOffset + strings_relative;
+  WriteString(image, strings, 1, "kernelModule");
+  WriteString(image, strings, 14, "libkernel");
+  WriteString(image, strings, 24, "open#BI0#BA");
+
+  const auto symbol = kLinkedPayloadOffset + symbols_relative + 24;
+  Write32(image, symbol, 24);
+  image[symbol + 4] = std::byte{0x12};
+
+  const auto rela = kLinkedPayloadOffset + rela_relative;
+  Write64(image, rela, kLinkedLoadAddress + targets_relative);
+  Write64(image, rela + 8, 8);
+  Write64(image, rela + 16, 0x55);
+
+  const auto jump_rela = kLinkedPayloadOffset + jump_rela_relative;
+  Write64(image, jump_rela, kLinkedLoadAddress + targets_relative + 8);
+  Write64(image, jump_rela + 8, (std::uint64_t{1} << 32U) | 7U);
+  return image;
+}
+
 void CheckError(std::vector<std::byte> image, kajps5::loader::ElfError error,
                 const char* message) {
   Check(kajps5::loader::ParseExecutable64(image).error == error, message);
@@ -190,6 +348,32 @@ int main() {
       std::byte{0xde}, std::byte{0xad}, std::byte{0xbe}, std::byte{0xef},
       std::byte{0},    std::byte{0},    std::byte{0},    std::byte{0}};
   Check(loaded_bytes == expected, "SELF payload copy or zero fill is wrong");
+
+  const auto linked_image = MakeLinkedSelf();
+  GuestMemory linked_memory(kLinkedLoadAddress, kLinkedPayloadSize,
+                            GuestMemoryProtection::kNone);
+  const auto linked_load = LoadExecutable64(linked_image, linked_memory);
+  Check(static_cast<bool>(linked_load),
+        "synthetic PS5 SELF with link metadata did not load");
+  kajps5::hle::ImportRegistry registry;
+  Check(registry.Register("libkernel", "open", 0x8877665544332211) ==
+            kajps5::hle::ImportRegistryStatus::kOk,
+        "synthetic SELF import registration failed");
+  const auto linked = kajps5::loader::ApplyRelocations(
+      linked_load.metadata, linked_memory, registry);
+  Check(linked && linked.applied_count == 2 &&
+            linked.resolved_import_count == 1 &&
+            linked.unresolved_import_count == 0,
+        "synthetic PS5 SELF did not complete checked relocation linking");
+  std::array<std::byte, 16> linked_values{};
+  const std::array expected_linked_values = {
+      std::byte{0x55}, std::byte{0},    std::byte{0},    std::byte{0},
+      std::byte{0},    std::byte{0},    std::byte{0},    std::byte{0},
+      std::byte{0x11}, std::byte{0x22}, std::byte{0x33}, std::byte{0x44},
+      std::byte{0x55}, std::byte{0x66}, std::byte{0x77}, std::byte{0x88}};
+  Check(linked_memory.Read(kLinkedLoadAddress + 0x300, linked_values) &&
+            linked_values == expected_linked_values,
+        "synthetic PS5 SELF relocation values are incorrect");
 
   Check(static_cast<bool>(ParseExecutable64(MakeSelf(0x802))),
         "resolved dumped encrypted payload was rejected");

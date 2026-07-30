@@ -77,10 +77,11 @@ The library-scoped HLE import lookup and relocation connection in
 KytyPS5 and SharpEmu import resolvers. The scoped PS5 symbol handling in
 `src/loader/relocator.cpp` follows KytyPS5's compact library and module ID
 matching in `src/loader/runtimeLinker.cpp` and adapts SharpEmu's NID extraction
-from `src/SharpEmu.Core/Loader/SelfLoader.cs` at the pinned commits. The
-test-only HLE call path in `tests/hle_public_guest_test.cpp` also follows the
-import thunk and dispatch behavior in those pinned projects. No thunk or
-resolver source was copied.
+from `src/SharpEmu.Core/Loader/SelfLoader.cs` at the pinned commits. Absolute
+symbol relocations follow the KytyPS5 `R_X86_64_64` flow and SharpEmu's
+unresolved weak-symbol rule. The test-only HLE call path in
+`tests/hle_public_guest_test.cpp` also follows the import thunk and dispatch
+behavior in those pinned projects. No thunk or resolver source was copied.
 
 The bounded trace in `src/loader/relocation_trace.cpp` and
 `tests/relocation_trace_test.cpp` adapts SharpEmu's focus on structured,
@@ -165,7 +166,7 @@ a saved guest continuation.
 
 ## Contributor guidance
 
-The AI-assisted contribution guidance in `CONTRIBUTING.md` and
+The contribution quality guidance in `CONTRIBUTING.md` and
 `.github/pull_request_template.md` adapts policy concepts from KytyPS5
 `README.md` at commit `f6e01e54031a3c615f089f061a4eab2f3c59acba`,
 and SharpEmu `CONTRIBUTING.md` and `.github/pull_request_template.md` at commit

@@ -48,12 +48,14 @@ file-backed tables, mapped targets, and malformed metadata. A rejected load
 does not change guest memory.
 
 The relocation pass validates its full plan before writing memory. It applies
-`R_X86_64_RELATIVE`, skips no-operation entries, and counts unresolved
-`R_X86_64_GLOB_DAT` and `R_X86_64_JUMP_SLOT` imports. Unsupported types,
-invalid relative symbols, target overflow, and unmapped writes fail. The HLE
-layer can resolve `GLOB_DAT` and `JUMP_SLOT` imports by ordered needed-library
-name. Relocation traces encode untrusted names as hex and show at most 32
-records with 128 input bytes per name.
+`R_X86_64_RELATIVE` and `R_X86_64_64`, skips no-operation entries, and counts
+unresolved `R_X86_64_GLOB_DAT` and `R_X86_64_JUMP_SLOT` imports. Absolute
+relocations use defined symbols, resolved imports, or zero for an unresolved
+weak symbol. Unsupported types, invalid relative symbols, target overflow,
+and unmapped writes fail. The HLE layer resolves symbol relocations by ordered
+needed-library name. Relocation traces encode untrusted names as hex, report a
+rejected numeric relocation type, and show at most 32 records with 128 input
+bytes per name.
 
 Protection and unmap changes are transactional. The full requested range must
 be mapped before its metadata changes. Protection can split and merge regions
@@ -105,7 +107,8 @@ size-based symbols, relocations, module and library identities, repeated
 dynlib-data segments, truncated ranges, and invalid table and name offsets.
 No fixture contains proprietary data. The valid fixtures also run through
 checked guest loading, scoped NID resolution, and transactional relocation
-writes.
+writes. One generated PS5 SELF covers the full container, dynamic-metadata,
+load, relative-relocation, and import-link sequence.
 
 The separate controlled native tests are documented in `stage2-cpu.md` and
 `stage2-hle.md`.

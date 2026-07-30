@@ -145,6 +145,62 @@ int main() {
   Check(sce_memory.Read(0x3000, sce_value) && sce_value == expected_sce_value,
         "scoped SCE import wrote the wrong address");
 
+  auto absolute_import = MakeImportMetadata();
+  absolute_import.dynamic_info.relocations = {
+      {0x4000, (std::uint64_t{1} << 32U) | 1U, 5}};
+  absolute_import.dynamic_info.plt_relocations.clear();
+  GuestMemory absolute_memory(0x4000, 8);
+  const auto absolute_linked =
+      ApplyRelocations(absolute_import, absolute_memory, registry);
+  std::array<std::byte, 8> absolute_value{};
+  const std::array expected_absolute_value = {
+      std::byte{0x8d}, std::byte{0x77}, std::byte{0x66}, std::byte{0x55},
+      std::byte{0x44}, std::byte{0x33}, std::byte{0x22}, std::byte{0x11}};
+  Check(absolute_linked && absolute_linked.applied_count == 1 &&
+            absolute_linked.resolved_import_count == 1 &&
+            absolute_memory.Read(0x4000, absolute_value) &&
+            absolute_value == expected_absolute_value,
+        "absolute import relocation did not apply its addend");
+
+  kajps5::loader::ElfMetadata defined_symbol;
+  defined_symbol.dynamic_info.symbols.resize(2);
+  defined_symbol.dynamic_info.symbols[1].info = 0x10;
+  defined_symbol.dynamic_info.symbols[1].section_index = 1;
+  defined_symbol.dynamic_info.symbols[1].value = 0x200;
+  defined_symbol.dynamic_info.relocations.push_back(
+      {0x4000, (std::uint64_t{1} << 32U) | 1U, 0x10});
+  GuestMemory defined_memory(0x5000, 8);
+  const auto defined_linked =
+      ApplyRelocations(defined_symbol, defined_memory, empty_registry, 0x1000);
+  std::array<std::byte, 8> defined_value{};
+  const std::array expected_defined_value = {
+      std::byte{0x10}, std::byte{0x12}, std::byte{0}, std::byte{0},
+      std::byte{0},    std::byte{0},    std::byte{0}, std::byte{0}};
+  Check(defined_linked && defined_linked.applied_count == 1 &&
+            defined_linked.resolved_import_count == 0 &&
+            defined_memory.Read(0x5000, defined_value) &&
+            defined_value == expected_defined_value,
+        "defined absolute symbol did not use the load bias and addend");
+
+  kajps5::loader::ElfMetadata weak_symbol;
+  weak_symbol.dynamic_info.symbols.resize(2);
+  weak_symbol.dynamic_info.symbols[1].info = 0x20;
+  weak_symbol.dynamic_info.symbols[1].name = "optional";
+  weak_symbol.dynamic_info.relocations.push_back(
+      {0x6000, (std::uint64_t{1} << 32U) | 1U, 7});
+  GuestMemory weak_memory(0x6000, 8);
+  const auto weak_linked =
+      ApplyRelocations(weak_symbol, weak_memory, empty_registry);
+  std::array<std::byte, 8> weak_value{};
+  const std::array expected_weak_value = {
+      std::byte{7}, std::byte{0}, std::byte{0}, std::byte{0},
+      std::byte{0}, std::byte{0}, std::byte{0}, std::byte{0}};
+  Check(weak_linked && weak_linked.applied_count == 1 &&
+            weak_linked.unresolved_import_count == 0 &&
+            weak_memory.Read(0x6000, weak_value) &&
+            weak_value == expected_weak_value,
+        "unresolved weak absolute symbol did not use zero plus its addend");
+
   for (const auto malformed : {"open#A#BA", "open#AI0#BA",
                                "open#BI0#A", "open#BI0#B!",
                                "open#BI0#BA#extra"}) {

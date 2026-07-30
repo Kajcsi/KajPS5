@@ -13,8 +13,11 @@
 
 #include "core/memory/guest_memory.h"
 #include "core/project_info.h"
+#include "hle/import_registry.h"
 #include "loader/elf.h"
 #include "loader/elf_trace.h"
+#include "loader/relocation_trace.h"
+#include "loader/relocator.h"
 
 namespace {
 
@@ -99,6 +102,17 @@ int TraceExecutableFile(const char* path) {
               << "load.file_bytes=" << loaded.loaded_file_bytes << '\n'
               << "load.zero_filled_bytes=" << loaded.zero_filled_bytes
               << '\n';
+
+    const kajps5::hle::ImportRegistry empty_registry;
+    const auto relocated = kajps5::loader::ApplyRelocations(
+        loaded.metadata, memory, empty_registry);
+    std::cout << kajps5::loader::FormatRelocationTrace(relocated);
+    if (!relocated) {
+      std::cerr << "Executable relocation check failed: "
+                << kajps5::loader::RelocationStatusName(relocated.status)
+                << '\n';
+      return 4;
+    }
   } catch (const std::exception& exception) {
     std::cerr << "Executable load check failed: " << exception.what() << '\n';
     return 3;

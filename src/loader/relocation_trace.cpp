@@ -49,6 +49,10 @@ std::string FormatRelocationTrace(const RelocationResult& result) {
         << result.unresolved_import_count << '\n'
         << "relocation.unresolved_details=" << detail_count << '\n'
         << "relocation.unresolved_omitted=" << omitted_count << '\n';
+  if (result.unsupported_relocation_type.has_value()) {
+    trace << "relocation.unsupported_type="
+          << *result.unsupported_relocation_type << '\n';
+  }
 
   for (std::size_t index = 0; index < detail_count; ++index) {
     const auto& unresolved = result.unresolved_imports[index];

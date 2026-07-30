@@ -191,9 +191,11 @@ int main() {
         "transactional relocation ELF did not load");
   auto unsupported = transactional_load.metadata;
   unsupported.dynamic_info.relocations.push_back({kTargetAddress, 2, 0});
-  Check(kajps5::loader::ApplyRelativeRelocations(unsupported,
-                                                 transactional_memory)
-            .status == kajps5::loader::RelocationStatus::kUnsupportedRelocation,
+  const auto unsupported_result = kajps5::loader::ApplyRelativeRelocations(
+      unsupported, transactional_memory);
+  Check(unsupported_result.status ==
+                kajps5::loader::RelocationStatus::kUnsupportedRelocation &&
+            unsupported_result.unsupported_relocation_type == 2,
         "unsupported relocation was accepted");
   std::array<std::byte, 8> unchanged{};
   Check(transactional_memory.Read(kTargetAddress, unchanged) &&

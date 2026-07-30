@@ -42,6 +42,7 @@ struct RelocationResult {
   std::size_t unresolved_import_count = 0;
   std::size_t resolved_import_count = 0;
   std::vector<UnresolvedImport> unresolved_imports;
+  std::optional<std::uint32_t> unsupported_relocation_type;
 
   [[nodiscard]] explicit operator bool() const noexcept {
     return status == RelocationStatus::kOk;

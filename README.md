@@ -24,7 +24,8 @@ The current core includes:
 - An executable loader that checks bare ELF64 and recognized SELF/FSELF
   containers, program headers, standard and PS5 dynamic-link metadata, x86-64
   `RELA` relocations, and symbols before it changes guest memory. It preserves
-  each `PT_LOAD` segment's read, write, and execute flags.
+  each `PT_LOAD` segment's read, write, and execute flags. The inspection path
+  also plans relocations and reports unresolved imports without running code.
 - Library-scoped PS5 NID import linking and HLE dispatch, with bounded
   diagnostics for unresolved symbols and checked guest register and memory
   access.

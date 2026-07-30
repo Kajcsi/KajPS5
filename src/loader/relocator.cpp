@@ -16,9 +16,12 @@ namespace kajps5::loader {
 namespace {
 
 constexpr std::uint32_t kRelocationNone = 0;
+constexpr std::uint32_t kRelocationAbsolute64 = 1;
 constexpr std::uint32_t kRelocationGlobDat = 6;
 constexpr std::uint32_t kRelocationJumpSlot = 7;
 constexpr std::uint32_t kRelocationRelative = 8;
+constexpr std::uint8_t kSymbolBindingWeak = 2;
+constexpr std::uint16_t kUndefinedSectionIndex = 0;
 
 struct PlannedRelocation {
   std::uint64_t address = 0;
@@ -106,11 +109,13 @@ RelocationStatus PlanTable(const std::vector<ElfRelaEntry>& entries,
                            std::uint64_t load_bias,
                            std::vector<PlannedRelocation>& planned,
                            std::size_t& resolved_import_count,
-                           std::vector<UnresolvedImport>& unresolved_imports) {
+                           std::vector<UnresolvedImport>& unresolved_imports,
+                           std::optional<std::uint32_t>& unsupported_type) {
   for (const auto& entry : entries) {
     const auto type = entry.type();
     switch (type) {
       case kRelocationNone: continue;
+      case kRelocationAbsolute64:
       case kRelocationGlobDat:
       case kRelocationJumpSlot: break;
       case kRelocationRelative:
@@ -118,7 +123,9 @@ RelocationStatus PlanTable(const std::vector<ElfRelaEntry>& entries,
           return RelocationStatus::kInvalidRelativeSymbol;
         }
         break;
-      default: return RelocationStatus::kUnsupportedRelocation;
+      default:
+        unsupported_type = type;
+        return RelocationStatus::kUnsupportedRelocation;
     }
 
     if (entry.offset >
@@ -130,7 +137,8 @@ RelocationStatus PlanTable(const std::vector<ElfRelaEntry>& entries,
       return RelocationStatus::kTargetNotMapped;
     }
 
-    if (type == kRelocationGlobDat || type == kRelocationJumpSlot) {
+    if (type == kRelocationAbsolute64 || type == kRelocationGlobDat ||
+        type == kRelocationJumpSlot) {
       if (resolver == nullptr) {
         UnresolvedImport unresolved;
         unresolved.symbol_index = entry.symbol();
@@ -147,40 +155,60 @@ RelocationStatus PlanTable(const std::vector<ElfRelaEntry>& entries,
         return RelocationStatus::kInvalidSymbolIndex;
       }
       const auto& symbol = metadata.dynamic_info.symbols[entry.symbol()];
-      const auto reference = ParseImportReference(metadata, symbol.name);
-      if (reference.nid.empty()) {
-        return RelocationStatus::kEmptyImportSymbol;
-      }
-      if (!reference.valid) {
-        unresolved_imports.push_back(
-            {entry.symbol(), type, target, symbol.name});
-        continue;
-      }
       std::optional<std::uint64_t> resolved;
-      if (reference.library != nullptr) {
-        const std::span<const std::string> library_scope(
-            &reference.library->name, 1);
-        resolved = resolver->ResolveImport(reference.nid, library_scope);
+      bool resolved_import = false;
+      if (entry.symbol() == 0) {
+        resolved = 0;
+      } else if (symbol.section_index != kUndefinedSectionIndex) {
+        if (symbol.value >
+            std::numeric_limits<std::uint64_t>::max() - load_bias) {
+          return RelocationStatus::kInvalidResolvedAddress;
+        }
+        resolved = load_bias + symbol.value;
+      } else if (symbol.binding() == kSymbolBindingWeak) {
+        resolved = 0;
       } else {
-        resolved = resolver->ResolveImport(
-            reference.nid, metadata.dynamic_info.needed_libraries);
-      }
-      if (!resolved.has_value()) {
-        unresolved_imports.push_back(
-            {entry.symbol(), type, target, symbol.name});
-        continue;
-      }
-      if (*resolved == 0) {
-        return RelocationStatus::kInvalidResolvedAddress;
+        const auto reference = ParseImportReference(metadata, symbol.name);
+        if (reference.nid.empty()) {
+          return RelocationStatus::kEmptyImportSymbol;
+        }
+        if (!reference.valid) {
+          unresolved_imports.push_back(
+              {entry.symbol(), type, target, symbol.name});
+          continue;
+        }
+        if (reference.library != nullptr) {
+          const std::span<const std::string> library_scope(
+              &reference.library->name, 1);
+          resolved = resolver->ResolveImport(reference.nid, library_scope);
+        } else {
+          resolved = resolver->ResolveImport(
+              reference.nid, metadata.dynamic_info.needed_libraries);
+        }
+        if (!resolved.has_value()) {
+          unresolved_imports.push_back(
+              {entry.symbol(), type, target, symbol.name});
+          continue;
+        }
+        if (*resolved == 0) {
+          return RelocationStatus::kInvalidResolvedAddress;
+        }
+        resolved_import = true;
       }
       PlannedRelocation relocation;
       relocation.address = target;
+      const auto addend = type == kRelocationAbsolute64
+                              ? std::bit_cast<std::uint64_t>(entry.addend)
+                              : 0;
+      const auto value = *resolved + addend;
       for (std::size_t index = 0; index < relocation.value.size(); ++index) {
         relocation.value[index] =
-            static_cast<std::byte>((*resolved >> (index * 8U)) & 0xffU);
+            static_cast<std::byte>((value >> (index * 8U)) & 0xffU);
       }
       planned.push_back(relocation);
-      ++resolved_import_count;
+      if (resolved_import) {
+        ++resolved_import_count;
+      }
       continue;
     }
 
@@ -206,18 +234,22 @@ RelocationResult ApplyRelocationsInternal(const ElfMetadata& metadata,
                   metadata.dynamic_info.plt_relocations.size());
   std::size_t resolved_import_count = 0;
   std::vector<UnresolvedImport> unresolved_imports;
+  std::optional<std::uint32_t> unsupported_type;
 
   auto status = PlanTable(metadata.dynamic_info.relocations, metadata, memory,
                           resolver, load_bias, planned, resolved_import_count,
-                          unresolved_imports);
+                          unresolved_imports, unsupported_type);
   if (status == RelocationStatus::kOk) {
     status = PlanTable(metadata.dynamic_info.plt_relocations, metadata, memory,
                        resolver, load_bias, planned, resolved_import_count,
-                       unresolved_imports);
+                       unresolved_imports, unsupported_type);
   }
   if (status != RelocationStatus::kOk) {
-    return {status, 0, unresolved_imports.size(), resolved_import_count,
-            std::move(unresolved_imports)};
+    RelocationResult result{status, 0, unresolved_imports.size(),
+                            resolved_import_count,
+                            std::move(unresolved_imports)};
+    result.unsupported_relocation_type = unsupported_type;
+    return result;
   }
 
   std::size_t applied_count = 0;

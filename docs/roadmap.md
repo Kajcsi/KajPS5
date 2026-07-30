@@ -22,6 +22,7 @@
 - [x] Parse checked PS5 dynlib-data tables and module and library identities.
 - [x] Parse checked SELF/FSELF containers and resolve their ELF payloads.
 - [x] Resolve PS5 dynamic metadata from dynlib-data or load segments.
+- [x] Run a recognized SELF through checked loading and relocation planning.
 
 ## Stage 2: CPU and kernel
 

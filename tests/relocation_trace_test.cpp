@@ -52,6 +52,14 @@ int main() {
   Check(kajps5::loader::FormatRelocationTrace(result) == expected,
         "stable relocation trace changed");
 
+  kajps5::loader::RelocationResult unsupported;
+  unsupported.status =
+      kajps5::loader::RelocationStatus::kUnsupportedRelocation;
+  unsupported.unsupported_relocation_type = 24;
+  Check(kajps5::loader::FormatRelocationTrace(unsupported).find(
+            "relocation.unsupported_type=24\n") != std::string::npos,
+        "unsupported relocation type is missing from the trace");
+
   kajps5::loader::RelocationResult bounded;
   bounded.unresolved_import_count =
       kajps5::loader::kMaximumRelocationTraceImports + 3;
