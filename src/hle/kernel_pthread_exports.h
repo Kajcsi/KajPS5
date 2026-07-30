@@ -127,6 +127,12 @@ inline constexpr auto kPosixPthreadCondWaitName = "pthread_cond_wait";
 inline constexpr auto kPosixPthreadCondWaitNid = "Op8TBGY5KHg";
 inline constexpr auto kKernelPthreadCondWaitName = "scePthreadCondWait";
 inline constexpr auto kKernelPthreadCondWaitNid = "WKAXJ4XBPQ4";
+inline constexpr auto kPosixPthreadCondTimedwaitName =
+    "pthread_cond_timedwait";
+inline constexpr auto kPosixPthreadCondTimedwaitNid = "27bAgiJmOh0";
+inline constexpr auto kKernelPthreadCondTimedwaitName =
+    "scePthreadCondTimedwait";
+inline constexpr auto kKernelPthreadCondTimedwaitNid = "BmMjYxmew1w";
 inline constexpr auto kPosixPthreadCondSignalName = "pthread_cond_signal";
 inline constexpr auto kPosixPthreadCondSignalNid = "2MOy+rUfuhQ";
 inline constexpr auto kKernelPthreadCondSignalName = "scePthreadCondSignal";

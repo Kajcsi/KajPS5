@@ -6,6 +6,7 @@
 
 #include <bit>
 #include <cstdint>
+#include <limits>
 #include <utility>
 #include <vector>
 
@@ -21,6 +22,7 @@ constexpr std::int32_t kPosixErrorInvalidArgument = 22;
 constexpr std::int32_t kPosixErrorTryAgain = 35;
 constexpr std::int32_t kPosixErrorNoSuchProcess = 3;
 constexpr std::int32_t kPosixErrorDeadlock = 11;
+constexpr std::int32_t kPosixErrorTimedOut = 60;
 
 void SetSignedResult(HleCallContext& context, std::int32_t result) noexcept {
   context.SetReturn(
@@ -42,6 +44,7 @@ std::int32_t PthreadStatusResult(kernel::KernelStatus status,
       case kernel::KernelStatus::kNoSuchEntry:
       case kernel::KernelStatus::kInvalidArgument:
       case kernel::KernelStatus::kOk: return kPosixErrorInvalidArgument;
+      case kernel::KernelStatus::kTimedOut: return kPosixErrorTimedOut;
     }
   }
 
@@ -55,6 +58,7 @@ std::int32_t PthreadStatusResult(kernel::KernelStatus status,
     case kernel::KernelStatus::kNoSuchEntry:
     case kernel::KernelStatus::kInvalidArgument:
     case kernel::KernelStatus::kOk: return kKernelHleErrorInvalidArgument;
+    case kernel::KernelStatus::kTimedOut: return kKernelHleErrorTimedOut;
   }
   return kKernelHleErrorInvalidArgument;
 }
@@ -637,6 +641,61 @@ HleContextStatus PthreadCondWait(HleCallContext& context,
   return HleContextStatus::kOk;
 }
 
+HleContextStatus PthreadCondTimedwait(HleCallContext& context,
+                                      kernel::PthreadService& pthreads,
+                                      bool posix_errors) {
+  kernel::KernelTimespec absolute_deadline;
+  if (posix_errors) {
+    const auto deadline_address = context.Argument(2).value_or(0);
+    if (deadline_address == 0 ||
+        deadline_address >
+            std::numeric_limits<std::uint64_t>::max() -
+                sizeof(std::uint64_t)) {
+      SetSignedResult(context, MemoryFault(true));
+      return HleContextStatus::kOk;
+    }
+    std::uint64_t raw_seconds = 0;
+    std::uint64_t raw_nanoseconds = 0;
+    if (context.ReadUInt64(deadline_address, raw_seconds) !=
+            HleContextStatus::kOk ||
+        context.ReadUInt64(deadline_address + sizeof(std::uint64_t),
+                           raw_nanoseconds) != HleContextStatus::kOk) {
+      SetSignedResult(context, MemoryFault(true));
+      return HleContextStatus::kOk;
+    }
+    absolute_deadline = {static_cast<std::int64_t>(raw_seconds),
+                         static_cast<std::int64_t>(raw_nanoseconds)};
+  }
+
+  std::uint64_t condition_handle = 0;
+  if (!ResolveCondition(context, pthreads, posix_errors, condition_handle)) {
+    return HleContextStatus::kOk;
+  }
+
+  const auto mutex_address = context.Argument(1).value_or(0);
+  if (mutex_address == 0) {
+    SetSignedResult(context, InvalidArgument(posix_errors));
+    return HleContextStatus::kOk;
+  }
+  std::uint64_t mutex_handle = 0;
+  if (!ResolveMutex(context, pthreads, posix_errors, mutex_handle,
+                    mutex_address)) {
+    return HleContextStatus::kOk;
+  }
+
+  kernel::KernelStatus status = kernel::KernelStatus::kInvalidArgument;
+  if (posix_errors) {
+    status = pthreads.WaitConditionUntilRealtime(
+        condition_handle, mutex_handle, absolute_deadline);
+  } else {
+    status = pthreads.WaitConditionFor(
+        condition_handle, mutex_handle,
+        static_cast<std::uint32_t>(context.Argument(2).value_or(0)));
+  }
+  SetSignedResult(context, PthreadStatusResult(status, posix_errors));
+  return HleContextStatus::kOk;
+}
+
 HleContextStatus PthreadCondSignal(HleCallContext& context,
                                    kernel::PthreadService& pthreads,
                                    bool posix_errors, bool broadcast) {
@@ -731,7 +790,7 @@ std::vector<HleExportDefinition> detail::MakeKernelPthreadExports(
   auto* const pthread_view = &pthreads;
   auto* const scheduler_view = &scheduler;
   std::vector<HleExportDefinition> exports;
-  exports.reserve(116);
+  exports.reserve(120);
 
   AddAliases(exports, kPosixPthreadSelfName, kPosixPthreadSelfNid,
              [scheduler_view](HleCallContext& context) {
@@ -946,6 +1005,16 @@ std::vector<HleExportDefinition> detail::MakeKernelPthreadExports(
   AddAliases(exports, kKernelPthreadCondWaitName, kKernelPthreadCondWaitNid,
              [pthread_view](HleCallContext& context) {
                return PthreadCondWait(context, *pthread_view, false);
+             });
+  AddAliases(exports, kPosixPthreadCondTimedwaitName,
+             kPosixPthreadCondTimedwaitNid,
+             [pthread_view](HleCallContext& context) {
+               return PthreadCondTimedwait(context, *pthread_view, true);
+             });
+  AddAliases(exports, kKernelPthreadCondTimedwaitName,
+             kKernelPthreadCondTimedwaitNid,
+             [pthread_view](HleCallContext& context) {
+               return PthreadCondTimedwait(context, *pthread_view, false);
              });
   AddAliases(exports, kPosixPthreadCondSignalName,
              kPosixPthreadCondSignalNid,

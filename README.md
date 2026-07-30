@@ -38,7 +38,7 @@ The current core includes:
   blocked, and exited guest threads. Initial pthread support includes guest
   attributes, bounded thread-local keys, per-thread values, identity, equality,
   scheduler-aware yielding, checked create, join, and exit calls, and
-  scheduler-backed mutexes and condition variables.
+  scheduler-backed mutexes and timed condition variables.
 - Event flags, semaphores, user-event queues, portable clocks, guest memory
   protection, flexible and direct-memory mappings, direct-memory range
   allocation, and a read-only in-memory file namespace. The matching

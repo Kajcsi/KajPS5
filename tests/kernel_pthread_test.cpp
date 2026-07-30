@@ -4,6 +4,7 @@
 
 #include <cstdlib>
 #include <iostream>
+#include <memory>
 
 #include "kernel/pthread.h"
 #include "kernel/runtime.h"
@@ -16,6 +17,20 @@ void Check(bool condition, const char* message) {
     std::exit(1);
   }
 }
+
+class PthreadClockSource final : public kajps5::kernel::KernelClockSource {
+ public:
+  [[nodiscard]] std::int64_t RealtimeNanoseconds() const override {
+    return realtime_nanoseconds;
+  }
+
+  [[nodiscard]] std::uint64_t MonotonicNanoseconds() const override {
+    return monotonic_nanoseconds;
+  }
+
+  std::int64_t realtime_nanoseconds = 0;
+  std::uint64_t monotonic_nanoseconds = 0;
+};
 
 }  // namespace
 
@@ -285,6 +300,97 @@ int main() {
             broadcast_pthreads.DestroyMutex(broadcast_mutex.handle) ==
                 KernelStatus::kOk,
         "condition broadcast left stale waiters");
+
+  auto timed_source = std::make_unique<PthreadClockSource>();
+  auto* timed_source_view = timed_source.get();
+  timed_source_view->realtime_nanoseconds = 100'000'000'000;
+  timed_source_view->monotonic_nanoseconds = 1'000'000;
+  KernelRuntime timed_runtime(std::move(timed_source));
+  auto& timed_pthreads = timed_runtime.pthreads();
+  auto& timed_scheduler = timed_runtime.scheduler();
+  const auto timed_condition = timed_pthreads.CreateCondition();
+  const auto timed_mutex = timed_pthreads.CreateMutex(0);
+  const auto timed_waiter = timed_scheduler.CreateThread("timed-waiter", 700);
+  Check(timed_condition && timed_mutex && timed_waiter &&
+            timed_scheduler.SelectNext() == timed_waiter.handle &&
+            timed_pthreads.LockMutex(timed_mutex.handle, false) ==
+                KernelStatus::kOk &&
+            timed_pthreads.WaitConditionFor(timed_condition.handle,
+                                            timed_mutex.handle, 50) ==
+                KernelStatus::kWouldBlock,
+        "relative condition timeout setup failed");
+  timed_source_view->monotonic_nanoseconds = 1'049'999;
+  Check(!timed_scheduler.SelectNext(),
+        "relative condition wait woke before its deadline");
+  timed_source_view->monotonic_nanoseconds = 1'050'000;
+  Check(timed_scheduler.SelectNext() == timed_waiter.handle &&
+            timed_pthreads.WaitConditionFor(timed_condition.handle,
+                                            timed_mutex.handle, 999) ==
+                KernelStatus::kTimedOut,
+        "relative condition wait did not time out at its deadline");
+  const auto relative_timeout_condition =
+      timed_pthreads.GetCondition(timed_condition.handle);
+  const auto relative_timeout_mutex =
+      timed_pthreads.GetMutex(timed_mutex.handle);
+  Check(relative_timeout_condition &&
+            relative_timeout_condition->waiting_count == 0 &&
+            relative_timeout_condition->active_waiter_count == 0 &&
+            relative_timeout_mutex &&
+            relative_timeout_mutex->owner == timed_waiter.handle &&
+            relative_timeout_mutex->condition_waiter_count == 0,
+        "timed-out condition wait did not reacquire its mutex");
+
+  const auto absolute_signaler =
+      timed_scheduler.CreateThread("absolute-signaler", 700);
+  Check(absolute_signaler &&
+            timed_pthreads.UnlockMutex(timed_mutex.handle) ==
+                KernelStatus::kOk &&
+            timed_pthreads.LockMutex(timed_mutex.handle, false) ==
+                KernelStatus::kOk &&
+            timed_pthreads.WaitConditionUntilRealtime(
+                timed_condition.handle, timed_mutex.handle,
+                {100, 1'000'000}) == KernelStatus::kWouldBlock &&
+            timed_scheduler.SelectNext() == absolute_signaler.handle &&
+            timed_pthreads.SignalCondition(timed_condition.handle, false) ==
+                KernelStatus::kOk &&
+            timed_pthreads.ExitCurrent(0) &&
+            timed_scheduler.SelectNext() == timed_waiter.handle &&
+            timed_pthreads.WaitConditionUntilRealtime(
+                timed_condition.handle, timed_mutex.handle,
+                {100, 1'000'000}) == KernelStatus::kOk,
+        "signal did not win before an absolute condition deadline");
+  Check(timed_pthreads.WaitConditionUntilRealtime(
+            timed_condition.handle, timed_mutex.handle, {-1, 0}) ==
+            KernelStatus::kInvalidArgument,
+        "condition wait accepted a negative realtime deadline");
+
+  const auto late_signaler =
+      timed_scheduler.CreateThread("late-signaler", 700);
+  Check(late_signaler &&
+            timed_pthreads.UnlockMutex(timed_mutex.handle) ==
+                KernelStatus::kOk &&
+            timed_pthreads.LockMutex(timed_mutex.handle, false) ==
+                KernelStatus::kOk &&
+            timed_pthreads.WaitConditionFor(timed_condition.handle,
+                                            timed_mutex.handle, 10) ==
+                KernelStatus::kWouldBlock &&
+            timed_scheduler.SelectNext() == late_signaler.handle,
+        "late condition signal setup failed");
+  timed_source_view->monotonic_nanoseconds += 10'000;
+  Check(timed_pthreads.SignalCondition(timed_condition.handle, false) ==
+                KernelStatus::kOk &&
+            timed_pthreads.ExitCurrent(0) &&
+            timed_scheduler.SelectNext() == timed_waiter.handle &&
+            timed_pthreads.WaitConditionFor(timed_condition.handle,
+                                            timed_mutex.handle, 10) ==
+                KernelStatus::kTimedOut,
+        "a late condition signal overrode an expired deadline");
+  Check(timed_pthreads.UnlockMutex(timed_mutex.handle) == KernelStatus::kOk &&
+            timed_pthreads.DestroyCondition(timed_condition.handle) ==
+                KernelStatus::kOk &&
+            timed_pthreads.DestroyMutex(timed_mutex.handle) ==
+                KernelStatus::kOk,
+        "timed condition resources could not be destroyed");
 
   std::cout << "kernel pthread tests passed\n";
   return 0;

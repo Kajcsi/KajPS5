@@ -184,8 +184,10 @@ the mutex attribute defaults, accepted types and protocols, guest ABI, and
 POSIX error mapping. Condition names, NIDs, and absolute-time semantics follow
 KytyPS5. Synthetic condition handles, checked static initialization, FIFO
 waiters, busy destruction, atomic mutex release, signal and broadcast
-selection, and required mutex reacquisition adapt SharpEmu behavior. The
-SharpEmu files state:
+selection, required mutex reacquisition, checked absolute-time conversion, and
+separate timeout completion adapt SharpEmu behavior. Relative and absolute
+timeout signatures, monotonic waiting, timeout results, and NIDs follow
+KytyPS5. The SharpEmu files state:
 
 `Copyright (C) 2026 SharpEmu Emulator Project`
 

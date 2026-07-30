@@ -259,6 +259,24 @@ bool GuestScheduler::CurrentThreadTimedOut(std::string_view wait_key) const {
          found->second->timed_out_wait_key == wait_key;
 }
 
+bool GuestScheduler::ConsumeCurrentThreadTimeout(std::string_view wait_key) {
+  if (wait_key.empty()) {
+    return false;
+  }
+  std::lock_guard lock(mutex_);
+  if (!current_thread_) {
+    return false;
+  }
+  const auto found = threads_.find(*current_thread_);
+  if (found == threads_.end() ||
+      found->second->state != GuestThreadState::kRunning ||
+      found->second->timed_out_wait_key != wait_key) {
+    return false;
+  }
+  found->second->timed_out_wait_key.clear();
+  return true;
+}
+
 std::optional<KernelHandle> GuestScheduler::current_thread() const {
   std::lock_guard lock(mutex_);
   return current_thread_;

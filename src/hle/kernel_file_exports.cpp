@@ -92,6 +92,7 @@ std::int32_t FileStatusResult(kernel::KernelStatus status) noexcept {
     case kernel::KernelStatus::kBusy:
     case kernel::KernelStatus::kWouldBlock:
       return kKernelHleErrorInvalidArgument;
+    case kernel::KernelStatus::kTimedOut: return kKernelHleErrorTimedOut;
   }
   return kKernelHleErrorInvalidArgument;
 }

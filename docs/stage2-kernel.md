@@ -74,6 +74,11 @@ The tests capture the behavior below.
   waiter and broadcast wakes all waiters. Each woken caller must reacquire the
   same mutex before its wait completes. Active waits keep their condition and
   mutex handles alive.
+- `scePthreadCondTimedwait` uses a relative microsecond timeout.
+  `pthread_cond_timedwait` validates and converts an absolute realtime
+  deadline. Both use a monotonic scheduler deadline after entry, return the
+  PS5 timeout result, and reacquire the mutex before completion. A timeout at
+  the same instant as a later signal wins deterministically.
 - Setting an event flag uses bitwise OR. Clearing retains the bits selected by
   the supplied mask. Poll supports all-bit and any-bit conditions and can clear
   all bits or only the requested pattern after returning the observed value.

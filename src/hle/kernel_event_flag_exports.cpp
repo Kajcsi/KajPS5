@@ -30,6 +30,7 @@ std::int32_t EventFlagStatusResult(kernel::KernelStatus status) noexcept {
     case kernel::KernelStatus::kPermissionDenied:
       return kKernelHleErrorPermissionDenied;
     case kernel::KernelStatus::kWouldBlock: return kKernelHleErrorBusy;
+    case kernel::KernelStatus::kTimedOut: return kKernelHleErrorTimedOut;
   }
   return kKernelHleErrorInvalidArgument;
 }

@@ -85,6 +85,7 @@ public:
   [[nodiscard]] bool ExitCurrent(std::uint64_t exit_value);
   [[nodiscard]] bool CurrentThreadTimedOut(
       std::string_view wait_key) const;
+  [[nodiscard]] bool ConsumeCurrentThreadTimeout(std::string_view wait_key);
 
   [[nodiscard]] std::optional<KernelHandle> current_thread() const;
   [[nodiscard]] std::optional<GuestThreadSnapshot>

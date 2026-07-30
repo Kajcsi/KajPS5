@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <iostream>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -25,6 +26,20 @@ void Check(bool condition, const char* message) {
     ++failures;
   }
 }
+
+class PthreadClockSource final : public kajps5::kernel::KernelClockSource {
+ public:
+  [[nodiscard]] std::int64_t RealtimeNanoseconds() const override {
+    return realtime_nanoseconds;
+  }
+
+  [[nodiscard]] std::uint64_t MonotonicNanoseconds() const override {
+    return monotonic_nanoseconds;
+  }
+
+  std::int64_t realtime_nanoseconds = 0;
+  std::uint64_t monotonic_nanoseconds = 0;
+};
 
 std::uint64_t KernelResult(std::int32_t result) {
   return static_cast<std::uint64_t>(static_cast<std::int64_t>(result));
@@ -56,7 +71,7 @@ int main() {
   Check(kajps5::hle::RegisterKernelPthreadExports(
             registry, runtime.pthreads(), runtime.scheduler()) ==
             ExportRegistryStatus::kOk &&
-            registry.size() == 116,
+            registry.size() == 120,
         "pthread exports did not register atomically");
 
   GuestMemory memory(0x1000, 0x4000);
@@ -639,6 +654,139 @@ int main() {
                      kajps5::hle::kPosixPthreadCondInitNid,
                      condition_fault) == 14,
         "invalid pthread condition output changed service state");
+
+  auto timed_source = std::make_unique<PthreadClockSource>();
+  auto* timed_source_view = timed_source.get();
+  timed_source_view->realtime_nanoseconds = 100'000'000'000;
+  timed_source_view->monotonic_nanoseconds = 1'000'000;
+  KernelRuntime timed_runtime(std::move(timed_source));
+  ExportRegistry timed_registry;
+  Check(kajps5::hle::RegisterKernelPthreadExports(
+            timed_registry, timed_runtime.pthreads(),
+            timed_runtime.scheduler()) == ExportRegistryStatus::kOk,
+        "pthread timed condition exports did not register");
+  const auto timed_waiter =
+      timed_runtime.scheduler().CreateThread("timed-waiter", 700);
+  Check(timed_waiter && timed_runtime.scheduler().SelectNext() ==
+                              timed_waiter.handle,
+        "pthread timed condition scheduler setup failed");
+  HleCallContext static_timed_setup(memory);
+  Check(static_timed_setup.WriteUInt64(0x1540, 0) == HleContextStatus::kOk &&
+            static_timed_setup.WriteUInt64(0x1550, 0) == HleContextStatus::kOk,
+        "static pthread timed condition setup failed");
+  HleCallContext static_timed_fault(memory);
+  std::uint64_t unchanged_condition = 1;
+  std::uint64_t unchanged_mutex = 1;
+  Check(static_timed_fault.SetRegister(HleRegister::kRdi, 0x1540) &&
+            static_timed_fault.SetRegister(HleRegister::kRsi, 0x1550) &&
+            static_timed_fault.SetRegister(HleRegister::kRdx, 0x800) &&
+            Dispatch(timed_registry,
+                     kajps5::hle::kPosixPthreadCondTimedwaitNid,
+                     static_timed_fault) == 14 &&
+            static_timed_fault.ReadUInt64(0x1540, unchanged_condition) ==
+                HleContextStatus::kOk &&
+            static_timed_fault.ReadUInt64(0x1550, unchanged_mutex) ==
+                HleContextStatus::kOk &&
+            unchanged_condition == 0 && unchanged_mutex == 0,
+        "bad pthread deadline initialized static wait objects");
+  HleCallContext timed_condition_init(memory);
+  Check(timed_condition_init.SetRegister(HleRegister::kRdi, 0x1500) &&
+            Dispatch(timed_registry,
+                     kajps5::hle::kPosixPthreadCondInitNid,
+                     timed_condition_init) == 0,
+        "pthread timed condition initialization failed");
+  HleCallContext timed_mutex_setup(memory);
+  Check(timed_mutex_setup.WriteUInt64(0x1510, 0) == HleContextStatus::kOk,
+        "pthread timed condition mutex setup failed");
+  HleCallContext timed_mutex_lock(memory);
+  Check(timed_mutex_lock.SetRegister(HleRegister::kRdi, 0x1510) &&
+            Dispatch(timed_registry,
+                     kajps5::hle::kPosixPthreadMutexLockNid,
+                     timed_mutex_lock) == 0,
+        "pthread timed condition mutex lock failed");
+  HleCallContext deadline_setup(memory);
+  Check(deadline_setup.WriteUInt64(0x1520, 100) == HleContextStatus::kOk &&
+            deadline_setup.WriteUInt64(0x1528, 5'000) ==
+                HleContextStatus::kOk,
+        "pthread absolute deadline setup failed");
+  HleCallContext absolute_timed_wait(memory);
+  Check(absolute_timed_wait.SetRegister(HleRegister::kRdi, 0x1500) &&
+            absolute_timed_wait.SetRegister(HleRegister::kRsi, 0x1510) &&
+            absolute_timed_wait.SetRegister(HleRegister::kRdx, 0x1520) &&
+            Dispatch(timed_registry,
+                     kajps5::hle::kPosixPthreadCondTimedwaitNid,
+                     absolute_timed_wait) == 16,
+        "pthread absolute condition wait did not block");
+  Check(!timed_runtime.scheduler().SelectNext(),
+        "pthread absolute condition wait woke before its deadline");
+  timed_source_view->monotonic_nanoseconds = 1'005'000;
+  Check(timed_runtime.scheduler().SelectNext() == timed_waiter.handle &&
+            Dispatch(timed_registry,
+                     kajps5::hle::kPosixPthreadCondTimedwaitNid,
+                     absolute_timed_wait) == 60,
+        "pthread absolute condition wait returned the wrong timeout");
+
+  HleCallContext timed_mutex_unlock(memory);
+  Check(timed_mutex_unlock.SetRegister(HleRegister::kRdi, 0x1510) &&
+            Dispatch(timed_registry,
+                     kajps5::hle::kPosixPthreadMutexUnlockNid,
+                     timed_mutex_unlock) == 0 &&
+            Dispatch(timed_registry,
+                     kajps5::hle::kPosixPthreadMutexLockNid,
+                     timed_mutex_lock) == 0,
+        "pthread timed condition mutex could not be relocked");
+  Check(deadline_setup.WriteUInt64(0x1528, 1'000'000'000) ==
+            HleContextStatus::kOk,
+        "invalid pthread deadline setup failed");
+  HleCallContext invalid_timed_wait(memory);
+  Check(invalid_timed_wait.SetRegister(HleRegister::kRdi, 0x1500) &&
+            invalid_timed_wait.SetRegister(HleRegister::kRsi, 0x1510) &&
+            invalid_timed_wait.SetRegister(HleRegister::kRdx, 0x1520) &&
+            Dispatch(timed_registry,
+                     kajps5::hle::kPosixPthreadCondTimedwaitNid,
+                     invalid_timed_wait) == 22,
+        "pthread accepted an invalid absolute condition deadline");
+  HleCallContext faulted_timed_wait(memory);
+  Check(faulted_timed_wait.SetRegister(HleRegister::kRdi, 0x1500) &&
+            faulted_timed_wait.SetRegister(HleRegister::kRsi, 0x1510) &&
+            faulted_timed_wait.SetRegister(HleRegister::kRdx, 0x800) &&
+            Dispatch(timed_registry,
+                     kajps5::hle::kPosixPthreadCondTimedwaitNid,
+                     faulted_timed_wait) == 14,
+        "pthread accepted an unreadable absolute condition deadline");
+
+  HleCallContext relative_timed_wait(memory);
+  Check(relative_timed_wait.SetRegister(HleRegister::kRdi, 0x1500) &&
+            relative_timed_wait.SetRegister(HleRegister::kRsi, 0x1510) &&
+            relative_timed_wait.SetRegister(HleRegister::kRdx, 10) &&
+            Dispatch(timed_registry,
+                     kajps5::hle::kKernelPthreadCondTimedwaitNid,
+                     relative_timed_wait) ==
+                KernelResult(kajps5::hle::kKernelHleErrorBusy),
+        "scePthread relative condition wait did not block");
+  timed_source_view->monotonic_nanoseconds += 10'000;
+  Check(timed_runtime.scheduler().SelectNext() == timed_waiter.handle &&
+            Dispatch(timed_registry,
+                     kajps5::hle::kKernelPthreadCondTimedwaitNid,
+                     relative_timed_wait) ==
+                KernelResult(kajps5::hle::kKernelHleErrorTimedOut),
+        "scePthread relative condition wait returned the wrong timeout");
+  Check(Dispatch(timed_registry,
+                 kajps5::hle::kPosixPthreadMutexUnlockNid,
+                 timed_mutex_unlock) == 0,
+        "pthread timed-out waiter did not own its mutex");
+  HleCallContext timed_condition_destroy(memory);
+  Check(timed_condition_destroy.SetRegister(HleRegister::kRdi, 0x1500) &&
+            Dispatch(timed_registry,
+                     kajps5::hle::kPosixPthreadCondDestroyNid,
+                     timed_condition_destroy) == 0,
+        "pthread timed condition destruction failed");
+  HleCallContext timed_mutex_destroy(memory);
+  Check(timed_mutex_destroy.SetRegister(HleRegister::kRdi, 0x1510) &&
+            Dispatch(timed_registry,
+                     kajps5::hle::kPosixPthreadMutexDestroyNid,
+                     timed_mutex_destroy) == 0,
+        "pthread timed condition mutex destruction failed");
 
   return failures == 0 ? 0 : 1;
 }

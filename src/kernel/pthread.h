@@ -123,7 +123,7 @@ struct PthreadConditionSnapshot {
 
 class PthreadService final {
  public:
-  explicit PthreadService(GuestScheduler& scheduler) noexcept;
+  PthreadService(GuestScheduler& scheduler, KernelClockService& clock) noexcept;
 
   PthreadService(const PthreadService&) = delete;
   PthreadService& operator=(const PthreadService&) = delete;
@@ -165,6 +165,12 @@ class PthreadService final {
   [[nodiscard]] KernelStatus DestroyCondition(std::uint64_t handle);
   [[nodiscard]] KernelStatus WaitCondition(std::uint64_t condition_handle,
                                            std::uint64_t mutex_handle);
+  [[nodiscard]] KernelStatus WaitConditionFor(
+      std::uint64_t condition_handle, std::uint64_t mutex_handle,
+      std::uint64_t timeout_microseconds);
+  [[nodiscard]] KernelStatus WaitConditionUntilRealtime(
+      std::uint64_t condition_handle, std::uint64_t mutex_handle,
+      const KernelTimespec& deadline);
   [[nodiscard]] KernelStatus SignalCondition(std::uint64_t handle,
                                              bool broadcast);
   [[nodiscard]] std::optional<PthreadConditionSnapshot> GetCondition(
@@ -199,6 +205,8 @@ class PthreadService final {
     KernelHandle thread = kInvalidKernelHandle;
     std::uint64_t condition_handle = 0;
     std::uint64_t mutex_handle = 0;
+    std::optional<std::uint64_t> deadline_nanoseconds;
+    bool timed_out = false;
   };
 
   struct ConditionState {
@@ -224,8 +232,14 @@ class PthreadService final {
   void GrantNextMutexWaiterLocked(std::uint64_t mutex_handle,
                                   MutexState& mutex,
                                   std::string& wake_key);
+  [[nodiscard]] KernelStatus WaitConditionInternal(
+      std::uint64_t condition_handle, std::uint64_t mutex_handle,
+      std::optional<std::uint64_t> deadline_nanoseconds);
+  [[nodiscard]] std::optional<std::uint64_t> RealtimeDeadlineToMonotonic(
+      const KernelTimespec& deadline) const;
 
   GuestScheduler& scheduler_;
+  KernelClockService& clock_;
   mutable std::mutex mutex_;
   std::map<std::uint64_t, PthreadAttribute> attributes_;
   std::map<KernelHandle, PthreadThreadSnapshot> threads_;

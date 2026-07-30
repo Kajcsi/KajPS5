@@ -10,8 +10,9 @@
 
 namespace kajps5::kernel {
 
-PthreadService::PthreadService(GuestScheduler& scheduler) noexcept
-    : scheduler_(scheduler) {}
+PthreadService::PthreadService(GuestScheduler& scheduler,
+                               KernelClockService& clock) noexcept
+    : scheduler_(scheduler), clock_(clock) {}
 
 PthreadAttributeCreateResult PthreadService::CreateAttribute() {
   std::lock_guard lock(mutex_);
@@ -419,20 +420,76 @@ KernelStatus PthreadService::DestroyCondition(std::uint64_t handle) {
 
 KernelStatus PthreadService::WaitCondition(std::uint64_t condition_handle,
                                            std::uint64_t mutex_handle) {
+  return WaitConditionInternal(condition_handle, mutex_handle, std::nullopt);
+}
+
+KernelStatus PthreadService::WaitConditionFor(
+    std::uint64_t condition_handle, std::uint64_t mutex_handle,
+    std::uint64_t timeout_microseconds) {
+  constexpr auto kNanosecondsPerMicrosecond = std::uint64_t{1'000};
+  const auto now = clock_.MonotonicNanoseconds();
+  const auto maximum = std::numeric_limits<std::uint64_t>::max();
+  const auto remaining =
+      timeout_microseconds > maximum / kNanosecondsPerMicrosecond
+          ? maximum
+          : timeout_microseconds * kNanosecondsPerMicrosecond;
+  const auto deadline = remaining > maximum - now ? maximum : now + remaining;
+  return WaitConditionInternal(condition_handle, mutex_handle, deadline);
+}
+
+KernelStatus PthreadService::WaitConditionUntilRealtime(
+    std::uint64_t condition_handle, std::uint64_t mutex_handle,
+    const KernelTimespec& deadline) {
+  const auto monotonic_deadline = RealtimeDeadlineToMonotonic(deadline);
+  if (!monotonic_deadline) {
+    return KernelStatus::kInvalidArgument;
+  }
+  return WaitConditionInternal(condition_handle, mutex_handle,
+                               *monotonic_deadline);
+}
+
+KernelStatus PthreadService::WaitConditionInternal(
+    std::uint64_t condition_handle, std::uint64_t mutex_handle,
+    std::optional<std::uint64_t> deadline_nanoseconds) {
   const auto current_thread = scheduler_.current_thread();
   if (!current_thread) {
     return KernelStatus::kBusy;
   }
 
+  const auto wait_key = ConditionWaitKey(condition_handle, *current_thread);
+  const auto timeout_wakeup =
+      scheduler_.ConsumeCurrentThreadTimeout(wait_key);
   bool completing = false;
   {
     std::lock_guard lock(mutex_);
-    const auto completed = completed_condition_waits_.find(*current_thread);
+    auto completed = completed_condition_waits_.find(*current_thread);
     if (completed != completed_condition_waits_.end()) {
       if (completed->second.condition_handle != condition_handle ||
           completed->second.mutex_handle != mutex_handle) {
         return KernelStatus::kInvalidArgument;
       }
+      completing = true;
+    } else if (timeout_wakeup) {
+      const auto condition = conditions_.find(condition_handle);
+      if (condition == conditions_.end()) {
+        return KernelStatus::kNotFound;
+      }
+      auto& waiters = condition->second.waiters;
+      const auto waiter = std::find_if(
+          waiters.begin(), waiters.end(),
+          [current_thread, mutex_handle](const ConditionWaiter& candidate) {
+            return candidate.thread == *current_thread &&
+                   candidate.mutex_handle == mutex_handle;
+          });
+      if (waiter == waiters.end() || !waiter->deadline_nanoseconds ||
+          *waiter->deadline_nanoseconds > clock_.MonotonicNanoseconds()) {
+        return KernelStatus::kInvalidArgument;
+      }
+      auto timed_out_waiter = *waiter;
+      timed_out_waiter.timed_out = true;
+      completed_condition_waits_.insert_or_assign(*current_thread,
+                                                   timed_out_waiter);
+      waiters.erase(waiter);
       completing = true;
     }
   }
@@ -455,8 +512,9 @@ KernelStatus PthreadService::WaitCondition(std::uint64_t condition_handle,
     }
     --condition->second.active_waiter_count;
     --waiting_mutex->second.condition_waiter_count;
+    const auto timed_out = completed->second.timed_out;
     completed_condition_waits_.erase(completed);
-    return KernelStatus::kOk;
+    return timed_out ? KernelStatus::kTimedOut : KernelStatus::kOk;
   }
 
   {
@@ -476,7 +534,8 @@ KernelStatus PthreadService::WaitCondition(std::uint64_t condition_handle,
       return KernelStatus::kInvalidArgument;
     }
     condition->second.waiters.push_back(
-        {*current_thread, condition_handle, mutex_handle});
+        {*current_thread, condition_handle, mutex_handle,
+         deadline_nanoseconds, false});
     ++condition->second.active_waiter_count;
     ++waiting_mutex->second.condition_waiter_count;
   }
@@ -502,8 +561,11 @@ KernelStatus PthreadService::WaitCondition(std::uint64_t condition_handle,
     return unlock_status;
   }
 
-  if (scheduler_.BlockCurrent(
-          ConditionWaitKey(condition_handle, *current_thread))) {
+  const auto blocked = deadline_nanoseconds
+                           ? scheduler_.BlockCurrentUntil(wait_key,
+                                                          *deadline_nanoseconds)
+                           : scheduler_.BlockCurrent(wait_key);
+  if (blocked) {
     return KernelStatus::kWouldBlock;
   }
   {
@@ -539,9 +601,17 @@ KernelStatus PthreadService::SignalCondition(std::uint64_t handle,
       return KernelStatus::kNotFound;
     }
     auto& waiters = found->second.waiters;
+    const auto now = clock_.MonotonicNanoseconds();
     while (!waiters.empty()) {
-      const auto waiter = waiters.front();
+      auto waiter = waiters.front();
       waiters.pop_front();
+      if (waiter.deadline_nanoseconds &&
+          *waiter.deadline_nanoseconds <= now) {
+        waiter.timed_out = true;
+        completed_condition_waits_.insert_or_assign(waiter.thread, waiter);
+        wake_keys.push_back(ConditionWaitKey(handle, waiter.thread));
+        continue;
+      }
       completed_condition_waits_[waiter.thread] = waiter;
       wake_keys.push_back(ConditionWaitKey(handle, waiter.thread));
       if (!broadcast) {
@@ -553,6 +623,63 @@ KernelStatus PthreadService::SignalCondition(std::uint64_t handle,
     (void)scheduler_.WakeBlockedThreads(wake_key, 1);
   }
   return KernelStatus::kOk;
+}
+
+std::optional<std::uint64_t> PthreadService::RealtimeDeadlineToMonotonic(
+    const KernelTimespec& deadline) const {
+  constexpr auto kNanosecondsPerSecond = std::uint64_t{1'000'000'000};
+  if (deadline.seconds < 0 || deadline.nanoseconds < 0 ||
+      deadline.nanoseconds >=
+          static_cast<std::int64_t>(kNanosecondsPerSecond)) {
+    return std::nullopt;
+  }
+
+  const auto now_result = clock_.ClockGettime(kClockRealtime);
+  if (!now_result) {
+    return std::nullopt;
+  }
+  const auto& now = now_result.value;
+  if (deadline.seconds < now.seconds ||
+      (deadline.seconds == now.seconds &&
+       deadline.nanoseconds <= now.nanoseconds)) {
+    return clock_.MonotonicNanoseconds();
+  }
+
+  const auto maximum = std::numeric_limits<std::uint64_t>::max();
+  std::uint64_t seconds_delta = 0;
+  if (now.seconds >= 0) {
+    seconds_delta = static_cast<std::uint64_t>(deadline.seconds - now.seconds);
+  } else {
+    const auto negative_now =
+        static_cast<std::uint64_t>(-(now.seconds + 1)) + 1;
+    const auto target_seconds =
+        static_cast<std::uint64_t>(deadline.seconds);
+    seconds_delta = target_seconds > maximum - negative_now
+                        ? maximum
+                        : target_seconds + negative_now;
+  }
+
+  std::uint64_t nanoseconds_delta = 0;
+  if (deadline.nanoseconds < now.nanoseconds) {
+    --seconds_delta;
+    nanoseconds_delta =
+        kNanosecondsPerSecond -
+        static_cast<std::uint64_t>(now.nanoseconds - deadline.nanoseconds);
+  } else {
+    nanoseconds_delta =
+        static_cast<std::uint64_t>(deadline.nanoseconds - now.nanoseconds);
+  }
+
+  std::uint64_t remaining = maximum;
+  if (seconds_delta <= maximum / kNanosecondsPerSecond) {
+    remaining = seconds_delta * kNanosecondsPerSecond;
+    remaining = nanoseconds_delta > maximum - remaining
+                    ? maximum
+                    : remaining + nanoseconds_delta;
+  }
+  const auto monotonic_now = clock_.MonotonicNanoseconds();
+  return remaining > maximum - monotonic_now ? maximum
+                                              : monotonic_now + remaining;
 }
 
 std::optional<PthreadConditionSnapshot> PthreadService::GetCondition(

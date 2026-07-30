@@ -186,11 +186,13 @@ int main() {
             timeout_scheduler.CurrentThreadTimedOut("timer") &&
             !timeout_scheduler.CurrentThreadTimedOut("other"),
         "timed wait did not wake at its deadline");
-  Check(timeout_scheduler.YieldCurrent() &&
+  Check(timeout_scheduler.ConsumeCurrentThreadTimeout("timer") &&
+            !timeout_scheduler.CurrentThreadTimedOut("timer") &&
+            timeout_scheduler.YieldCurrent() &&
             timeout_scheduler.SelectNext() == timed_thread.handle &&
-            timeout_scheduler.CurrentThreadTimedOut("timer") &&
+            !timeout_scheduler.CurrentThreadTimedOut("timer") &&
             timeout_scheduler.BlockCurrentUntil("signal-before-timeout", 300),
-        "timed-out state was not stable until the next wait");
+        "timed-out state was not consumed exactly once");
   Check(timeout_scheduler.WakeBlockedThreads("signal-before-timeout", 1) == 1 &&
             timeout_scheduler.SelectNext() == timed_thread.handle &&
             !timeout_scheduler.CurrentThreadTimedOut("signal-before-timeout"),

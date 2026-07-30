@@ -26,6 +26,7 @@ inline constexpr std::int32_t kKernelHleErrorBusy = -2147352560;
 inline constexpr std::int32_t kKernelHleErrorInvalidArgument = -2147352554;
 inline constexpr std::int32_t kKernelHleErrorTooManyOpenFiles = -2147352552;
 inline constexpr std::int32_t kKernelHleErrorTryAgain = -2147352541;
+inline constexpr std::int32_t kKernelHleErrorTimedOut = -2147352516;
 inline constexpr std::int32_t kKernelHleErrorNameTooLong = -2147352513;
 
 // The kernel runtime must outlive all dispatches through the registry.

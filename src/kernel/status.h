@@ -14,6 +14,7 @@ enum class KernelStatus {
   kWouldBlock,
   kPermissionDenied,
   kNoResources,
+  kTimedOut,
 };
 
 } // namespace kajps5::kernel

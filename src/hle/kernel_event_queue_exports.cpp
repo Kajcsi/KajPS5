@@ -34,6 +34,8 @@ std::int32_t EventQueueStatusResult(kernel::KernelStatus status) noexcept {
     return kKernelHleErrorPermissionDenied;
   case kernel::KernelStatus::kNoResources:
     return kKernelHleErrorNoMemory;
+  case kernel::KernelStatus::kTimedOut:
+    return kKernelHleErrorTimedOut;
   }
   return kKernelHleErrorInvalidArgument;
 }
