@@ -66,6 +66,7 @@
 - [x] Add deterministic library-scoped HLE handler dispatch.
 - [x] Relocate known runtime data imports to checked guest memory.
 - [x] Add bounded JSON value construction and destruction shadows.
+- [x] Add checked libc startup, exit callback, and termination state.
 - [x] Add scheduler-aware C++ static initialization guards.
 - [x] Register consistent libkernel process-time handlers.
 - [x] Add a transactional libkernel clock-gettime handler.

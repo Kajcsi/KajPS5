@@ -173,7 +173,8 @@ int TraceExecutableFile(const char* path) {
       return 7;
     }
     const auto libc_export_status = kajps5::hle::RegisterLibcExports(
-        hle_exports, kernel_runtime.cxa_guards());
+        hle_exports, kernel_runtime.cxa_guards(),
+        kernel_runtime.process_lifecycle());
     if (libc_export_status != kajps5::hle::ExportRegistryStatus::kOk) {
       std::cerr << "HLE coverage check failed: libc export registration "
                    "returned "

@@ -47,6 +47,8 @@ The current core includes:
   `libkernel` handlers share the same services.
 - Checked JSON value construction and destruction through a bounded shadow
   store, without writing an assumed guest object layout.
+- Checked process arguments, bounded exit callbacks, and explicit guest exit
+  requests for the first libc lifecycle imports.
 - Small public and generated test fixtures, including an ELF that loads
   without running guest code and controlled x86-64 leaf programs used only by
   tests.

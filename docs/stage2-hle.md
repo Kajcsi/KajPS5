@@ -62,6 +62,13 @@ The libc registry also recognizes `__cxa_pure_virtual`. Calling it returns a
 fatal guest status and never reports success or a return value. A later guest
 executor can use that status to end the process cleanly.
 
+The libc lifecycle bridge checks `_init_env`, keeps bounded `atexit` and
+`__cxa_atexit` registrations in the single runtime, and preserves their
+last-in, first-out order. `exit` and `catchReturnFromMain` record the first
+guest exit status and return an explicit guest-exit result to the future
+executor. `abort` returns a fatal guest result. Exit callbacks are not called
+until the executor has a safe guest callback path.
+
 The first JSON bridge handles complete and base `Value` construction and
 destruction for `libSceJson2` and `libSceJson`. The single runtime owns a
 bounded map keyed by checked guest object addresses. Constructors create a

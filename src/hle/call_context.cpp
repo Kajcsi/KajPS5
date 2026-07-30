@@ -268,6 +268,7 @@ std::string_view HleContextStatusName(HleContextStatus status) noexcept {
     case HleContextStatus::kBlocked: return "blocked";
     case HleContextStatus::kFatalGuestError: return "fatal-guest-error";
     case HleContextStatus::kResourceLimit: return "resource-limit";
+    case HleContextStatus::kGuestExit: return "guest-exit";
   }
   return "unknown";
 }

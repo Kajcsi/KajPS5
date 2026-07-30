@@ -15,6 +15,7 @@
 #include "kernel/guest_scheduler.h"
 #include "kernel/handle_table.h"
 #include "kernel/json_value.h"
+#include "kernel/process_lifecycle.h"
 #include "kernel/pthread.h"
 #include "kernel/semaphore.h"
 
@@ -59,6 +60,9 @@ public:
   [[nodiscard]] JsonValueService& json_values() noexcept {
     return json_values_;
   }
+  [[nodiscard]] ProcessLifecycleService& process_lifecycle() noexcept {
+    return process_lifecycle_;
+  }
 
 private:
   HandleTable handles_;
@@ -72,6 +76,7 @@ private:
   FileService files_;
   DirectMemoryService direct_memory_;
   JsonValueService json_values_;
+  ProcessLifecycleService process_lifecycle_;
 };
 
 } // namespace kajps5::kernel

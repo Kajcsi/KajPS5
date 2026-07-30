@@ -168,5 +168,8 @@ int main() {
   Check(kajps5::hle::HleContextStatusName(HleContextStatus::kResourceLimit) ==
             "resource-limit",
         "resource limit status name is unstable");
+  Check(kajps5::hle::HleContextStatusName(HleContextStatus::kGuestExit) ==
+            "guest-exit",
+        "guest exit status name is unstable");
   return failures == 0 ? 0 : 1;
 }

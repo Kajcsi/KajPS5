@@ -175,6 +175,14 @@ constructor, destructor, and NIDs confirmed by pinned KytyPS5
 `JsonExports.cs`. KajPS5 also registers the observed `libSceJson2` scope. No
 upstream JSON source or object layout was copied.
 
+The process lifecycle service in `src/kernel/process_lifecycle.cpp` and its
+libc bridge in `src/hle/libc_exports.cpp` use the argument, callback, and exit
+behavior confirmed by pinned KytyPS5 `src/libs/libC.cpp`. The bounded,
+thread-safe callback records and explicit exit request adapt pinned SharpEmu
+`src/SharpEmu.Libs/Kernel/KernelExports.cs`. KajPS5 does not call a guest
+callback until an executor can resume it safely. No upstream handler source
+was copied.
+
 The process-time handlers in `src/hle/kernel_clock_exports.cpp` and
 `tests/hle_kernel_clock_exports_test.cpp` adapt the matching process-time,
 counter, and frequency behavior from the pinned KytyPS5

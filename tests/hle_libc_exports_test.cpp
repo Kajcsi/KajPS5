@@ -48,9 +48,10 @@ int main() {
 
   KernelRuntime runtime;
   ExportRegistry registry;
-  Check(kajps5::hle::RegisterLibcExports(registry, runtime.cxa_guards()) ==
+  Check(kajps5::hle::RegisterLibcExports(
+            registry, runtime.cxa_guards(), runtime.process_lifecycle()) ==
             ExportRegistryStatus::kOk &&
-            registry.size() == 8,
+            registry.size() == 20,
         "libc exports did not register atomically");
 
   GuestMemory memory(0x1000, 0x100);
