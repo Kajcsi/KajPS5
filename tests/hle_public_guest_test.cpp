@@ -31,9 +31,12 @@ constexpr std::size_t kDynamicEntryCount = 10;
 constexpr std::size_t kStringSize = 32;
 constexpr std::size_t kSymbolEntrySize = 24;
 constexpr std::size_t kRelaEntrySize = 24;
-constexpr std::size_t kProgramSize = 64;
+constexpr std::size_t kProgramSize = 128;
 constexpr std::uint64_t kProgramAddress = 0x1000;
-constexpr std::uint64_t kGotAddress = kProgramAddress + 56;
+constexpr std::uint64_t kGotAddress = kProgramAddress + 120;
+constexpr std::uint64_t kFirstVectorBits = 0x0102030405060708;
+constexpr std::uint64_t kSecondVectorBits = 0x1112131415161718;
+constexpr std::uint64_t kVectorReturnBits = 0x2122232425262728;
 constexpr std::uint64_t kMetadataAddress = 0x2000;
 constexpr std::uint64_t kStringAddress =
     kMetadataAddress + kStringOffset - kDynamicOffset;
@@ -92,6 +95,26 @@ void WriteString(std::vector<std::byte>& image, std::size_t offset,
     image[offset + index] = static_cast<std::byte>(value[index]);
   }
   image[offset + value.size()] = std::byte{0};
+}
+
+kajps5::hle::HleVectorValue MakeVectorValue(std::uint64_t low_bits) {
+  kajps5::hle::HleVectorValue value{};
+  for (std::size_t index = 0; index < sizeof(low_bits); ++index) {
+    value[index] =
+        static_cast<std::byte>((low_bits >> (index * 8U)) & 0xffU);
+  }
+  return value;
+}
+
+std::uint64_t ReadVectorLowBits(
+    const kajps5::hle::HleVectorValue& value) {
+  std::uint64_t result = 0;
+  for (std::size_t index = 0; index < sizeof(result); ++index) {
+    result |= static_cast<std::uint64_t>(
+                  std::to_integer<unsigned char>(value[index]))
+              << (index * 8U);
+  }
+  return result;
 }
 
 std::vector<std::byte> MakePublicHleElf() {
@@ -177,11 +200,22 @@ std::vector<std::byte> MakePublicHleElf() {
       std::byte{0x41}, std::byte{0xb8}, std::byte{50},   std::byte{0},
       std::byte{0},    std::byte{0},    std::byte{0x41}, std::byte{0xb9},
       std::byte{60},   std::byte{0},    std::byte{0},    std::byte{0},
+      std::byte{0x48}, std::byte{0xb8}, std::byte{0x08}, std::byte{0x07},
+      std::byte{0x06}, std::byte{0x05}, std::byte{0x04}, std::byte{0x03},
+      std::byte{0x02}, std::byte{0x01}, std::byte{0x66}, std::byte{0x48},
+      std::byte{0x0f}, std::byte{0x6e}, std::byte{0xc0}, std::byte{0x48},
+      std::byte{0xb8}, std::byte{0x18}, std::byte{0x17}, std::byte{0x16},
+      std::byte{0x15}, std::byte{0x14}, std::byte{0x13}, std::byte{0x12},
+      std::byte{0x11}, std::byte{0x66}, std::byte{0x48}, std::byte{0x0f},
+      std::byte{0x6e}, std::byte{0xc8},
       std::byte{0x48}, std::byte{0x83}, std::byte{0xec}, stack_adjustment,
       std::byte{0x6a}, std::byte{80},   std::byte{0x6a}, std::byte{70},
-      std::byte{0xff}, std::byte{0x15}, std::byte{0x0a}, std::byte{0x00},
+      std::byte{0xff}, std::byte{0x15}, std::byte{0x2c}, std::byte{0x00},
       std::byte{0x00}, std::byte{0x00}, std::byte{0x48}, std::byte{0x83},
-      std::byte{0xc4}, std::byte{0x18}, std::byte{0xc3}};
+      std::byte{0xc4}, std::byte{0x18}, std::byte{0x48}, std::byte{0x89},
+      std::byte{0xc1}, std::byte{0x66}, std::byte{0x48}, std::byte{0x0f},
+      std::byte{0x7e}, std::byte{0xc0}, std::byte{0x48}, std::byte{0x31},
+      std::byte{0xc8}, std::byte{0xc3}};
   for (std::size_t index = 0; index < code.size(); ++index) {
     image[kProgramOffset + index] = code[index];
   }
@@ -229,7 +263,18 @@ int main() {
                       "native trampoline changed a guest argument");
                 sum += argument;
               }
+              const auto first_vector = context.VectorArgument(0);
+              const auto second_vector = context.VectorArgument(1);
+              Check(first_vector && second_vector &&
+                        ReadVectorLowBits(*first_vector) ==
+                            kFirstVectorBits &&
+                        ReadVectorLowBits(*second_vector) ==
+                            kSecondVectorBits,
+                    "native trampoline changed a vector argument");
               context.SetReturn(sum);
+              Check(context.SetVectorReturn(
+                        0, MakeVectorValue(kVectorReturnBits)),
+                    "native vector return setup failed");
               return HleContextStatus::kOk;
             }) == ExportRegistryStatus::kOk,
         "checked HLE handler registration failed");
@@ -275,11 +320,13 @@ int main() {
     return failures == 0 ? 0 : 1;
   }
   const auto dispatch = trampoline.last_dispatch();
-  Check(executed && executed.return_value == 360,
+  Check(executed &&
+            executed.return_value == (360ULL ^ kVectorReturnBits),
         "public guest did not return the checked HLE result");
   Check(dispatch.lookup_status == ExportRegistryStatus::kOk &&
             dispatch.handler_status == HleContextStatus::kOk &&
-            dispatch.return_written && !dispatch.host_exception &&
+            dispatch.return_written && dispatch.vector_return_written[0] &&
+            !dispatch.vector_return_written[1] && !dispatch.host_exception &&
             dispatch.library == "libkajps5_test",
         "native trampoline did not preserve the HLE dispatch result");
   Check(kajps5::cpu::NativeHleTrampolineStatusName(

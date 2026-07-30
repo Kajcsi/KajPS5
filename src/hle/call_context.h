@@ -19,6 +19,11 @@ namespace kajps5::hle {
 
 inline constexpr std::size_t kMaximumHleStringBytes = 4096;
 inline constexpr std::size_t kMaximumCapturedHleStackArguments = 16;
+inline constexpr std::size_t kHleVectorArgumentRegisterCount = 8;
+inline constexpr std::size_t kHleVectorReturnRegisterCount = 2;
+inline constexpr std::size_t kHleVectorRegisterBytes = 16;
+
+using HleVectorValue = std::array<std::byte, kHleVectorRegisterBytes>;
 
 enum class HleRegister : std::uint8_t {
   kRax,
@@ -72,6 +77,16 @@ class HleCallContext final {
       std::size_t index) const noexcept;
   [[nodiscard]] bool SetCapturedStackArguments(
       std::span<const std::uint64_t> arguments) noexcept;
+  [[nodiscard]] bool SetCapturedVectorArguments(
+      std::span<const HleVectorValue> arguments) noexcept;
+  [[nodiscard]] std::optional<HleVectorValue> VectorArgument(
+      std::size_t index) const noexcept;
+  [[nodiscard]] bool SetVectorReturn(
+      std::size_t index, const HleVectorValue& value) noexcept;
+  [[nodiscard]] std::optional<HleVectorValue> VectorReturn(
+      std::size_t index) const noexcept;
+  [[nodiscard]] bool vector_return_written(
+      std::size_t index) const noexcept;
 
   void SetReturn(std::uint64_t value) noexcept;
   [[nodiscard]] bool return_written() const noexcept;
@@ -120,6 +135,11 @@ class HleCallContext final {
   std::array<std::uint64_t, kMaximumCapturedHleStackArguments>
       captured_stack_arguments_{};
   std::size_t captured_stack_argument_count_ = 0;
+  std::array<HleVectorValue, kHleVectorArgumentRegisterCount>
+      captured_vector_arguments_{};
+  std::size_t captured_vector_argument_count_ = 0;
+  std::array<HleVectorValue, kHleVectorReturnRegisterCount> vector_returns_{};
+  std::array<bool, kHleVectorReturnRegisterCount> vector_return_written_{};
   bool return_written_ = false;
 };
 

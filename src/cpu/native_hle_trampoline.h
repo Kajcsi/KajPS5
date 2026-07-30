@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -31,6 +32,8 @@ struct NativeHleDispatchSnapshot {
   hle::ExportRegistryStatus lookup_status = hle::ExportRegistryStatus::kOk;
   hle::HleContextStatus handler_status = hle::HleContextStatus::kOk;
   bool return_written = false;
+  std::array<bool, hle::kHleVectorReturnRegisterCount>
+      vector_return_written{};
   bool host_exception = false;
   std::string library;
 };
@@ -57,7 +60,8 @@ class NativeHleTrampoline final {
   struct State;
 
   [[nodiscard]] static std::uint64_t Dispatch(
-      void* opaque_state, const std::uint64_t* arguments) noexcept;
+      void* opaque_state, const std::uint64_t* arguments,
+      std::byte* floating_state) noexcept;
   void Build();
 
   std::unique_ptr<State> state_;

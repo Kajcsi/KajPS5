@@ -31,7 +31,7 @@ code. This keeps optimized host callers intact even when guest code uses
 registers that are volatile on PS5.
 
 The executor is available only to tests. The first ABI bridge captures the six
-System V integer registers plus a declared, bounded number of stack arguments,
-and returns the checked handler's `RAX` value. It does not capture vector
-registers, a full CPU context, faults, or timeouts. Until those pieces exist,
-it must run only controlled leaf fixtures.
+System V integer registers, XMM0-XMM7, and a declared, bounded number of stack
+arguments. It returns `RAX` and optional XMM0-XMM1 values from the checked
+handler. It does not capture a full CPU context, faults, or timeouts. Until
+those pieces exist, it must run only controlled leaf fixtures.

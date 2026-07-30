@@ -50,7 +50,8 @@ The current core includes:
 - Checked process arguments, bounded exit callbacks, and explicit guest exit
   requests for the first libc lifecycle imports.
 - A small native HLE trampoline that carries register and bounded stack
-  arguments from public guest code into the checked C++ call context.
+  arguments, including XMM values, from public guest code into the checked C++
+  call context.
 - Small public and generated test fixtures, including an ELF that loads
   without running guest code and controlled x86-64 leaf programs used only by
   tests.

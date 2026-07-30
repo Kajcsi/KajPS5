@@ -189,9 +189,10 @@ register-pack and host-call boundary from pinned SharpEmu
 write-then-execute buffer follows the virtual-memory boundary in pinned
 KytyPS5 `src/common/virtualMemory.cpp` and the matching platform files. KajPS5
 currently captures the six System V integer registers and a declared, bounded
-number of stack arguments. The Windows entry bridge also preserves host-only
-nonvolatile state around the System V call. No upstream trampoline bytes or
-handler source were copied.
+number of stack arguments. It also transfers XMM0-XMM7 and optional XMM0-XMM1
+returns through an FXSAVE64 image. The Windows entry bridge preserves
+host-only nonvolatile state around the System V call. No upstream trampoline
+bytes or handler source were copied.
 
 The process-time handlers in `src/hle/kernel_clock_exports.cpp` and
 `tests/hle_kernel_clock_exports_test.cpp` adapt the matching process-time,

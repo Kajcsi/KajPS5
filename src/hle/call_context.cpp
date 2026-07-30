@@ -105,6 +105,46 @@ bool HleCallContext::SetCapturedStackArguments(
   return true;
 }
 
+bool HleCallContext::SetCapturedVectorArguments(
+    std::span<const HleVectorValue> arguments) noexcept {
+  if (arguments.size() > captured_vector_arguments_.size()) {
+    return false;
+  }
+  std::copy(arguments.begin(), arguments.end(),
+            captured_vector_arguments_.begin());
+  captured_vector_argument_count_ = arguments.size();
+  return true;
+}
+
+std::optional<HleVectorValue> HleCallContext::VectorArgument(
+    std::size_t index) const noexcept {
+  return index < captured_vector_argument_count_
+             ? std::optional<HleVectorValue>(captured_vector_arguments_[index])
+             : std::nullopt;
+}
+
+bool HleCallContext::SetVectorReturn(
+    std::size_t index, const HleVectorValue& value) noexcept {
+  if (index >= vector_returns_.size()) {
+    return false;
+  }
+  vector_returns_[index] = value;
+  vector_return_written_[index] = true;
+  return true;
+}
+
+std::optional<HleVectorValue> HleCallContext::VectorReturn(
+    std::size_t index) const noexcept {
+  return index < vector_returns_.size() && vector_return_written_[index]
+             ? std::optional<HleVectorValue>(vector_returns_[index])
+             : std::nullopt;
+}
+
+bool HleCallContext::vector_return_written(std::size_t index) const noexcept {
+  return index < vector_return_written_.size() &&
+         vector_return_written_[index];
+}
+
 void HleCallContext::SetReturn(std::uint64_t value) noexcept {
   (void)SetRegister(HleRegister::kRax, value);
 }

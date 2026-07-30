@@ -51,7 +51,7 @@ int main() {
             context.Argument(6).value_or(0) == 7 &&
             context.Argument(7).value_or(0) == 8,
         "System V stack argument order is incorrect");
-  const std::array captured_stack = {17ULL, 18ULL};
+  const std::array<std::uint64_t, 2> captured_stack = {17, 18};
   Check(context.SetCapturedStackArguments(captured_stack) &&
             context.Argument(6).value_or(0) == 17 &&
             context.Argument(7).value_or(0) == 18 &&
@@ -62,6 +62,31 @@ int main() {
       too_many_stack_arguments{};
   Check(!context.SetCapturedStackArguments(too_many_stack_arguments),
         "oversized native stack snapshot was accepted");
+  kajps5::hle::HleVectorValue first_vector{};
+  kajps5::hle::HleVectorValue second_vector{};
+  first_vector[0] = std::byte{0x11};
+  second_vector[0] = std::byte{0x22};
+  const std::array vector_arguments = {first_vector, second_vector};
+  Check(context.SetCapturedVectorArguments(vector_arguments) &&
+            context.VectorArgument(0).value_or(
+                kajps5::hle::HleVectorValue{})[0] == std::byte{0x11} &&
+            context.VectorArgument(1).value_or(
+                kajps5::hle::HleVectorValue{})[0] == std::byte{0x22} &&
+            !context.VectorArgument(2).has_value(),
+        "captured vector arguments were not preserved");
+  const std::array<kajps5::hle::HleVectorValue,
+                   kajps5::hle::kHleVectorArgumentRegisterCount + 1>
+      too_many_vector_arguments{};
+  Check(!context.SetCapturedVectorArguments(too_many_vector_arguments),
+        "oversized vector snapshot was accepted");
+  Check(context.SetVectorReturn(0, second_vector) &&
+            context.vector_return_written(0) &&
+            !context.vector_return_written(1) &&
+            context.VectorReturn(0).value_or(
+                kajps5::hle::HleVectorValue{})[0] == std::byte{0x22} &&
+            !context.SetVectorReturn(
+                kajps5::hle::kHleVectorReturnRegisterCount, first_vector),
+        "vector return state is incorrect");
   Check(!context.Argument(std::numeric_limits<std::size_t>::max())
              .has_value(),
         "overflowing stack argument was accepted");

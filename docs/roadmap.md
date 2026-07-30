@@ -75,6 +75,7 @@
 - [x] Run a public guest program through checked HLE imports.
 - [x] Capture System V register and bounded stack arguments in a native HLE
       trampoline.
+- [x] Capture XMM arguments and return XMM0-XMM1 through native HLE.
 - Expand thread, event, file, and time coverage as their HLE bridges grow.
 - Compare small, repeatable traces with both upstream projects.
 
