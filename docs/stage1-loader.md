@@ -73,6 +73,13 @@ relocation layout when an optional SCE entry-size or PLT-format tag is absent.
 This matches SharpEmu's useful handling of dumped metadata while keeping
 KytyPS5's native linker layout.
 
+Some PS5 executables keep SCE size tags but use standard table locations, and
+some keep the tables in a load segment instead of `PT_SCE_DYNLIBDATA`. The
+loader resolves each table field independently. It first checks an absolute
+guest address and then a load-base-relative address. If an SCE symbol-table
+size is absent, relocation symbol indexes provide a checked minimum size. This
+adapts SharpEmu's useful mixed-tag and size fallback behavior.
+
 Packed KytyPS5 module and library records become typed metadata. Each record
 keeps its numeric ID, version, and checked name from the SCE string table. Both
 known tag generations are accepted. The stable trace reports the string-table
@@ -84,13 +91,23 @@ metadata, extracts the NID as SharpEmu does, and limits lookup to the selected
 library. A malformed or unknown scope remains unresolved and cannot fall back
 to an unrelated HLE library.
 
-Synthetic tests cover SCE precedence, size-based symbols, relocations,
-module and library identities, missing and repeated dynlib-data segments,
-truncated ranges, and invalid table and name offsets. No fixture contains
-proprietary data. The valid fixture also runs through checked guest loading,
-scoped NID resolution, and transactional relocation writes.
+SELF/FSELF parsing follows KytyPS5's native header, segment table, and
+program-header containment model. SharpEmu's structural header checks,
+checked fallback offsets, and already-dumped encrypted or compressed payload
+handling add useful input coverage. Runtime decryption and decompression are
+not implemented. A payload marked as encrypted or compressed is accepted only
+when the required bytes are already present and in range.
 
-This milestone does not parse SELF containers. The separate controlled native
-tests are documented in `stage2-cpu.md` and `stage2-hle.md`.
+Synthetic tests cover SELF header variants, embedded ELF offsets, exact and
+containing segment mappings, dumped payload flags, unavailable encrypted or
+compressed payloads, SCE precedence, load-backed and mixed-tag symbols,
+size-based symbols, relocations, module and library identities, repeated
+dynlib-data segments, truncated ranges, and invalid table and name offsets.
+No fixture contains proprietary data. The valid fixtures also run through
+checked guest loading, scoped NID resolution, and transactional relocation
+writes.
+
+The separate controlled native tests are documented in `stage2-cpu.md` and
+`stage2-hle.md`.
 
 See `public-elf-validation.md` for the external PS5 homebrew ELF check.

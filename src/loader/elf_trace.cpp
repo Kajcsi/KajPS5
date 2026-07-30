@@ -38,6 +38,14 @@ std::string_view DynamicDataSourceName(ElfDynamicDataSource source) noexcept {
   return "unknown";
 }
 
+std::string_view ContainerName(ElfContainerKind container) noexcept {
+  switch (container) {
+    case ElfContainerKind::kElf: return "elf";
+    case ElfContainerKind::kSelf: return "self";
+  }
+  return "unknown";
+}
+
 void WriteHex64(std::ostringstream& trace, std::uint64_t value) {
   trace << "0x" << std::hex << std::setfill('0') << std::setw(16) << value
         << std::dec;
@@ -47,7 +55,12 @@ void WriteHex64(std::ostringstream& trace, std::uint64_t value) {
 
 std::string FormatElfTrace(const ElfMetadata& metadata) {
   std::ostringstream trace;
-  trace << "elf.class=ELF64\n"
+  trace << "elf.container=" << ContainerName(metadata.container) << '\n'
+        << "elf.container_offset=";
+  WriteHex64(trace, metadata.elf_file_offset);
+  trace << '\n'
+        << "elf.self_segments=" << metadata.self_segment_count << '\n'
+        << "elf.class=ELF64\n"
         << "elf.endian=little\n"
         << "elf.os_abi=" << AbiName(metadata.os_abi) << '\n'
         << "elf.abi_version=" << static_cast<unsigned>(metadata.abi_version)
@@ -106,6 +119,8 @@ std::string FormatElfTrace(const ElfMetadata& metadata) {
     trace << "elf.load[" << load_index++ << "].flags="
           << SegmentFlags(header.flags) << " offset=";
     WriteHex64(trace, header.offset);
+    trace << " file_offset=";
+    WriteHex64(trace, header.file_offset);
     trace << " virtual_address=";
     WriteHex64(trace, header.virtual_address);
     trace << " file_size=";

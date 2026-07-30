@@ -18,11 +18,11 @@
 
 namespace {
 
-constexpr std::uint64_t kMaximumElfFileSize = 512U * 1024U * 1024U;
+constexpr std::uint64_t kMaximumExecutableFileSize = 512U * 1024U * 1024U;
 constexpr std::uint64_t kMaximumTraceMemorySize = 512U * 1024U * 1024U;
 
-std::optional<std::vector<std::byte>> ReadElfFile(const char* path,
-                                                  std::string& error) {
+std::optional<std::vector<std::byte>> ReadExecutableFile(const char* path,
+                                                         std::string& error) {
   std::ifstream file(path, std::ios::binary | std::ios::ate);
   if (!file) {
     error = "cannot open input file";
@@ -34,7 +34,7 @@ std::optional<std::vector<std::byte>> ReadElfFile(const char* path,
     error = "cannot determine input size";
     return std::nullopt;
   }
-  if (static_cast<std::uint64_t>(end) > kMaximumElfFileSize) {
+  if (static_cast<std::uint64_t>(end) > kMaximumExecutableFileSize) {
     error = "input exceeds the 512 MiB inspection limit";
     return std::nullopt;
   }
@@ -50,17 +50,17 @@ std::optional<std::vector<std::byte>> ReadElfFile(const char* path,
   return image;
 }
 
-int TraceElfFile(const char* path) {
+int TraceExecutableFile(const char* path) {
   std::string file_error;
-  auto image = ReadElfFile(path, file_error);
+  auto image = ReadExecutableFile(path, file_error);
   if (!image) {
-    std::cerr << "ELF inspection failed: " << file_error << '\n';
+    std::cerr << "Executable inspection failed: " << file_error << '\n';
     return 2;
   }
 
-  const auto parsed = kajps5::loader::ParseElf64(*image);
+  const auto parsed = kajps5::loader::ParseExecutable64(*image);
   if (!parsed) {
-    std::cerr << "ELF inspection failed: "
+    std::cerr << "Executable inspection failed: "
               << kajps5::loader::ElfErrorName(parsed.error) << '\n';
     return 2;
   }
@@ -68,7 +68,7 @@ int TraceElfFile(const char* path) {
 
   const auto range = kajps5::loader::CalculateElfLoadRange(parsed.metadata);
   if (!range) {
-    std::cerr << "ELF load check failed: "
+    std::cerr << "Executable load check failed: "
               << kajps5::loader::ElfErrorName(range.error) << '\n';
     return 3;
   }
@@ -77,7 +77,7 @@ int TraceElfFile(const char* path) {
     return 0;
   }
   if (range.size > kMaximumTraceMemorySize) {
-    std::cerr << "ELF load check failed: guest range exceeds 512 MiB\n";
+    std::cerr << "Executable load check failed: guest range exceeds 512 MiB\n";
     return 3;
   }
 
@@ -85,9 +85,9 @@ int TraceElfFile(const char* path) {
     kajps5::memory::GuestMemory memory(
         range.base_address, static_cast<std::size_t>(range.size),
         kajps5::memory::GuestMemoryProtection::kNone);
-    const auto loaded = kajps5::loader::LoadElf64(*image, memory);
+    const auto loaded = kajps5::loader::LoadExecutable64(*image, memory);
     if (!loaded) {
-      std::cerr << "ELF load check failed: "
+      std::cerr << "Executable load check failed: "
                 << kajps5::loader::ElfErrorName(loaded.error) << '\n';
       return 3;
     }
@@ -100,7 +100,7 @@ int TraceElfFile(const char* path) {
               << "load.zero_filled_bytes=" << loaded.zero_filled_bytes
               << '\n';
   } catch (const std::exception& exception) {
-    std::cerr << "ELF load check failed: " << exception.what() << '\n';
+    std::cerr << "Executable load check failed: " << exception.what() << '\n';
     return 3;
   }
 
@@ -116,7 +116,7 @@ int main(int argc, char** argv) {
     return 0;
   }
   if (argc == 3 && std::string_view(argv[1]) == "--trace-elf") {
-    return TraceElfFile(argv[2]);
+    return TraceExecutableFile(argv[2]);
   }
 
   if (argc > 1) {

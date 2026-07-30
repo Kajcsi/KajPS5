@@ -109,6 +109,13 @@ int main() {
   const auto image = MakePublicTestElf();
   const auto parsed = ParseElf64(image);
   Check(static_cast<bool>(parsed), "valid public ELF fixture was rejected");
+  const auto executable_parsed =
+      kajps5::loader::ParseExecutable64(image);
+  Check(static_cast<bool>(executable_parsed) &&
+            executable_parsed.metadata.container ==
+                kajps5::loader::ElfContainerKind::kElf &&
+            executable_parsed.metadata.elf_file_offset == 0,
+        "executable parser changed bare ELF behavior");
   Check(parsed.metadata.os_abi == 9, "OS ABI metadata is incorrect");
   Check(parsed.metadata.abi_version == 2, "ABI version metadata is incorrect");
   Check(parsed.metadata.type == 0xfe10, "file type metadata is incorrect");
@@ -130,6 +137,9 @@ int main() {
         "load range segment count is incorrect");
 
   const std::string expected_trace =
+      "elf.container=elf\n"
+      "elf.container_offset=0x0000000000000000\n"
+      "elf.self_segments=0\n"
       "elf.class=ELF64\n"
       "elf.endian=little\n"
       "elf.os_abi=freebsd\n"
@@ -153,6 +163,7 @@ int main() {
       "elf.import_libraries=0\n"
       "elf.export_libraries=0\n"
       "elf.load[0].flags=r-x offset=0x0000000000000100 "
+      "file_offset=0x0000000000000100 "
       "virtual_address=0x0000000000001000 file_size=0x0000000000000004 "
       "memory_size=0x0000000000000008 alignment=0x0000000000000100\n";
   Check(kajps5::loader::FormatElfTrace(parsed.metadata) == expected_trace,

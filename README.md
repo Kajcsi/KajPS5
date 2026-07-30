@@ -1,8 +1,8 @@
 # KajPS5
 
 KajPS5 is an early PlayStation 5 emulator research project. It builds, runs a
-growing test suite, and can inspect public ELF files. It does not run
-PlayStation 5 games yet.
+growing test suite, and can inspect ELF64 and recognized SELF/FSELF files. It
+does not run PlayStation 5 games yet.
 
 The goal is to combine the strengths of KytyPS5 and SharpEmu where that makes
 sense. KytyPS5 is the main reference for the native C++ architecture and
@@ -21,9 +21,10 @@ The current core includes:
 - A guest address space with whole-range access checks and transactional map,
   protection, and unmap operations. Released bytes are cleared before the
   range can be reused.
-- An ELF64 loader that checks program headers, standard and PS5 dynamic-link
-  metadata, x86-64 `RELA` relocations, and symbols before it changes guest
-  memory. It preserves each `PT_LOAD` segment's read, write, and execute flags.
+- An executable loader that checks bare ELF64 and recognized SELF/FSELF
+  containers, program headers, standard and PS5 dynamic-link metadata, x86-64
+  `RELA` relocations, and symbols before it changes guest memory. It preserves
+  each `PT_LOAD` segment's read, write, and execute flags.
 - Library-scoped PS5 NID import linking and HLE dispatch, with bounded
   diagnostics for unresolved symbols and checked guest register and memory
   access.
@@ -55,14 +56,17 @@ On Windows, the executable is usually in `_Build/src/Release/kajps5.exe`.
 When MSVC AddressSanitizer is enabled, CMake copies its required runtime DLL
 beside each executable so CTest and direct launches use the same build tree.
 
-Inspect and load-check a public decrypted ELF without running guest code:
+Inspect and load-check a public decrypted ELF or FSELF without running guest
+code:
 
 ```powershell
-_Build\src\Release\kajps5.exe --trace-elf R:\path\sample.elf
+_Build\src\Release\kajps5.exe --trace-elf R:\path\sample.bin
 ```
 
 The command reads at most 512 MiB and rejects a guest range larger than
-512 MiB. Its stable summary is suitable for trace comparisons.
+512 MiB. Its stable summary is suitable for trace comparisons. KajPS5 does not
+decrypt retail SELF payloads. It accepts only payload bytes that are already
+available in the input file.
 
 ## Legal use
 

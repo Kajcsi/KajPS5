@@ -16,6 +16,11 @@ namespace {
 
 constexpr std::size_t kElfHeaderSize = 64;
 constexpr std::size_t kProgramHeaderSize = 56;
+constexpr std::size_t kSelfHeaderSize = 32;
+constexpr std::size_t kSelfSegmentSize = 32;
+constexpr std::uint64_t kSelfSegmentBlocked = 0x800;
+constexpr std::uint64_t kSelfSegmentEncrypted = 0x2;
+constexpr std::uint64_t kSelfSegmentCompressed = 0x8;
 constexpr std::uint8_t kElfClass64 = 2;
 constexpr std::uint8_t kElfDataLittleEndian = 1;
 constexpr std::uint8_t kElfVersionCurrent = 1;
@@ -70,6 +75,33 @@ constexpr std::size_t kMinimumDecodedStringBudget = 64 * 1024;
 constexpr std::size_t kMaximumDecodedStringBudget = 64 * 1024 * 1024;
 constexpr std::size_t kDecodedStringBudgetScale = 4;
 
+struct SelfSegment {
+  std::uint64_t type = 0;
+  std::uint64_t offset = 0;
+  std::uint64_t compressed_size = 0;
+  std::uint64_t decompressed_size = 0;
+
+  [[nodiscard]] bool blocked() const noexcept {
+    return (type & kSelfSegmentBlocked) != 0;
+  }
+  [[nodiscard]] bool encrypted() const noexcept {
+    return (type & kSelfSegmentEncrypted) != 0;
+  }
+  [[nodiscard]] bool compressed() const noexcept {
+    return (type & kSelfSegmentCompressed) != 0;
+  }
+  [[nodiscard]] std::uint16_t program_header_index() const noexcept {
+    return static_cast<std::uint16_t>((type >> 20U) & 0xfffU);
+  }
+};
+
+struct ExecutableLayout {
+  ElfContainerKind container = ElfContainerKind::kElf;
+  std::uint64_t elf_offset = 0;
+  std::uint64_t self_file_size = 0;
+  std::vector<SelfSegment> self_segments;
+};
+
 std::uint8_t Read8(std::span<const std::byte> image,
                    std::size_t offset) noexcept {
   return std::to_integer<std::uint8_t>(image[offset]);
@@ -104,6 +136,31 @@ std::uint64_t Read64(std::span<const std::byte> image,
 bool RangeWithin(std::uint64_t total_size, std::uint64_t offset,
                  std::uint64_t length) noexcept {
   return offset <= total_size && length <= total_size - offset;
+}
+
+bool AddWithoutOverflow(std::uint64_t left, std::uint64_t right,
+                        std::uint64_t& result) noexcept {
+  if (right > std::numeric_limits<std::uint64_t>::max() - left) {
+    return false;
+  }
+  result = left + right;
+  return true;
+}
+
+bool IsSelfMagic(std::span<const std::byte> image) noexcept {
+  if (image.size() < 4) {
+    return false;
+  }
+  const bool ps4 = Read8(image, 0) == 0x4f && Read8(image, 1) == 0x15 &&
+                   Read8(image, 2) == 0x3d && Read8(image, 3) == 0x1d;
+  const bool ps5 = Read8(image, 0) == 0x54 && Read8(image, 1) == 0x14 &&
+                   Read8(image, 2) == 0xf5 && Read8(image, 3) == 0xee;
+  return ps4 || ps5;
+}
+
+bool HasKnownSelfLayout(std::span<const std::byte> image) noexcept {
+  return IsSelfMagic(image) && Read8(image, 5) == 0x01 &&
+         Read8(image, 6) == 0x01 && Read8(image, 7) == 0x12;
 }
 
 bool IsSupportedAbi(std::uint8_t os_abi, std::uint8_t abi_version) noexcept {
@@ -164,12 +221,23 @@ struct DynamicEntrySelection {
   ElfDynamicDataSource source = ElfDynamicDataSource::kNone;
 };
 
+ElfDynamicDataSource SceDynamicDataSource(
+    const ElfMetadata& metadata) noexcept {
+  const bool has_dynlibdata = std::any_of(
+      metadata.program_headers.begin(), metadata.program_headers.end(),
+      [](const ElfProgramHeader& header) {
+        return header.type == kProgramTypeSceDynlibData;
+      });
+  return has_dynlibdata ? ElfDynamicDataSource::kSceDynlibData
+                        : ElfDynamicDataSource::kLoadSegment;
+}
+
 DynamicEntrySelection SelectDynamicEntry(const ElfMetadata& metadata,
                                          std::int64_t standard_tag,
                                          std::int64_t sce_tag) noexcept {
   if (const auto* entry = FindDynamicEntry(metadata, sce_tag);
       entry != nullptr) {
-    return {entry, ElfDynamicDataSource::kSceDynlibData};
+    return {entry, SceDynamicDataSource(metadata)};
   }
   if (const auto* entry = FindDynamicEntry(metadata, standard_tag);
       entry != nullptr) {
@@ -182,22 +250,42 @@ DynamicEntrySelection SelectSceDynamicEntry(const ElfMetadata& metadata,
                                             std::int64_t tag) noexcept {
   const auto* entry = FindDynamicEntry(metadata, tag);
   return {entry, entry == nullptr ? ElfDynamicDataSource::kNone
-                                  : ElfDynamicDataSource::kSceDynlibData};
+                                  : SceDynamicDataSource(metadata)};
 }
 
-std::optional<std::size_t> ResolveFileOffset(
-    const ElfMetadata& metadata, std::uint64_t virtual_address,
-    std::uint64_t size) noexcept {
+std::optional<std::size_t> ResolveFileOffset(const ElfMetadata& metadata,
+                                             std::uint64_t virtual_address,
+                                             std::uint64_t size) noexcept {
+  const auto resolve_address =
+      [&metadata, size](std::uint64_t address) -> std::optional<std::size_t> {
+    for (const auto& header : metadata.program_headers) {
+      if (header.type != kProgramTypeLoad || address < header.virtual_address) {
+        continue;
+      }
+      const auto relative_address = address - header.virtual_address;
+      if (relative_address <= header.file_size &&
+          size <= header.file_size - relative_address) {
+        return static_cast<std::size_t>(header.file_offset + relative_address);
+      }
+    }
+    return std::nullopt;
+  };
+
+  if (const auto direct = resolve_address(virtual_address);
+      direct.has_value()) {
+    return direct;
+  }
+
+  auto image_base = std::numeric_limits<std::uint64_t>::max();
   for (const auto& header : metadata.program_headers) {
-    if (header.type != kProgramTypeLoad ||
-        virtual_address < header.virtual_address) {
-      continue;
+    if (header.type == kProgramTypeLoad) {
+      image_base = std::min(image_base, header.virtual_address);
     }
-    const auto relative_address = virtual_address - header.virtual_address;
-    if (relative_address <= header.file_size &&
-        size <= header.file_size - relative_address) {
-      return static_cast<std::size_t>(header.offset + relative_address);
-    }
+  }
+  std::uint64_t rebased_address = 0;
+  if (image_base != std::numeric_limits<std::uint64_t>::max() &&
+      AddWithoutOverflow(image_base, virtual_address, rebased_address)) {
+    return resolve_address(rebased_address);
   }
   return std::nullopt;
 }
@@ -229,7 +317,7 @@ std::optional<std::size_t> ResolveDynamicFileOffset(
       !RangeWithin(header->file_size, selection.entry->value, size)) {
     return std::nullopt;
   }
-  return static_cast<std::size_t>(header->offset + selection.entry->value);
+  return static_cast<std::size_t>(header->file_offset + selection.entry->value);
 }
 
 enum class DynamicStringReadStatus {
@@ -295,8 +383,7 @@ ElfError ParseDynamicStrings(std::span<const std::byte> image,
        string_table.source != string_table_size.source) ||
       ((has_needed || shared_object_name != nullptr) &&
        string_table.entry == nullptr) ||
-      (has_sce_identities &&
-       string_table.source != ElfDynamicDataSource::kSceDynlibData)) {
+      (has_sce_identities && string_table.entry == nullptr)) {
     return ElfError::kIncompleteDynamicStringTable;
   }
   if (string_table.entry == nullptr) {
@@ -609,31 +696,52 @@ ElfError ParseDynamicSymbols(std::span<const std::byte> image,
       metadata, {kDynamicTagSceSymbolTable, kDynamicTagSceSymbolTableSize,
                  kDynamicTagSceSymbolEntrySize});
   if (has_sce_symbols) {
-    const auto symbol_table =
-        SelectSceDynamicEntry(metadata, kDynamicTagSceSymbolTable);
+    const auto symbol_table = SelectDynamicEntry(
+        metadata, kDynamicTagSymbolTable, kDynamicTagSceSymbolTable);
     const auto* symbol_table_size =
         FindDynamicEntry(metadata, kDynamicTagSceSymbolTableSize);
     const auto* symbol_entry_size =
         FindDynamicEntry(metadata, kDynamicTagSceSymbolEntrySize);
-    if (symbol_table.entry == nullptr || symbol_table_size == nullptr ||
-        metadata.dynamic_info.string_table_source !=
-            ElfDynamicDataSource::kSceDynlibData) {
+    if (symbol_entry_size == nullptr) {
+      symbol_entry_size =
+          FindDynamicEntry(metadata, kDynamicTagSymbolEntrySize);
+    }
+    if (symbol_table.entry == nullptr ||
+        metadata.dynamic_info.string_table_source ==
+            ElfDynamicDataSource::kNone) {
       return ElfError::kIncompleteDynamicSymbolMetadata;
     }
     if (symbol_entry_size != nullptr &&
         symbol_entry_size->value != kSymbolEntrySize) {
       return ElfError::kInvalidSymbolEntrySize;
     }
-    if (symbol_table_size->value % kSymbolEntrySize != 0) {
+    std::uint64_t symbol_table_bytes = 0;
+    if (symbol_table_size != nullptr) {
+      symbol_table_bytes = symbol_table_size->value;
+    } else {
+      std::uint32_t maximum_symbol = 0;
+      for (const auto& relocation : metadata.dynamic_info.relocations) {
+        maximum_symbol = std::max(maximum_symbol, relocation.symbol());
+      }
+      for (const auto& relocation : metadata.dynamic_info.plt_relocations) {
+        maximum_symbol = std::max(maximum_symbol, relocation.symbol());
+      }
+      if (maximum_symbol == 0) {
+        return ElfError::kNone;
+      }
+      symbol_table_bytes =
+          (static_cast<std::uint64_t>(maximum_symbol) + 1) * kSymbolEntrySize;
+    }
+    if (symbol_table_bytes % kSymbolEntrySize != 0) {
       return ElfError::kInvalidSymbolTableSize;
     }
-    const auto symbol_file_offset = ResolveDynamicFileOffset(
-        metadata, symbol_table, symbol_table_size->value);
+    const auto symbol_file_offset =
+        ResolveDynamicFileOffset(metadata, symbol_table, symbol_table_bytes);
     if (!symbol_file_offset.has_value()) {
       return ElfError::kSymbolTableNotFileBacked;
     }
     return ParseSymbolRecords(image, metadata, *symbol_file_offset,
-                              symbol_table_size->value / kSymbolEntrySize,
+                              symbol_table_bytes / kSymbolEntrySize,
                               decoded_string_budget);
   }
 
@@ -678,38 +786,173 @@ ElfError ParseDynamicSymbols(std::span<const std::byte> image,
                             decoded_string_budget);
 }
 
+ElfError ParseExecutableLayout(std::span<const std::byte> image,
+                               ExecutableLayout& layout) {
+  if (!IsSelfMagic(image)) {
+    return ElfError::kNone;
+  }
+  if (image.size() < kSelfHeaderSize) {
+    return ElfError::kSelfHeaderOutOfRange;
+  }
+  if (!HasKnownSelfLayout(image)) {
+    return ElfError::kUnsupportedSelfHeader;
+  }
+
+  layout.container = ElfContainerKind::kSelf;
+  layout.self_file_size = Read64(image, 16);
+  const auto segment_count = Read16(image, 24);
+  const auto segment_table_size =
+      static_cast<std::uint64_t>(segment_count) * kSelfSegmentSize;
+  if (!AddWithoutOverflow(kSelfHeaderSize, segment_table_size,
+                          layout.elf_offset) ||
+      !RangeWithin(static_cast<std::uint64_t>(image.size()), layout.elf_offset,
+                   kElfHeaderSize)) {
+    return ElfError::kSelfEmbeddedElfOutOfRange;
+  }
+
+  layout.self_segments.reserve(segment_count);
+  for (std::uint16_t index = 0; index < segment_count; ++index) {
+    const auto offset =
+        kSelfHeaderSize + static_cast<std::size_t>(index) * kSelfSegmentSize;
+    layout.self_segments.push_back(
+        {Read64(image, offset), Read64(image, offset + 8),
+         Read64(image, offset + 16), Read64(image, offset + 24)});
+  }
+  return ElfError::kNone;
+}
+
+bool HeaderRangeContains(const ElfProgramHeader& parent,
+                         const ElfProgramHeader& child) noexcept {
+  if (child.offset < parent.offset) {
+    return false;
+  }
+  return RangeWithin(parent.file_size, child.offset - parent.offset,
+                     child.file_size);
+}
+
+ElfError ResolveSelfFileOffset(
+    std::uint64_t image_size, const ExecutableLayout& layout,
+    const std::vector<ElfProgramHeader>& program_headers,
+    std::size_t target_index, std::uint64_t& file_offset) noexcept {
+  const auto& target = program_headers[target_index];
+  const bool has_exact_mapping =
+      std::any_of(layout.self_segments.begin(), layout.self_segments.end(),
+                  [target_index](const SelfSegment& segment) {
+                    return segment.blocked() &&
+                           segment.program_header_index() == target_index;
+                  });
+
+  std::size_t resolved_count = 0;
+  bool saw_mapping = false;
+  bool saw_encrypted = false;
+  bool saw_compressed = false;
+  for (const auto& segment : layout.self_segments) {
+    if (!segment.blocked() ||
+        segment.program_header_index() >= program_headers.size()) {
+      continue;
+    }
+    const auto source_index = segment.program_header_index();
+    if ((has_exact_mapping && source_index != target_index) ||
+        (!has_exact_mapping &&
+         !HeaderRangeContains(program_headers[source_index], target))) {
+      continue;
+    }
+
+    saw_mapping = true;
+    saw_encrypted = saw_encrypted || segment.encrypted();
+    saw_compressed = saw_compressed || segment.compressed();
+    const auto relative_offset =
+        target.offset - program_headers[source_index].offset;
+    if (!RangeWithin(segment.decompressed_size, relative_offset,
+                     target.file_size)) {
+      continue;
+    }
+    std::uint64_t candidate = 0;
+    if (!AddWithoutOverflow(segment.offset, relative_offset, candidate) ||
+        !RangeWithin(image_size, candidate, target.file_size)) {
+      continue;
+    }
+    file_offset = candidate;
+    ++resolved_count;
+  }
+
+  if (resolved_count > 1) {
+    return ElfError::kMultipleSelfSegmentMappings;
+  }
+  if (resolved_count == 1) {
+    return ElfError::kNone;
+  }
+
+  std::uint64_t elf_relative_offset = 0;
+  if (AddWithoutOverflow(layout.elf_offset, target.offset,
+                         elf_relative_offset) &&
+      RangeWithin(image_size, elf_relative_offset, target.file_size)) {
+    file_offset = elf_relative_offset;
+    return ElfError::kNone;
+  }
+  if (RangeWithin(image_size, target.offset, target.file_size)) {
+    file_offset = target.offset;
+    return ElfError::kNone;
+  }
+  if (layout.self_file_size <= image_size &&
+      image_size - layout.self_file_size == target.file_size) {
+    file_offset = layout.self_file_size;
+    return ElfError::kNone;
+  }
+
+  if (saw_encrypted) {
+    return ElfError::kUnsupportedEncryptedSelfSegment;
+  }
+  if (saw_compressed) {
+    return ElfError::kUnsupportedCompressedSelfSegment;
+  }
+  return saw_mapping ? ElfError::kSelfSegmentFileRangeOutOfRange
+                     : ElfError::kSelfSegmentMappingNotFound;
+}
+
 }  // namespace
 
-ElfParseResult ParseElf64(std::span<const std::byte> image) {
-  if (image.size() < kElfHeaderSize) {
+namespace {
+
+ElfParseResult ParseElf64WithLayout(std::span<const std::byte> image,
+                                    const ExecutableLayout& layout) {
+  if (!RangeWithin(static_cast<std::uint64_t>(image.size()), layout.elf_offset,
+                   kElfHeaderSize)) {
     return ParseFailure(ElfError::kImageTooSmall);
   }
 
-  if (Read8(image, 0) != 0x7f || Read8(image, 1) != 'E' ||
-      Read8(image, 2) != 'L' || Read8(image, 3) != 'F') {
+  const auto elf_offset = static_cast<std::size_t>(layout.elf_offset);
+
+  if (Read8(image, elf_offset) != 0x7f || Read8(image, elf_offset + 1) != 'E' ||
+      Read8(image, elf_offset + 2) != 'L' ||
+      Read8(image, elf_offset + 3) != 'F') {
     return ParseFailure(ElfError::kInvalidMagic);
   }
-  if (Read8(image, 4) != kElfClass64) {
+  if (Read8(image, elf_offset + 4) != kElfClass64) {
     return ParseFailure(ElfError::kUnsupportedClass);
   }
-  if (Read8(image, 5) != kElfDataLittleEndian) {
+  if (Read8(image, elf_offset + 5) != kElfDataLittleEndian) {
     return ParseFailure(ElfError::kUnsupportedEndianness);
   }
-  if (Read8(image, 6) != kElfVersionCurrent) {
+  if (Read8(image, elf_offset + 6) != kElfVersionCurrent) {
     return ParseFailure(ElfError::kUnsupportedIdentVersion);
   }
 
   ElfMetadata metadata;
-  metadata.os_abi = Read8(image, 7);
-  metadata.abi_version = Read8(image, 8);
-  metadata.type = Read16(image, 16);
-  metadata.machine = Read16(image, 18);
-  metadata.version = Read32(image, 20);
-  metadata.entry_point = Read64(image, 24);
-  const auto program_header_offset = Read64(image, 32);
-  const auto header_size = Read16(image, 52);
-  const auto program_header_size = Read16(image, 54);
-  const auto program_header_count = Read16(image, 56);
+  metadata.container = layout.container;
+  metadata.elf_file_offset = layout.elf_offset;
+  metadata.self_segment_count =
+      static_cast<std::uint16_t>(layout.self_segments.size());
+  metadata.os_abi = Read8(image, elf_offset + 7);
+  metadata.abi_version = Read8(image, elf_offset + 8);
+  metadata.type = Read16(image, elf_offset + 16);
+  metadata.machine = Read16(image, elf_offset + 18);
+  metadata.version = Read32(image, elf_offset + 20);
+  metadata.entry_point = Read64(image, elf_offset + 24);
+  const auto program_header_offset = Read64(image, elf_offset + 32);
+  const auto header_size = Read16(image, elf_offset + 52);
+  const auto program_header_size = Read16(image, elf_offset + 54);
+  const auto program_header_count = Read16(image, elf_offset + 56);
 
   if (!IsSupportedAbi(metadata.os_abi, metadata.abi_version)) {
     return ParseFailure(ElfError::kUnsupportedAbi);
@@ -732,15 +975,18 @@ ElfParseResult ParseElf64(std::span<const std::byte> image) {
 
   const auto table_size =
       static_cast<std::uint64_t>(program_header_count) * program_header_size;
-  if (!RangeWithin(static_cast<std::uint64_t>(image.size()),
-                   program_header_offset, table_size)) {
+  std::uint64_t program_header_file_offset = 0;
+  if (!AddWithoutOverflow(layout.elf_offset, program_header_offset,
+                          program_header_file_offset) ||
+      !RangeWithin(static_cast<std::uint64_t>(image.size()),
+                   program_header_file_offset, table_size)) {
     return ParseFailure(ElfError::kProgramHeaderTableOutOfRange);
   }
 
   metadata.program_headers.reserve(program_header_count);
   for (std::uint16_t index = 0; index < program_header_count; ++index) {
     const auto entry_offset64 =
-        program_header_offset +
+        program_header_file_offset +
         static_cast<std::uint64_t>(index) * program_header_size;
     const auto entry_offset = static_cast<std::size_t>(entry_offset64);
 
@@ -748,6 +994,7 @@ ElfParseResult ParseElf64(std::span<const std::byte> image) {
     header.type = Read32(image, entry_offset);
     header.flags = Read32(image, entry_offset + 4);
     header.offset = Read64(image, entry_offset + 8);
+    header.file_offset = header.offset;
     header.virtual_address = Read64(image, entry_offset + 16);
     header.physical_address = Read64(image, entry_offset + 24);
     header.file_size = Read64(image, entry_offset + 32);
@@ -758,24 +1005,40 @@ ElfParseResult ParseElf64(std::span<const std::byte> image) {
       if (header.file_size > header.memory_size) {
         return ParseFailure(ElfError::kSegmentFileSizeExceedsMemorySize);
       }
-      if (!RangeWithin(static_cast<std::uint64_t>(image.size()),
-                       header.offset, header.file_size)) {
-        return ParseFailure(ElfError::kSegmentFileRangeOutOfRange);
-      }
       if (header.memory_size >
-          std::numeric_limits<std::uint64_t>::max() -
-              header.virtual_address) {
+          std::numeric_limits<std::uint64_t>::max() - header.virtual_address) {
         return ParseFailure(ElfError::kSegmentAddressRangeOverflow);
       }
-      if (header.alignment > 1 &&
-          (!std::has_single_bit(header.alignment) ||
-           header.virtual_address % header.alignment !=
-               header.offset % header.alignment)) {
+      if (header.alignment > 1 && (!std::has_single_bit(header.alignment) ||
+                                   header.virtual_address % header.alignment !=
+                                       header.offset % header.alignment)) {
         return ParseFailure(ElfError::kInvalidSegmentAlignment);
       }
     }
 
     metadata.program_headers.push_back(header);
+  }
+
+  for (std::size_t index = 0; index < metadata.program_headers.size();
+       ++index) {
+    auto& header = metadata.program_headers[index];
+    const bool needs_file_data =
+        header.file_size != 0 && (header.type == kProgramTypeLoad ||
+                                  header.type == kProgramTypeDynamic ||
+                                  header.type == kProgramTypeSceDynlibData);
+    if (needs_file_data && layout.container == ElfContainerKind::kSelf) {
+      if (const auto error = ResolveSelfFileOffset(
+              static_cast<std::uint64_t>(image.size()), layout,
+              metadata.program_headers, index, header.file_offset);
+          error != ElfError::kNone) {
+        return ParseFailure(error);
+      }
+    }
+    if (header.type == kProgramTypeLoad &&
+        !RangeWithin(static_cast<std::uint64_t>(image.size()),
+                     header.file_offset, header.file_size)) {
+      return ParseFailure(ElfError::kSegmentFileRangeOutOfRange);
+    }
   }
 
   std::vector<std::pair<std::uint64_t, std::uint64_t>> load_ranges;
@@ -801,8 +1064,8 @@ ElfParseResult ParseElf64(std::span<const std::byte> image) {
     if (sce_dynlibdata_header != nullptr) {
       return ParseFailure(ElfError::kMultipleSceDynlibDataSegments);
     }
-    if (!RangeWithin(static_cast<std::uint64_t>(image.size()), header.offset,
-                     header.file_size)) {
+    if (!RangeWithin(static_cast<std::uint64_t>(image.size()),
+                     header.file_offset, header.file_size)) {
       return ParseFailure(ElfError::kSceDynlibDataSegmentFileRangeOutOfRange);
     }
     sce_dynlibdata_header = &header;
@@ -824,7 +1087,7 @@ ElfParseResult ParseElf64(std::span<const std::byte> image) {
       return ParseFailure(ElfError::kInvalidDynamicSegmentSize);
     }
     if (!RangeWithin(static_cast<std::uint64_t>(image.size()),
-                     dynamic_header->offset, dynamic_header->file_size)) {
+                     dynamic_header->file_offset, dynamic_header->file_size)) {
       return ParseFailure(ElfError::kDynamicSegmentFileRangeOutOfRange);
     }
 
@@ -834,8 +1097,8 @@ ElfParseResult ParseElf64(std::span<const std::byte> image) {
     for (std::uint64_t relative_offset = 0;
          relative_offset < dynamic_header->file_size;
          relative_offset += kDynamicEntrySize) {
-      const auto entry_offset =
-          static_cast<std::size_t>(dynamic_header->offset + relative_offset);
+      const auto entry_offset = static_cast<std::size_t>(
+          dynamic_header->file_offset + relative_offset);
       const auto tag = std::bit_cast<std::int64_t>(Read64(image, entry_offset));
       if (tag == kDynamicTagNull) {
         terminated = true;
@@ -846,17 +1109,6 @@ ElfParseResult ParseElf64(std::span<const std::byte> image) {
     }
     if (!terminated) {
       return ParseFailure(ElfError::kUnterminatedDynamicTable);
-    }
-    if (HasDynamicEntry(
-            metadata,
-            {kDynamicTagSceStringTable, kDynamicTagSceStringTableSize,
-             kDynamicTagSceSymbolTable, kDynamicTagSceSymbolTableSize,
-             kDynamicTagSceSymbolEntrySize, kDynamicTagSceRela,
-             kDynamicTagSceRelaSize, kDynamicTagSceRelaEntrySize,
-             kDynamicTagSceJumpRelocation, kDynamicTagScePltRelocationSize,
-             kDynamicTagScePltRelocationFormat}) &&
-        sce_dynlibdata_header == nullptr) {
-      return ParseFailure(ElfError::kMissingSceDynlibDataSegment);
     }
     auto decoded_string_budget = CalculateDecodedStringBudget(image.size());
     if (const auto error =
@@ -883,6 +1135,21 @@ ElfParseResult ParseElf64(std::span<const std::byte> image) {
   ElfParseResult result;
   result.metadata = std::move(metadata);
   return result;
+}
+
+}  // namespace
+
+ElfParseResult ParseElf64(std::span<const std::byte> image) {
+  return ParseElf64WithLayout(image, ExecutableLayout{});
+}
+
+ElfParseResult ParseExecutable64(std::span<const std::byte> image) {
+  ExecutableLayout layout;
+  if (const auto error = ParseExecutableLayout(image, layout);
+      error != ElfError::kNone) {
+    return ParseFailure(error);
+  }
+  return ParseElf64WithLayout(image, layout);
 }
 
 ElfLoadRangeResult CalculateElfLoadRange(
@@ -917,9 +1184,11 @@ ElfLoadRangeResult CalculateElfLoadRange(
   return result;
 }
 
-ElfLoadResult LoadElf64(std::span<const std::byte> image,
-                        memory::GuestMemory& memory) {
-  auto parsed = ParseElf64(image);
+namespace {
+
+ElfLoadResult LoadParsedElf64(std::span<const std::byte> image,
+                              ElfParseResult parsed,
+                              memory::GuestMemory& memory) {
   ElfLoadResult result;
   result.error = parsed.error;
   result.metadata = std::move(parsed.metadata);
@@ -971,7 +1240,7 @@ ElfLoadResult LoadElf64(std::span<const std::byte> image,
 
     if (header.file_size != 0) {
       const auto file_data = image.subspan(
-          static_cast<std::size_t>(header.offset),
+          static_cast<std::size_t>(header.file_offset),
           static_cast<std::size_t>(header.file_size));
       if (!memory.Initialize(header.virtual_address, file_data)) {
         result.error = ElfError::kGuestRangeOutOfRange;
@@ -991,11 +1260,38 @@ ElfLoadResult LoadElf64(std::span<const std::byte> image,
   return result;
 }
 
+}  // namespace
+
+ElfLoadResult LoadElf64(std::span<const std::byte> image,
+                        memory::GuestMemory& memory) {
+  return LoadParsedElf64(image, ParseElf64(image), memory);
+}
+
+ElfLoadResult LoadExecutable64(std::span<const std::byte> image,
+                               memory::GuestMemory& memory) {
+  return LoadParsedElf64(image, ParseExecutable64(image), memory);
+}
+
 std::string_view ElfErrorName(ElfError error) noexcept {
   switch (error) {
     case ElfError::kNone: return "none";
     case ElfError::kImageTooSmall: return "image-too-small";
     case ElfError::kInvalidMagic: return "invalid-magic";
+    case ElfError::kSelfHeaderOutOfRange: return "self-header-out-of-range";
+    case ElfError::kUnsupportedSelfHeader:
+      return "unsupported-self-header";
+    case ElfError::kSelfEmbeddedElfOutOfRange:
+      return "self-embedded-elf-out-of-range";
+    case ElfError::kSelfSegmentMappingNotFound:
+      return "self-segment-mapping-not-found";
+    case ElfError::kMultipleSelfSegmentMappings:
+      return "multiple-self-segment-mappings";
+    case ElfError::kSelfSegmentFileRangeOutOfRange:
+      return "self-segment-file-range-out-of-range";
+    case ElfError::kUnsupportedEncryptedSelfSegment:
+      return "unsupported-encrypted-self-segment";
+    case ElfError::kUnsupportedCompressedSelfSegment:
+      return "unsupported-compressed-self-segment";
     case ElfError::kUnsupportedClass: return "unsupported-class";
     case ElfError::kUnsupportedEndianness: return "unsupported-endianness";
     case ElfError::kUnsupportedIdentVersion:
@@ -1017,8 +1313,6 @@ std::string_view ElfErrorName(ElfError error) noexcept {
       return "dynamic-segment-file-range-out-of-range";
     case ElfError::kSceDynlibDataSegmentFileRangeOutOfRange:
       return "sce-dynlibdata-segment-file-range-out-of-range";
-    case ElfError::kMissingSceDynlibDataSegment:
-      return "missing-sce-dynlibdata-segment";
     case ElfError::kInvalidDynamicSegmentSize:
       return "invalid-dynamic-segment-size";
     case ElfError::kUnterminatedDynamicTable:

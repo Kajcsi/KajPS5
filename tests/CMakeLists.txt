@@ -16,6 +16,12 @@ kajps5_deploy_msvc_asan_runtime(kajps5_elf_loader_test)
 
 add_test(NAME kajps5_elf_loader COMMAND kajps5_elf_loader_test)
 
+add_executable(kajps5_self_loader_test self_loader_test.cpp)
+target_link_libraries(kajps5_self_loader_test PRIVATE kajps5_core)
+kajps5_deploy_msvc_asan_runtime(kajps5_self_loader_test)
+
+add_test(NAME kajps5_self_loader COMMAND kajps5_self_loader_test)
+
 add_executable(kajps5_elf_dynamic_test elf_dynamic_test.cpp)
 target_link_libraries(kajps5_elf_dynamic_test PRIVATE kajps5_core)
 kajps5_deploy_msvc_asan_runtime(kajps5_elf_dynamic_test)

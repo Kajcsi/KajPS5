@@ -303,10 +303,37 @@ int main() {
             import_value == expected_import,
         "parsed SCE import relocation wrote the wrong value");
 
-  auto missing_data = image;
-  Write32(missing_data, kProgramHeaderOffset + kProgramHeaderSize, 0);
-  CheckError(std::move(missing_data), ElfError::kMissingSceDynlibDataSegment,
-             "a missing SCE data segment returned the wrong error");
+  auto load_backed_data = image;
+  WriteProgramHeader(load_backed_data, 1, 1, 4, kSceDataOffset, 0x3000,
+                     kSceDataSize, kSceDataSize, 0x100);
+  const auto load_backed = ParseElf64(load_backed_data);
+  Check(static_cast<bool>(load_backed),
+        "load-backed SCE dynamic metadata was rejected");
+  Check(load_backed.metadata.dynamic_info.string_table_source ==
+                ElfDynamicDataSource::kLoadSegment &&
+            load_backed.metadata.dynamic_info.string_table_file_offset ==
+                kSceDataOffset + kStringTableOffset &&
+            load_backed.metadata.dynamic_info.import_libraries.size() == 1 &&
+            load_backed.metadata.dynamic_info.symbols.size() == 2,
+        "load-backed SCE dynamic metadata was resolved incorrectly");
+
+  auto mixed_symbol_tags = load_backed_data;
+  WriteDynamic(mixed_symbol_tags, 5, 6, kSymbolTableOffset);
+  const auto mixed_symbols = ParseElf64(mixed_symbol_tags);
+  Check(
+      static_cast<bool>(mixed_symbols) &&
+          mixed_symbols.metadata.dynamic_info.symbols.size() == 2 &&
+          mixed_symbols.metadata.dynamic_info.symbols[1].name == "open#BER#BI0",
+      "standard symbol location with SCE size was rejected");
+
+  auto inferred_symbol_size = image;
+  WriteDynamic(inferred_symbol_size, kSceSymbolTableSizeEntry, 0x70000001, 48);
+  const auto inferred_symbols = ParseElf64(inferred_symbol_size);
+  Check(static_cast<bool>(inferred_symbols) &&
+            inferred_symbols.metadata.dynamic_info.symbols.size() == 2 &&
+            inferred_symbols.metadata.dynamic_info.symbols[1].name ==
+                "open#BER#BI0",
+        "SCE symbol size was not derived from relocation indexes");
 
   auto multiple_data = image;
   Write16(multiple_data, 56, 4);

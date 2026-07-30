@@ -19,6 +19,14 @@ enum class ElfError {
   kNone,
   kImageTooSmall,
   kInvalidMagic,
+  kSelfHeaderOutOfRange,
+  kUnsupportedSelfHeader,
+  kSelfEmbeddedElfOutOfRange,
+  kSelfSegmentMappingNotFound,
+  kMultipleSelfSegmentMappings,
+  kSelfSegmentFileRangeOutOfRange,
+  kUnsupportedEncryptedSelfSegment,
+  kUnsupportedCompressedSelfSegment,
   kUnsupportedClass,
   kUnsupportedEndianness,
   kUnsupportedIdentVersion,
@@ -33,7 +41,6 @@ enum class ElfError {
   kMultipleSceDynlibDataSegments,
   kDynamicSegmentFileRangeOutOfRange,
   kSceDynlibDataSegmentFileRangeOutOfRange,
-  kMissingSceDynlibDataSegment,
   kInvalidDynamicSegmentSize,
   kUnterminatedDynamicTable,
   kIncompleteDynamicStringTable,
@@ -63,10 +70,16 @@ enum class ElfError {
   kLoadSizeOverflow,
 };
 
+enum class ElfContainerKind {
+  kElf,
+  kSelf,
+};
+
 struct ElfProgramHeader {
   std::uint32_t type = 0;
   std::uint32_t flags = 0;
   std::uint64_t offset = 0;
+  std::uint64_t file_offset = 0;
   std::uint64_t virtual_address = 0;
   std::uint64_t physical_address = 0;
   std::uint64_t file_size = 0;
@@ -140,6 +153,9 @@ struct ElfDynamicInfo {
 };
 
 struct ElfMetadata {
+  ElfContainerKind container = ElfContainerKind::kElf;
+  std::uint64_t elf_file_offset = 0;
+  std::uint16_t self_segment_count = 0;
   std::uint8_t os_abi = 0;
   std::uint8_t abi_version = 0;
   std::uint16_t type = 0;
@@ -185,10 +201,14 @@ struct ElfLoadRangeResult {
 
 [[nodiscard]] ElfParseResult ParseElf64(
     std::span<const std::byte> image);
+[[nodiscard]] ElfParseResult ParseExecutable64(
+    std::span<const std::byte> image);
 [[nodiscard]] ElfLoadRangeResult CalculateElfLoadRange(
     const ElfMetadata& metadata) noexcept;
 [[nodiscard]] ElfLoadResult LoadElf64(std::span<const std::byte> image,
                                       memory::GuestMemory& memory);
+[[nodiscard]] ElfLoadResult LoadExecutable64(std::span<const std::byte> image,
+                                             memory::GuestMemory& memory);
 [[nodiscard]] std::string_view ElfErrorName(ElfError error) noexcept;
 
 }  // namespace kajps5::loader

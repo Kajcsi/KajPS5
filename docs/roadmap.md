@@ -20,6 +20,8 @@
 - [x] Apply checked relative relocations without resolving imports.
 - [x] Validate standard dynamic symbol names through `DT_HASH`.
 - [x] Parse checked PS5 dynlib-data tables and module and library identities.
+- [x] Parse checked SELF/FSELF containers and resolve their ELF payloads.
+- [x] Resolve PS5 dynamic metadata from dynlib-data or load segments.
 
 ## Stage 2: CPU and kernel
 

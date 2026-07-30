@@ -21,12 +21,14 @@ system, ownership model, or source was copied.
 The dynamic-table, dynamic-string, symbol, and `RELA` behavior in
 `src/loader/elf.cpp`, `src/loader/relocator.cpp`,
 `tests/elf_dynamic_test.cpp`, `tests/elf_sce_dynamic_test.cpp`,
-`tests/elf_relocation_test.cpp`, and `tests/elf_symbol_test.cpp` was based on
-behavior observed in the pinned KytyPS5 and SharpEmu loader files. The PS5
-metadata parser follows KytyPS5's `PT_OS_DYNLIBDATA`, packed module, packed
-library, and SCE dynamic-tag semantics. It adapts SharpEmu's preference for
-SCE table tags and its fixed-size fallback when optional SCE entry-size tags
-are absent.
+`tests/elf_relocation_test.cpp`, `tests/elf_symbol_test.cpp`, and
+`tests/self_loader_test.cpp` was based on behavior observed in the pinned
+KytyPS5 and SharpEmu loader files. The PS5 metadata parser follows KytyPS5's
+`PT_OS_DYNLIBDATA`, packed module, packed library, and SCE dynamic-tag
+semantics. SELF parsing follows KytyPS5's header, segment, and containing
+program-header model. It adapts SharpEmu's structural SELF checks, checked
+payload fallbacks, mixed standard and SCE dynamic fields, symbol-size fallback,
+and handling of already-dumped payloads.
 
 The reviewed sources are KytyPS5 `src/loader/elf.h` and
 `src/loader/runtimeLinker.cpp` at commit
