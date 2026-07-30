@@ -3,6 +3,8 @@
 // Behavior reference: Copyright (C) 2026 SharpEmu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <array>
+#include <cstddef>
 #include <cstdlib>
 #include <iostream>
 #include <limits>
@@ -61,7 +63,23 @@ int main() {
   memory.UnregisterMappings(0x300000, 0x4000);
   Check(memory.mapping_count() == 0,
         "direct-memory aliases were not fully removed");
+  const std::array partial_backing_input = {std::byte{0x5a},
+                                             std::byte{0xa5}};
+  std::array<std::byte, partial_backing_input.size()> preserved_prefix{};
+  std::array<std::byte, partial_backing_input.size()> cleared_middle{};
+  std::array<std::byte, partial_backing_input.size()> preserved_suffix{};
+  Check(memory.backing()->Write(0x100, partial_backing_input) &&
+            memory.backing()->Write(0x4100, partial_backing_input) &&
+            memory.backing()->Write(0x8100, partial_backing_input),
+        "partial release backing setup failed");
   Check(memory.Release(0x4000, 0x4000) == KernelStatus::kOk &&
+            memory.backing()->Read(0x100, preserved_prefix) &&
+            memory.backing()->Read(0x4100, cleared_middle) &&
+            memory.backing()->Read(0x8100, preserved_suffix) &&
+            preserved_prefix == partial_backing_input &&
+            cleared_middle ==
+                std::array<std::byte, partial_backing_input.size()>{} &&
+            preserved_suffix == partial_backing_input &&
             memory.ContainsAllocatedRange(0, 0x4000) &&
             !memory.ContainsAllocatedRange(0x4000, 0x4000) &&
             memory.ContainsAllocatedRange(0x8000, 0x4000) &&
@@ -85,6 +103,18 @@ int main() {
   Check(coalesced && coalesced.address == 0 &&
             coalesced.size == kDirectMemorySize,
         "released direct memory did not coalesce");
+
+  const auto backing_allocation =
+      memory.Allocate(0, 0x4000, 0x4000, 0x4000, 4);
+  const std::array backing_input = {std::byte{0x12}, std::byte{0x34}};
+  std::array<std::byte, backing_input.size()> backing_output{};
+  Check(backing_allocation &&
+            memory.backing()->Write(0x100, backing_input) &&
+            memory.Release(0, 0x4000) == KernelStatus::kOk &&
+            memory.backing()->Read(0x100, backing_output) &&
+            backing_output ==
+                std::array<std::byte, backing_input.size()>{},
+        "direct-memory release did not clear physical contents");
 
   const auto odd_alignment = memory.Allocate(1, 32, 3, 3, 0);
   Check(odd_alignment && odd_alignment.address == 3,

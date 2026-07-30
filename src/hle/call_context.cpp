@@ -179,6 +179,15 @@ bool HleCallContext::MapMemory(
   return memory_.Map(address, length, protection);
 }
 
+bool HleCallContext::MapSharedMemory(
+    std::uint64_t address, std::uint64_t length,
+    memory::GuestMemoryProtection protection,
+    std::shared_ptr<memory::SharedMemoryBacking> backing,
+    std::uint64_t backing_offset) {
+  return memory_.MapShared(address, length, protection, std::move(backing),
+                           backing_offset);
+}
+
 bool HleCallContext::ProtectMemory(
     std::uint64_t address, std::uint64_t length,
     memory::GuestMemoryProtection protection) {

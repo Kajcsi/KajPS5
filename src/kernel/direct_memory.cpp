@@ -11,12 +11,19 @@
 
 namespace kajps5::kernel {
 
-DirectMemoryService::DirectMemoryService() {
+DirectMemoryService::DirectMemoryService()
+    : backing_(std::make_shared<memory::SharedMemoryBacking>(
+          kDirectMemorySize)) {
   free_ranges_.emplace(0, kDirectMemorySize);
 }
 
 std::uint64_t DirectMemoryService::size() const noexcept {
   return kDirectMemorySize;
+}
+
+std::shared_ptr<memory::SharedMemoryBacking> DirectMemoryService::backing()
+    const noexcept {
+  return backing_;
 }
 
 std::optional<std::uint64_t> DirectMemoryService::AlignUp(
@@ -143,6 +150,7 @@ KernelStatus DirectMemoryService::Release(std::uint64_t start,
                          Allocation{owner_end - release_end, owner_type});
   }
   AddFreeRange(start, length);
+  backing_->Clear(start, length);
   return KernelStatus::kOk;
 }
 

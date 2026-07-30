@@ -273,7 +273,8 @@ int main() {
             named_direct_context.SetRegister(HleRegister::kRsi, 0x4000) &&
             named_direct_context.SetRegister(
                 HleRegister::kRdx,
-                kajps5::hle::kKernelProtectionGpuRead) &&
+                kajps5::hle::kKernelProtectionCpuRead |
+                    kajps5::hle::kKernelProtectionCpuWrite) &&
             named_direct_context.SetRegister(HleRegister::kRcx, 0) &&
             named_direct_context.SetRegister(HleRegister::kR8, 0) &&
             named_direct_context.SetRegister(HleRegister::kR9, 0x4000),
@@ -285,11 +286,19 @@ int main() {
                                             direct_mapped_address) ==
                 kajps5::hle::HleContextStatus::kOk &&
             direct_mapped_address == 0x30000 &&
-            direct_guest.IsMapped(0x30000, 0x4000) &&
-            !direct_guest.CanAccess(0x30000, 1,
-                                    GuestMemoryProtection::kRead) &&
+            direct_guest.CanAccess(
+                0x30000, 0x4000,
+                GuestMemoryProtection::kRead |
+                    GuestMemoryProtection::kWrite) &&
             direct_memory.mapping_count() == 3,
         "named direct-memory map returned the wrong range");
+  const std::array direct_alias_input = {
+      std::byte{0x12}, std::byte{0x34}, std::byte{0x56}, std::byte{0x78}};
+  std::array<std::byte, direct_alias_input.size()> direct_alias_output{};
+  Check(direct_guest.Write(0x20000, direct_alias_input) &&
+            direct_guest.Read(0x30000, direct_alias_output) &&
+            direct_alias_output == direct_alias_input,
+        "direct-memory aliases did not share physical contents");
 
   std::array<std::byte, 32> long_direct_name{};
   long_direct_name.fill(std::byte{'x'});

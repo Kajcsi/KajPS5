@@ -85,7 +85,7 @@ hinted first-fit search, and seventh arguments are read from the checked guest
 stack. `munmap` removes direct-alias records, and a physical allocation cannot
 be released while an alias remains.
 
-Direct mappings currently reserve independent guest bytes. Two aliases of the
-same physical range do not share their contents yet, and the v2 memory type is
-not applied per mapping. A later backing-store layer must add that behavior
-without creating a second guest-memory owner.
+Direct mappings share one sparse physical backing store. Aliases see the same
+contents across 16 KiB page boundaries, and contents survive unmap and remap.
+Releasing an allocation clears its committed pages. The v2 memory type is
+accepted but is not applied per mapping yet.

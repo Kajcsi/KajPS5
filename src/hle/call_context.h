@@ -7,6 +7,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -86,6 +87,11 @@ class HleCallContext final {
   [[nodiscard]] bool MapMemory(
       std::uint64_t address, std::uint64_t length,
       memory::GuestMemoryProtection protection);
+  [[nodiscard]] bool MapSharedMemory(
+      std::uint64_t address, std::uint64_t length,
+      memory::GuestMemoryProtection protection,
+      std::shared_ptr<memory::SharedMemoryBacking> backing,
+      std::uint64_t backing_offset);
   [[nodiscard]] bool ProtectMemory(
       std::uint64_t address, std::uint64_t length,
       memory::GuestMemoryProtection protection);

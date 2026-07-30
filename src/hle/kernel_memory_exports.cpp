@@ -443,7 +443,8 @@ HleContextStatus MapDirectMemory(
     }
   }
   if (!mapped_address.has_value() ||
-      !context.MapMemory(*mapped_address, length, protection)) {
+      !context.MapSharedMemory(*mapped_address, length, protection,
+                               direct_memory.backing(), physical_address)) {
     SetKernelResult(context, kKernelHleErrorNoMemory);
     return HleContextStatus::kOk;
   }

@@ -5,11 +5,14 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <span>
 #include <vector>
 
 namespace kajps5::memory {
+
+class SharedMemoryBacking;
 
 enum class GuestMemoryProtection : std::uint8_t {
   kNone = 0,
@@ -52,6 +55,11 @@ class GuestMemory final {
       std::uint64_t alignment) const noexcept;
   [[nodiscard]] bool Map(std::uint64_t address, std::uint64_t length,
                          GuestMemoryProtection protection);
+  [[nodiscard]] bool MapShared(
+      std::uint64_t address, std::uint64_t length,
+      GuestMemoryProtection protection,
+      std::shared_ptr<SharedMemoryBacking> backing,
+      std::uint64_t backing_offset);
   [[nodiscard]] bool Protect(std::uint64_t address, std::uint64_t length,
                              GuestMemoryProtection protection);
   [[nodiscard]] bool Unmap(std::uint64_t address, std::uint64_t length);
@@ -79,14 +87,31 @@ class GuestMemory final {
                                     std::byte value) noexcept;
 
  private:
+  struct SharedMapping {
+    std::uint64_t address = 0;
+    std::uint64_t size = 0;
+    std::uint64_t backing_offset = 0;
+    std::shared_ptr<SharedMemoryBacking> backing;
+  };
+
   [[nodiscard]] std::size_t FindContainingRegion(
       std::uint64_t address) const noexcept;
+  [[nodiscard]] std::size_t FindSharedMapping(
+      std::uint64_t address) const noexcept;
   [[nodiscard]] std::size_t OffsetOf(std::uint64_t address) const noexcept;
+  [[nodiscard]] bool ReadBytes(
+      std::uint64_t address, std::span<std::byte> destination) const noexcept;
+  [[nodiscard]] bool WriteBytes(
+      std::uint64_t address, std::span<const std::byte> source) noexcept;
+  [[nodiscard]] bool FillBytes(std::uint64_t address,
+                               std::uint64_t length,
+                               std::byte value) noexcept;
   void CoalesceRegions();
 
   std::uint64_t base_address_ = 0;
   std::vector<std::byte> bytes_;
   std::vector<GuestMemoryRegion> regions_;
+  std::vector<SharedMapping> shared_mappings_;
 };
 
 }  // namespace kajps5::memory

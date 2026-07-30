@@ -12,6 +12,7 @@
 #include <optional>
 #include <vector>
 
+#include "core/memory/shared_memory_backing.h"
 #include "kernel/status.h"
 
 namespace kajps5::kernel {
@@ -44,6 +45,8 @@ class DirectMemoryService final {
   DirectMemoryService& operator=(const DirectMemoryService&) = delete;
 
   [[nodiscard]] std::uint64_t size() const noexcept;
+  [[nodiscard]] std::shared_ptr<memory::SharedMemoryBacking> backing()
+      const noexcept;
   [[nodiscard]] DirectMemoryRangeResult Available(
       std::uint64_t search_start, std::uint64_t search_end,
       std::uint64_t alignment) const;
@@ -83,6 +86,7 @@ class DirectMemoryService final {
   std::map<std::uint64_t, Allocation> allocations_;
   std::map<std::uint64_t, std::uint64_t> free_ranges_;
   std::vector<DirectMemoryMapping> mappings_;
+  std::shared_ptr<memory::SharedMemoryBacking> backing_;
 };
 
 }  // namespace kajps5::kernel

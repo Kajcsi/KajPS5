@@ -41,6 +41,7 @@
 - [x] Add checked fixed and first-fit flexible-memory mappings.
 - [x] Add checked direct-memory range allocation and partial release.
 - [x] Add checked fixed, hinted, v2, and named direct-memory mappings.
+- [x] Share sparse physical contents between direct-memory aliases.
 - [x] Add checked guest paths and memory-backed read-only files.
 - [x] Add deterministic directory reads for the memory-backed namespace.
 - [x] Add deterministic thread-exit joins.

@@ -8,6 +8,8 @@
 #include <stdexcept>
 #include <utility>
 
+#include "core/memory/shared_memory_backing.h"
+
 namespace kajps5::memory {
 namespace {
 
@@ -144,6 +146,40 @@ bool GuestMemory::Map(std::uint64_t address, std::uint64_t length,
   return true;
 }
 
+bool GuestMemory::MapShared(
+    std::uint64_t address, std::uint64_t length,
+    GuestMemoryProtection protection,
+    std::shared_ptr<SharedMemoryBacking> backing,
+    std::uint64_t backing_offset) {
+  if (!backing || !backing->Contains(backing_offset, length) ||
+      !IsValidProtection(protection) || !CanMap(address, length)) {
+    return false;
+  }
+
+  const auto insertion = std::lower_bound(
+      shared_mappings_.begin(), shared_mappings_.end(), address,
+      [](const SharedMapping& mapping, std::uint64_t candidate) {
+        return mapping.address < candidate;
+      });
+  const auto index = static_cast<std::size_t>(
+      insertion - shared_mappings_.begin());
+  try {
+    shared_mappings_.insert(
+        insertion, {address, length, backing_offset, std::move(backing)});
+  } catch (...) {
+    return false;
+  }
+  try {
+    if (Map(address, length, protection)) {
+      return true;
+    }
+  } catch (...) {
+  }
+  shared_mappings_.erase(
+      shared_mappings_.begin() + static_cast<std::ptrdiff_t>(index));
+  return false;
+}
+
 bool GuestMemory::Protect(std::uint64_t address, std::uint64_t length,
                           GuestMemoryProtection protection) {
   if (length == 0 || !IsValidProtection(protection) ||
@@ -186,6 +222,47 @@ bool GuestMemory::Unmap(std::uint64_t address, std::uint64_t length) {
   }
 
   const auto range_end = address + length;
+  auto updated_shared_mappings = shared_mappings_;
+  for (std::size_t index = 0; index < updated_shared_mappings.size();) {
+    auto& mapping = updated_shared_mappings[index];
+    const auto mapping_end = mapping.address + mapping.size;
+    const auto overlap_start = std::max(address, mapping.address);
+    const auto overlap_end = std::min(range_end, mapping_end);
+    if (overlap_start >= overlap_end) {
+      ++index;
+      continue;
+    }
+    if (overlap_start == mapping.address && overlap_end == mapping_end) {
+      updated_shared_mappings.erase(
+          updated_shared_mappings.begin() +
+          static_cast<std::ptrdiff_t>(index));
+      continue;
+    }
+    if (overlap_start == mapping.address) {
+      const auto removed = overlap_end - mapping.address;
+      mapping.address = overlap_end;
+      mapping.backing_offset += removed;
+      mapping.size -= removed;
+      ++index;
+      continue;
+    }
+    if (overlap_end == mapping_end) {
+      mapping.size = overlap_start - mapping.address;
+      ++index;
+      continue;
+    }
+
+    auto suffix = mapping;
+    suffix.address = overlap_end;
+    suffix.backing_offset += overlap_end - mapping.address;
+    suffix.size = mapping_end - overlap_end;
+    mapping.size = overlap_start - mapping.address;
+    updated_shared_mappings.insert(
+        updated_shared_mappings.begin() +
+            static_cast<std::ptrdiff_t>(index + 1),
+        std::move(suffix));
+    index += 2;
+  }
   std::vector<GuestMemoryRegion> updated;
   updated.reserve(regions_.size() + 1);
   for (const auto& region : regions_) {
@@ -209,6 +286,7 @@ bool GuestMemory::Unmap(std::uint64_t address, std::uint64_t length) {
   std::fill_n(bytes_.begin() + static_cast<std::ptrdiff_t>(offset),
               static_cast<std::size_t>(length), std::byte{0});
   regions_ = std::move(updated);
+  shared_mappings_ = std::move(updated_shared_mappings);
   CoalesceRegions();
   return true;
 }
@@ -283,11 +361,7 @@ bool GuestMemory::Read(std::uint64_t address,
                  GuestMemoryProtection::kRead)) {
     return false;
   }
-
-  const auto offset = OffsetOf(address);
-  std::copy_n(bytes_.begin() + static_cast<std::ptrdiff_t>(offset),
-              destination.size(), destination.begin());
-  return true;
+  return ReadBytes(address, destination);
 }
 
 bool GuestMemory::Write(std::uint64_t address,
@@ -296,11 +370,7 @@ bool GuestMemory::Write(std::uint64_t address,
                  GuestMemoryProtection::kWrite)) {
     return false;
   }
-
-  const auto offset = OffsetOf(address);
-  std::copy(source.begin(), source.end(),
-            bytes_.begin() + static_cast<std::ptrdiff_t>(offset));
-  return true;
+  return WriteBytes(address, source);
 }
 
 bool GuestMemory::Fill(std::uint64_t address, std::uint64_t length,
@@ -308,11 +378,7 @@ bool GuestMemory::Fill(std::uint64_t address, std::uint64_t length,
   if (!CanAccess(address, length, GuestMemoryProtection::kWrite)) {
     return false;
   }
-
-  const auto offset = OffsetOf(address);
-  std::fill_n(bytes_.begin() + static_cast<std::ptrdiff_t>(offset),
-              static_cast<std::size_t>(length), value);
-  return true;
+  return FillBytes(address, length, value);
 }
 
 bool GuestMemory::Initialize(
@@ -320,11 +386,7 @@ bool GuestMemory::Initialize(
   if (!IsMapped(address, source.size())) {
     return false;
   }
-
-  const auto offset = OffsetOf(address);
-  std::copy(source.begin(), source.end(),
-            bytes_.begin() + static_cast<std::ptrdiff_t>(offset));
-  return true;
+  return WriteBytes(address, source);
 }
 
 bool GuestMemory::InitializeFill(std::uint64_t address,
@@ -333,10 +395,122 @@ bool GuestMemory::InitializeFill(std::uint64_t address,
   if (!IsMapped(address, length)) {
     return false;
   }
+  return FillBytes(address, length, value);
+}
 
-  const auto offset = OffsetOf(address);
-  std::fill_n(bytes_.begin() + static_cast<std::ptrdiff_t>(offset),
-              static_cast<std::size_t>(length), value);
+bool GuestMemory::ReadBytes(
+    std::uint64_t address,
+    std::span<std::byte> destination) const noexcept {
+  std::size_t copied = 0;
+  while (copied < destination.size()) {
+    const auto current = address + copied;
+    const auto shared_index = FindSharedMapping(current);
+    if (shared_index != shared_mappings_.size()) {
+      const auto& mapping = shared_mappings_[shared_index];
+      const auto mapping_offset = current - mapping.address;
+      const auto chunk = std::min<std::size_t>(
+          destination.size() - copied,
+          static_cast<std::size_t>(mapping.size - mapping_offset));
+      if (!mapping.backing->Read(
+              mapping.backing_offset + mapping_offset,
+              destination.subspan(copied, chunk))) {
+        return false;
+      }
+      copied += chunk;
+      continue;
+    }
+
+    const auto next = std::lower_bound(
+        shared_mappings_.begin(), shared_mappings_.end(), current,
+        [](const SharedMapping& mapping, std::uint64_t candidate) {
+          return mapping.address < candidate;
+        });
+    auto chunk = destination.size() - copied;
+    if (next != shared_mappings_.end()) {
+      chunk = std::min<std::size_t>(
+          chunk, static_cast<std::size_t>(next->address - current));
+    }
+    const auto offset = OffsetOf(current);
+    std::copy_n(bytes_.begin() + static_cast<std::ptrdiff_t>(offset), chunk,
+                destination.begin() + static_cast<std::ptrdiff_t>(copied));
+    copied += chunk;
+  }
+  return true;
+}
+
+bool GuestMemory::WriteBytes(
+    std::uint64_t address,
+    std::span<const std::byte> source) noexcept {
+  std::size_t copied = 0;
+  while (copied < source.size()) {
+    const auto current = address + copied;
+    const auto shared_index = FindSharedMapping(current);
+    if (shared_index != shared_mappings_.size()) {
+      const auto& mapping = shared_mappings_[shared_index];
+      const auto mapping_offset = current - mapping.address;
+      const auto chunk = std::min<std::size_t>(
+          source.size() - copied,
+          static_cast<std::size_t>(mapping.size - mapping_offset));
+      if (!mapping.backing->Write(
+              mapping.backing_offset + mapping_offset,
+              source.subspan(copied, chunk))) {
+        return false;
+      }
+      copied += chunk;
+      continue;
+    }
+
+    const auto next = std::lower_bound(
+        shared_mappings_.begin(), shared_mappings_.end(), current,
+        [](const SharedMapping& mapping, std::uint64_t candidate) {
+          return mapping.address < candidate;
+        });
+    auto chunk = source.size() - copied;
+    if (next != shared_mappings_.end()) {
+      chunk = std::min<std::size_t>(
+          chunk, static_cast<std::size_t>(next->address - current));
+    }
+    const auto offset = OffsetOf(current);
+    std::copy_n(source.begin() + static_cast<std::ptrdiff_t>(copied), chunk,
+                bytes_.begin() + static_cast<std::ptrdiff_t>(offset));
+    copied += chunk;
+  }
+  return true;
+}
+
+bool GuestMemory::FillBytes(std::uint64_t address, std::uint64_t length,
+                            std::byte value) noexcept {
+  std::uint64_t filled = 0;
+  while (filled < length) {
+    const auto current = address + filled;
+    const auto shared_index = FindSharedMapping(current);
+    if (shared_index != shared_mappings_.size()) {
+      const auto& mapping = shared_mappings_[shared_index];
+      const auto mapping_offset = current - mapping.address;
+      const auto chunk =
+          std::min(length - filled, mapping.size - mapping_offset);
+      if (!mapping.backing->Fill(mapping.backing_offset + mapping_offset,
+                                 chunk, value)) {
+        return false;
+      }
+      filled += chunk;
+      continue;
+    }
+
+    const auto next = std::lower_bound(
+        shared_mappings_.begin(), shared_mappings_.end(), current,
+        [](const SharedMapping& mapping, std::uint64_t candidate) {
+          return mapping.address < candidate;
+        });
+    auto chunk = length - filled;
+    if (next != shared_mappings_.end()) {
+      chunk = std::min(chunk, next->address - current);
+    }
+    const auto offset = OffsetOf(current);
+    std::fill_n(bytes_.begin() + static_cast<std::ptrdiff_t>(offset),
+                static_cast<std::size_t>(chunk), value);
+    filled += chunk;
+  }
   return true;
 }
 
@@ -359,6 +533,25 @@ std::size_t GuestMemory::FindContainingRegion(
     return static_cast<std::size_t>(previous - regions_.begin());
   }
   return regions_.size();
+}
+
+std::size_t GuestMemory::FindSharedMapping(
+    std::uint64_t address) const noexcept {
+  const auto insertion = std::lower_bound(
+      shared_mappings_.begin(), shared_mappings_.end(), address,
+      [](const SharedMapping& mapping, std::uint64_t candidate) {
+        return mapping.address < candidate;
+      });
+  if (insertion != shared_mappings_.end() && insertion->address == address) {
+    return static_cast<std::size_t>(insertion - shared_mappings_.begin());
+  }
+  if (insertion == shared_mappings_.begin()) {
+    return shared_mappings_.size();
+  }
+  const auto previous = insertion - 1;
+  return address < previous->address + previous->size
+             ? static_cast<std::size_t>(previous - shared_mappings_.begin())
+             : shared_mappings_.size();
 }
 
 std::size_t GuestMemory::OffsetOf(std::uint64_t address) const noexcept {

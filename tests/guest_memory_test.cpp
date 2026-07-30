@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "core/memory/guest_memory.h"
+#include "core/memory/shared_memory_backing.h"
 
 namespace {
 
@@ -245,6 +246,65 @@ int main() {
         "remapped range exposed released bytes");
   Check(!mutable_regions.Unmap(0x3000, 0),
         "zero-length unmap succeeded");
+
+  auto shared_backing =
+      std::make_shared<kajps5::memory::SharedMemoryBacking>(0xc000);
+  GuestMemory shared(0x4000, 0x20000, GuestMemoryProtection::kNone);
+  const auto shared_protection = GuestMemoryProtection::kRead |
+                                 GuestMemoryProtection::kWrite;
+  Check(shared.MapShared(0x4000, 0xc000, shared_protection,
+                         shared_backing, 0) &&
+            shared.MapShared(0x14000, 0xc000, shared_protection,
+                             shared_backing, 0),
+        "shared guest aliases could not be mapped");
+  Check(!shared.MapShared(0xf000, 0x4000, shared_protection,
+                          shared_backing, 0) &&
+            !shared.MapShared(0x20000, 0x8000, shared_protection,
+                              shared_backing, 0x8000) &&
+            !shared.MapShared(0x10000, 0x4000, shared_protection,
+                              nullptr, 0),
+        "invalid shared guest mapping was accepted");
+  const std::array shared_input = {
+      std::byte{0x10}, std::byte{0x20}, std::byte{0x30}, std::byte{0x40},
+      std::byte{0x50}, std::byte{0x60}, std::byte{0x70}, std::byte{0x80}};
+  std::array<std::byte, shared_input.size()> shared_output{};
+  Check(shared.Write(0x7ffc, shared_input) &&
+            shared.Read(0x17ffc, shared_output) &&
+            shared_output == shared_input,
+        "shared guest aliases lost a cross-page write");
+  Check(shared.Fill(0x18000, 0x4000, std::byte{0x5a}) &&
+            shared.Read(0x8000, shared_output) &&
+            std::all_of(shared_output.begin(), shared_output.end(),
+                        [](std::byte value) {
+                          return value == std::byte{0x5a};
+                        }),
+        "shared guest fill did not reach its alias");
+  Check(shared.Unmap(0x8000, 0x4000) &&
+            shared.Map(0x8000, 0x4000, shared_protection) &&
+            shared.Read(0x8000, shared_output) &&
+            shared_output == std::array<std::byte, shared_input.size()>{},
+        "anonymous remap retained a removed shared alias");
+  const std::array suffix_input = {std::byte{0xa1}, std::byte{0xb2},
+                                   std::byte{0xc3}, std::byte{0xd4}};
+  std::array<std::byte, suffix_input.size()> suffix_output{};
+  Check(shared.Write(0x1c000, suffix_input) &&
+            shared.Read(0xc000, suffix_output) &&
+            suffix_output == suffix_input,
+        "partial unmap broke the remaining shared suffix");
+  const std::array first_page_tail = {
+      std::byte{0x10}, std::byte{0x20}, std::byte{0x30}, std::byte{0x40}};
+  std::array<std::byte, first_page_tail.size()> remapped_shared_output{};
+  Check(shared.Unmap(0x4000, 0x4000) &&
+            shared.MapShared(0x10000, 0x4000, shared_protection,
+                             shared_backing, 0) &&
+            shared.Read(0x13ffc, remapped_shared_output) &&
+            remapped_shared_output == first_page_tail,
+        "shared contents did not survive unmap and remap");
+  shared_backing->Clear(0, shared_backing->size());
+  shared_output.fill(std::byte{0xff});
+  Check(shared.Read(0x14000, shared_output) &&
+            shared_output == std::array<std::byte, shared_input.size()>{},
+        "cleared shared backing retained guest data");
 
   return failures == 0 ? 0 : 1;
 }
