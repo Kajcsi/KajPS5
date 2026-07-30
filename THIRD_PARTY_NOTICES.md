@@ -159,6 +159,11 @@ SharpEmu reference file states:
 
 `Copyright (C) 2026 SharpEmu Emulator Project`
 
+The `__cxa_pure_virtual` name and NID in `src/hle/libc_exports.cpp` are
+confirmed by pinned SharpEmu `scripts/ps5_names.txt` and
+`scripts/aerolib_catalog.py`. KajPS5 treats a call as a fatal guest error; it
+does not return a false success. No upstream handler source was copied.
+
 The process-time handlers in `src/hle/kernel_clock_exports.cpp` and
 `tests/hle_kernel_clock_exports_test.cpp` adapt the matching process-time,
 counter, and frequency behavior from the pinned KytyPS5

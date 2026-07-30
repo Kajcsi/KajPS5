@@ -162,5 +162,8 @@ int main() {
   Check(kajps5::hle::HleContextStatusName(
             HleContextStatus::kUnterminatedString) == "unterminated-string",
         "HLE context status name is unstable");
+  Check(kajps5::hle::HleContextStatusName(
+            HleContextStatus::kFatalGuestError) == "fatal-guest-error",
+        "fatal guest status name is unstable");
   return failures == 0 ? 0 : 1;
 }

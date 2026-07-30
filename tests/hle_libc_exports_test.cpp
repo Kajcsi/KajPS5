@@ -50,8 +50,8 @@ int main() {
   ExportRegistry registry;
   Check(kajps5::hle::RegisterLibcExports(registry, runtime.cxa_guards()) ==
             ExportRegistryStatus::kOk &&
-            registry.size() == 6,
-        "libc guard exports did not register atomically");
+            registry.size() == 8,
+        "libc exports did not register atomically");
 
   GuestMemory memory(0x1000, 0x100);
   constexpr std::uint64_t kGuardAddress = 0x1020;
@@ -64,6 +64,16 @@ int main() {
   Check(first && runtime.scheduler().SelectNext() == first.handle,
         "first guard thread did not start");
   const std::vector<std::string> libc_scope = {kajps5::hle::kLibcName};
+
+  HleCallContext pure_virtual(memory);
+  const auto pure_virtual_result = registry.Dispatch(
+      kajps5::hle::kCxaPureVirtualNid, libc_scope, pure_virtual);
+  Check(pure_virtual_result.status == ExportRegistryStatus::kOk &&
+            pure_virtual_result.handler_status ==
+                HleContextStatus::kFatalGuestError &&
+            !pure_virtual_result && !pure_virtual.return_written() &&
+            registry.Lookup(kajps5::hle::kCxaPureVirtualName, libc_scope),
+        "pure virtual call did not stop at the fatal guest boundary");
 
   HleCallContext acquire_first(memory);
   Check(acquire_first.SetRegister(HleRegister::kRdi, kGuardAddress),

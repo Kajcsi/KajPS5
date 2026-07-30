@@ -96,7 +96,7 @@ ExportRegistryStatus RegisterLibcExports(ExportRegistry& registry,
                                          kernel::CxaGuardService& guards) {
   auto* const guard_view = &guards;
   std::vector<HleExportDefinition> exports;
-  exports.reserve(6);
+  exports.reserve(8);
   AddAliases(exports, kCxaGuardAcquireName, kCxaGuardAcquireNid,
              [guard_view](HleCallContext& context) {
                return CxaGuardAcquire(context, *guard_view);
@@ -108,6 +108,10 @@ ExportRegistryStatus RegisterLibcExports(ExportRegistry& registry,
   AddAliases(exports, kCxaGuardAbortName, kCxaGuardAbortNid,
              [guard_view](HleCallContext& context) {
                return CompleteGuard(context, *guard_view, 0);
+             });
+  AddAliases(exports, kCxaPureVirtualName, kCxaPureVirtualNid,
+             [](HleCallContext&) {
+               return HleContextStatus::kFatalGuestError;
              });
   return registry.RegisterBatch(std::move(exports));
 }

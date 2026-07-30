@@ -19,6 +19,8 @@ inline constexpr auto kCxaGuardReleaseName = "__cxa_guard_release";
 inline constexpr auto kCxaGuardReleaseNid = "9rAeANT2tyE";
 inline constexpr auto kCxaGuardAbortName = "__cxa_guard_abort";
 inline constexpr auto kCxaGuardAbortNid = "2emaaluWzUw";
+inline constexpr auto kCxaPureVirtualName = "__cxa_pure_virtual";
+inline constexpr auto kCxaPureVirtualNid = "zr094EQ39Ww";
 
 [[nodiscard]] ExportRegistryStatus RegisterLibcExports(
     ExportRegistry& registry, kernel::CxaGuardService& guards);

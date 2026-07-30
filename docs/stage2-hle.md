@@ -57,6 +57,10 @@ Registration is atomic. A conflict removes the new page and keeps the earlier
 registry state. The normal relocation pass can then bind these data imports to
 real guest addresses.
 
+The libc registry also recognizes `__cxa_pure_virtual`. Calling it returns a
+fatal guest status and never reports success or a return value. A later guest
+executor can use that status to end the process cleanly.
+
 The first `libc` batch implements `__cxa_guard_acquire`,
 `__cxa_guard_release`, and `__cxa_guard_abort`. It preserves the upper six
 bytes of each guest guard word. One guest thread owns initialization, a

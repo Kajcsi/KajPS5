@@ -45,6 +45,7 @@ enum class HleContextStatus {
   kMemoryFault,
   kUnterminatedString,
   kBlocked,
+  kFatalGuestError,
 };
 
 struct HleStringResult {
