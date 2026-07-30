@@ -42,6 +42,8 @@
 - [x] Connect checked import lookup to standard relocation targets.
 - [x] Resolve scoped PS5 NID symbols through parsed module and library IDs.
 - [x] Add bounded stable diagnostics for unresolved imports.
+- [x] Add deterministic dependency order for supplied module initializers.
+- [x] Apply checked TLS module-ID relocations after TLS registration.
 - [x] Add a platform-neutral checked HLE call context.
 - [x] Add deterministic library-scoped HLE handler dispatch.
 - [x] Register consistent libkernel process-time handlers.

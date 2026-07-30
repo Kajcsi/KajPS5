@@ -51,11 +51,12 @@ The relocation pass validates its full plan before writing memory. It applies
 `R_X86_64_RELATIVE` and `R_X86_64_64`, skips no-operation entries, and counts
 unresolved `R_X86_64_GLOB_DAT` and `R_X86_64_JUMP_SLOT` imports. Absolute
 relocations use defined symbols, resolved imports, or zero for an unresolved
-weak symbol. Unsupported types, invalid relative symbols, target overflow,
-and unmapped writes fail. The HLE layer resolves symbol relocations by ordered
-needed-library name. Relocation traces encode untrusted names as hex, report a
-rejected numeric relocation type, and show at most 32 records with 128 input
-bytes per name.
+weak symbol. `R_X86_64_DTPMOD64` writes a checked nonzero TLS module ID after
+TLS registration. Unsupported types, missing TLS identity, invalid relative
+symbols, target overflow, and unmapped writes fail. The HLE layer resolves
+symbol relocations by ordered needed-library name. Relocation traces encode
+untrusted names as hex, report a rejected numeric relocation type, and show at
+most 32 records with 128 input bytes per name.
 
 Protection and unmap changes are transactional. The full requested range must
 be mapped before its metadata changes. Protection can split and merge regions
@@ -116,6 +117,13 @@ parameter segment and one TLS segment are accepted. Process parameters must be
 inside loaded memory. The initialized TLS bytes must be loaded, while the
 larger zero-filled TLS area remains per-thread storage and does not need its
 own file-backed load range.
+
+The module planner accepts already-parsed module descriptions. It matches file
+and shared-object names without case sensitivity, starts available dependencies
+first, reports missing dependencies once, and preserves input order for a
+remaining cycle. It does not scan directories or assume that firmware is
+available. A caller can combine legally supplied modules with the same HLE
+registry used for unresolved system libraries.
 
 The separate controlled native tests are documented in `stage2-cpu.md` and
 `stage2-hle.md`.

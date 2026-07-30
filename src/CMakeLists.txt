@@ -22,6 +22,7 @@ add_library(kajps5_core STATIC
   loader/elf.cpp
   loader/elf_trace.cpp
   loader/launch_metadata.cpp
+  loader/module_plan.cpp
   loader/relocation_trace.cpp
   loader/relocator.cpp
 )

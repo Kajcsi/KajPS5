@@ -20,6 +20,7 @@ constexpr std::uint32_t kRelocationAbsolute64 = 1;
 constexpr std::uint32_t kRelocationGlobDat = 6;
 constexpr std::uint32_t kRelocationJumpSlot = 7;
 constexpr std::uint32_t kRelocationRelative = 8;
+constexpr std::uint32_t kRelocationTlsModuleId = 16;
 constexpr std::uint8_t kSymbolBindingWeak = 2;
 constexpr std::uint16_t kUndefinedSectionIndex = 0;
 
@@ -107,6 +108,7 @@ RelocationStatus PlanTable(const std::vector<ElfRelaEntry>& entries,
                            const memory::GuestMemory& memory,
                            const ImportResolver* resolver,
                            std::uint64_t load_bias,
+                           std::uint64_t tls_module_id,
                            std::vector<PlannedRelocation>& planned,
                            std::size_t& resolved_import_count,
                            std::vector<UnresolvedImport>& unresolved_imports,
@@ -118,6 +120,7 @@ RelocationStatus PlanTable(const std::vector<ElfRelaEntry>& entries,
       case kRelocationAbsolute64:
       case kRelocationGlobDat:
       case kRelocationJumpSlot: break;
+      case kRelocationTlsModuleId: break;
       case kRelocationRelative:
         if (entry.symbol() != 0) {
           return RelocationStatus::kInvalidRelativeSymbol;
@@ -135,6 +138,20 @@ RelocationStatus PlanTable(const std::vector<ElfRelaEntry>& entries,
     const auto target = load_bias + entry.offset;
     if (!memory.IsMapped(target, sizeof(std::uint64_t))) {
       return RelocationStatus::kTargetNotMapped;
+    }
+
+    if (type == kRelocationTlsModuleId) {
+      if (tls_module_id == 0) {
+        return RelocationStatus::kMissingTlsModuleId;
+      }
+      PlannedRelocation relocation;
+      relocation.address = target;
+      for (std::size_t index = 0; index < relocation.value.size(); ++index) {
+        relocation.value[index] = static_cast<std::byte>(
+            (tls_module_id >> (index * 8U)) & 0xffU);
+      }
+      planned.push_back(relocation);
+      continue;
     }
 
     if (type == kRelocationAbsolute64 || type == kRelocationGlobDat ||
@@ -228,7 +245,8 @@ RelocationStatus PlanTable(const std::vector<ElfRelaEntry>& entries,
 RelocationResult ApplyRelocationsInternal(const ElfMetadata& metadata,
                                           memory::GuestMemory& memory,
                                           const ImportResolver* resolver,
-                                          std::uint64_t load_bias) {
+                                          std::uint64_t load_bias,
+                                          std::uint64_t tls_module_id) {
   std::vector<PlannedRelocation> planned;
   planned.reserve(metadata.dynamic_info.relocations.size() +
                   metadata.dynamic_info.plt_relocations.size());
@@ -237,12 +255,14 @@ RelocationResult ApplyRelocationsInternal(const ElfMetadata& metadata,
   std::optional<std::uint32_t> unsupported_type;
 
   auto status = PlanTable(metadata.dynamic_info.relocations, metadata, memory,
-                          resolver, load_bias, planned, resolved_import_count,
-                          unresolved_imports, unsupported_type);
+                          resolver, load_bias, tls_module_id, planned,
+                          resolved_import_count, unresolved_imports,
+                          unsupported_type);
   if (status == RelocationStatus::kOk) {
     status = PlanTable(metadata.dynamic_info.plt_relocations, metadata, memory,
-                       resolver, load_bias, planned, resolved_import_count,
-                       unresolved_imports, unsupported_type);
+                       resolver, load_bias, tls_module_id, planned,
+                       resolved_import_count, unresolved_imports,
+                       unsupported_type);
   }
   if (status != RelocationStatus::kOk) {
     RelocationResult result{status, 0, unresolved_imports.size(),
@@ -269,15 +289,19 @@ RelocationResult ApplyRelocationsInternal(const ElfMetadata& metadata,
 
 RelocationResult ApplyRelativeRelocations(const ElfMetadata& metadata,
                                           memory::GuestMemory& memory,
-                                          std::uint64_t load_bias) {
-  return ApplyRelocationsInternal(metadata, memory, nullptr, load_bias);
+                                          std::uint64_t load_bias,
+                                          std::uint64_t tls_module_id) {
+  return ApplyRelocationsInternal(metadata, memory, nullptr, load_bias,
+                                  tls_module_id);
 }
 
 RelocationResult ApplyRelocations(const ElfMetadata& metadata,
                                   memory::GuestMemory& memory,
                                   const ImportResolver& resolver,
-                                  std::uint64_t load_bias) {
-  return ApplyRelocationsInternal(metadata, memory, &resolver, load_bias);
+                                  std::uint64_t load_bias,
+                                  std::uint64_t tls_module_id) {
+  return ApplyRelocationsInternal(metadata, memory, &resolver, load_bias,
+                                  tls_module_id);
 }
 
 std::string_view RelocationStatusName(RelocationStatus status) noexcept {
@@ -297,6 +321,8 @@ std::string_view RelocationStatusName(RelocationStatus status) noexcept {
       return "empty-import-symbol";
     case RelocationStatus::kInvalidResolvedAddress:
       return "invalid-resolved-address";
+    case RelocationStatus::kMissingTlsModuleId:
+      return "missing-tls-module-id";
   }
   return "unknown";
 }

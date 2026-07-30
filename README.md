@@ -28,8 +28,8 @@ The current core includes:
   also plans relocations, reports unresolved imports, and validates the entry
   point, process parameters, and TLS template without running code.
 - Library-scoped PS5 NID import linking and HLE dispatch, with bounded
-  diagnostics for unresolved symbols and checked guest register and memory
-  access.
+  diagnostics for unresolved symbols, deterministic dependency order for
+  supplied modules, and checked guest register and memory access.
 - Typed kernel handles and one cooperative scheduler for ready, running,
   blocked, and exited guest threads.
 - Event flags, semaphores, user-event queues, portable clocks, guest memory

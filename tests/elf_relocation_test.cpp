@@ -201,6 +201,23 @@ int main() {
   Check(transactional_memory.Read(kTargetAddress, unchanged) &&
             unchanged == std::array<std::byte, 8>{},
         "failed relocation pass changed guest memory");
+
+  kajps5::loader::ElfMetadata tls_metadata;
+  tls_metadata.dynamic_info.relocations.push_back({kTargetAddress, 16, 0});
+  Check(kajps5::loader::ApplyRelativeRelocations(
+            tls_metadata, transactional_memory)
+            .status == kajps5::loader::RelocationStatus::kMissingTlsModuleId,
+        "TLS module relocation accepted a missing module ID");
+  const auto tls_relocated = kajps5::loader::ApplyRelativeRelocations(
+      tls_metadata, transactional_memory, 0, 7);
+  std::array<std::byte, 8> tls_value{};
+  const std::array expected_tls_value = {
+      std::byte{7}, std::byte{0}, std::byte{0}, std::byte{0},
+      std::byte{0}, std::byte{0}, std::byte{0}, std::byte{0}};
+  Check(tls_relocated && tls_relocated.applied_count == 1 &&
+            transactional_memory.Read(kTargetAddress, tls_value) &&
+            tls_value == expected_tls_value,
+        "TLS module relocation wrote the wrong module ID");
   Check(kajps5::loader::ApplyRelativeRelocations(
             loaded.metadata, memory,
             std::numeric_limits<std::uint64_t>::max())

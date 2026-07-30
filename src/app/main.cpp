@@ -104,17 +104,6 @@ int TraceExecutableFile(const char* path) {
               << "load.zero_filled_bytes=" << loaded.zero_filled_bytes
               << '\n';
 
-    const kajps5::hle::ImportRegistry empty_registry;
-    const auto relocated = kajps5::loader::ApplyRelocations(
-        loaded.metadata, memory, empty_registry);
-    std::cout << kajps5::loader::FormatRelocationTrace(relocated);
-    if (!relocated) {
-      std::cerr << "Executable relocation check failed: "
-                << kajps5::loader::RelocationStatusName(relocated.status)
-                << '\n';
-      return 4;
-    }
-
     const auto launch =
         kajps5::loader::AnalyzeLaunchMetadata(loaded.metadata);
     std::cout << kajps5::loader::FormatLaunchMetadataTrace(launch);
@@ -123,6 +112,18 @@ int TraceExecutableFile(const char* path) {
                 << kajps5::loader::LaunchMetadataStatusName(launch.status)
                 << '\n';
       return 5;
+    }
+
+    const kajps5::hle::ImportRegistry empty_registry;
+    const auto tls_module_id = launch.metadata.tls.has_value() ? 1U : 0U;
+    const auto relocated = kajps5::loader::ApplyRelocations(
+        loaded.metadata, memory, empty_registry, 0, tls_module_id);
+    std::cout << kajps5::loader::FormatRelocationTrace(relocated);
+    if (!relocated) {
+      std::cerr << "Executable relocation check failed: "
+                << kajps5::loader::RelocationStatusName(relocated.status)
+                << '\n';
+      return 4;
     }
   } catch (const std::exception& exception) {
     std::cerr << "Executable load check failed: " << exception.what() << '\n';

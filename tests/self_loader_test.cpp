@@ -197,7 +197,7 @@ std::vector<std::byte> MakeLinkedSelf() {
   constexpr std::size_t strings_size = 0x60;
   constexpr std::size_t symbols_relative = 0x240;
   constexpr std::size_t rela_relative = 0x280;
-  constexpr std::size_t jump_rela_relative = 0x298;
+  constexpr std::size_t jump_rela_relative = 0x2b0;
   constexpr std::size_t targets_relative = 0x300;
 
   std::vector<std::byte> image(kLinkedPayloadOffset + kLinkedPayloadSize);
@@ -292,7 +292,7 @@ std::vector<std::byte> MakeLinkedSelf() {
   WriteDynamic(image, dynamic, 3, kTagSceSymbolTableSize, 48);
   WriteDynamic(image, dynamic, 4, kTagSceRela,
                kLinkedLoadAddress + rela_relative);
-  WriteDynamic(image, dynamic, 5, kTagSceRelaSize, 24);
+  WriteDynamic(image, dynamic, 5, kTagSceRelaSize, 48);
   WriteDynamic(image, dynamic, 6, kTagSceJumpRela,
                kLinkedLoadAddress + jump_rela_relative);
   WriteDynamic(image, dynamic, 7, kTagSceJumpRelaSize, 24);
@@ -315,6 +315,8 @@ std::vector<std::byte> MakeLinkedSelf() {
   Write64(image, rela, kLinkedLoadAddress + targets_relative);
   Write64(image, rela + 8, 8);
   Write64(image, rela + 16, 0x55);
+  Write64(image, rela + 24, kLinkedLoadAddress + targets_relative + 0x10);
+  Write64(image, rela + 32, 16);
 
   const auto jump_rela = kLinkedPayloadOffset + jump_rela_relative;
   Write64(image, jump_rela, kLinkedLoadAddress + targets_relative + 8);
@@ -384,17 +386,19 @@ int main() {
             kajps5::hle::ImportRegistryStatus::kOk,
         "synthetic SELF import registration failed");
   const auto linked = kajps5::loader::ApplyRelocations(
-      linked_load.metadata, linked_memory, registry);
-  Check(linked && linked.applied_count == 2 &&
+      linked_load.metadata, linked_memory, registry, 0, 1);
+  Check(linked && linked.applied_count == 3 &&
             linked.resolved_import_count == 1 &&
             linked.unresolved_import_count == 0,
         "synthetic PS5 SELF did not complete checked relocation linking");
-  std::array<std::byte, 16> linked_values{};
+  std::array<std::byte, 24> linked_values{};
   const std::array expected_linked_values = {
       std::byte{0x55}, std::byte{0},    std::byte{0},    std::byte{0},
       std::byte{0},    std::byte{0},    std::byte{0},    std::byte{0},
       std::byte{0x11}, std::byte{0x22}, std::byte{0x33}, std::byte{0x44},
-      std::byte{0x55}, std::byte{0x66}, std::byte{0x77}, std::byte{0x88}};
+      std::byte{0x55}, std::byte{0x66}, std::byte{0x77}, std::byte{0x88},
+      std::byte{1},    std::byte{0},    std::byte{0},    std::byte{0},
+      std::byte{0},    std::byte{0},    std::byte{0},    std::byte{0}};
   Check(linked_memory.Read(kLinkedLoadAddress + 0x300, linked_values) &&
             linked_values == expected_linked_values,
         "synthetic PS5 SELF relocation values are incorrect");
