@@ -58,7 +58,7 @@ clears the low guard state and also wakes waiters. A blocked handler returns a
 distinct HLE status; the general executor still needs a continuation path to
 resume that call.
 
-The first `libKernel` handler batch exposes
+The first `libkernel` handler batch exposes
 `sceKernelGetProcessTime`, `sceKernelGetProcessTimeCounter`, and
 `sceKernelGetProcessTimeCounterFrequency`. All three use the shared kernel
 clock service, so the microsecond value, nanosecond counter, and one-gigahertz

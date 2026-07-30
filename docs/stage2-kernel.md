@@ -102,7 +102,7 @@ The tests capture the behavior below.
   the injected source is valid.
 - Process time starts with the kernel runtime. Its nanosecond counter reports a
   matching one-gigahertz frequency.
-- The first `libKernel` clock handlers expose process microseconds, that same
+- The first `libkernel` clock handlers expose process microseconds, that same
   counter, and its frequency by readable name and confirmed NID.
 - `sceKernelClockGettime` and `sceKernelGettimeofday` write their complete
   output structures atomically. Invalid clocks and bad guest pointers return

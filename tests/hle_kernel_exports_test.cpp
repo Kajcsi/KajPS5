@@ -81,7 +81,8 @@ int main() {
 
   GuestMemory memory(0x1000, 0x1000);
   HleCallContext clock_context(memory);
-  const std::vector<std::string> libraries = {kajps5::hle::kLibKernelName};
+  // PS5 ELF metadata uses this exact lowercase library name.
+  const std::vector<std::string> libraries = {"libkernel"};
   HleCallContext direct_memory_context(memory);
   Check(registry.Dispatch(kajps5::hle::kKernelGetDirectMemorySizeNid,
                           libraries, direct_memory_context) &&

@@ -117,6 +117,10 @@ behavior in those pinned projects. The ordered resolver in
 exports and then uses the SharpEmu-style HLE registry as a fallback. No thunk
 or resolver source was copied.
 
+The canonical `libkernel` registry name in `src/hle/kernel_exports.h` matches
+the library version declared by pinned KytyPS5 in `src/libs/libKernel.cpp`.
+No upstream registry source was copied.
+
 The bounded trace in `src/loader/relocation_trace.cpp` and
 `tests/relocation_trace_test.cpp` adapts SharpEmu's focus on structured,
 bounded import diagnostics. No diagnostic source was copied.

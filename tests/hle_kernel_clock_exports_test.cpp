@@ -199,7 +199,7 @@ int main() {
             ExportRegistryStatus::kAlreadyExists &&
             registry.size() == 10,
         "duplicate clock export batch changed the registry");
-  const std::vector<std::string> wrong_library = {"libkernel"};
+  const std::vector<std::string> wrong_library = {"libKernel"};
   Check(registry
             .Dispatch(kajps5::hle::kKernelGetProcessTimeName,
                       wrong_library, context)
