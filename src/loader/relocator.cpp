@@ -1,9 +1,11 @@
 // Copyright (C) 2026 KajPS5 contributors
+// Architecture reference: KytyPS5
 // Behavior reference: Copyright (C) 2026 SharpEmu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "loader/relocator.h"
 
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <limits>
@@ -22,6 +24,80 @@ struct PlannedRelocation {
   std::uint64_t address = 0;
   std::array<std::byte, sizeof(std::uint64_t)> value{};
 };
+
+struct ImportReference {
+  std::string_view nid;
+  const ElfLibraryIdentity* library = nullptr;
+  bool valid = false;
+};
+
+std::optional<std::uint16_t> DecodeSceId(std::string_view value) noexcept {
+  constexpr std::string_view alphabet =
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+-";
+  if (value.empty() || value.size() > 3) {
+    return std::nullopt;
+  }
+
+  std::uint32_t decoded = 0;
+  for (const auto character : value) {
+    const auto digit = alphabet.find(character);
+    if (digit == std::string_view::npos) {
+      return std::nullopt;
+    }
+    decoded = (decoded << 6U) | static_cast<std::uint32_t>(digit);
+  }
+  if (decoded > std::numeric_limits<std::uint16_t>::max() ||
+      (value.size() == 2 && decoded < 0x40U) ||
+      (value.size() == 3 && decoded < 0x1000U)) {
+    return std::nullopt;
+  }
+  return static_cast<std::uint16_t>(decoded);
+}
+
+template <typename Identity>
+const Identity* FindIdentity(std::uint16_t id,
+                             const std::vector<Identity>& imports,
+                             const std::vector<Identity>& exports) noexcept {
+  const auto find = [id](const std::vector<Identity>& identities) {
+    const auto identity = std::find_if(
+        identities.begin(), identities.end(),
+        [id](const Identity& candidate) { return candidate.id == id; });
+    return identity == identities.end() ? nullptr : &*identity;
+  };
+  if (const auto* identity = find(imports); identity != nullptr) {
+    return identity;
+  }
+  return find(exports);
+}
+
+ImportReference ParseImportReference(const ElfMetadata& metadata,
+                                     std::string_view symbol) noexcept {
+  const auto first_separator = symbol.find('#');
+  if (first_separator == std::string_view::npos) {
+    return {symbol, nullptr, !symbol.empty()};
+  }
+
+  const auto nid = symbol.substr(0, first_separator);
+  const auto second_separator = symbol.find('#', first_separator + 1);
+  if (second_separator == std::string_view::npos ||
+      symbol.find('#', second_separator + 1) != std::string_view::npos) {
+    return {nid, nullptr, false};
+  }
+  const auto library_id = DecodeSceId(symbol.substr(
+      first_separator + 1, second_separator - first_separator - 1));
+  const auto module_id = DecodeSceId(symbol.substr(second_separator + 1));
+  if (!library_id.has_value() || !module_id.has_value()) {
+    return {nid, nullptr, false};
+  }
+
+  const auto* library = FindIdentity(
+      *library_id, metadata.dynamic_info.import_libraries,
+      metadata.dynamic_info.export_libraries);
+  const auto* module = FindIdentity(
+      *module_id, metadata.dynamic_info.import_modules,
+      metadata.dynamic_info.export_modules);
+  return {nid, library, library != nullptr && module != nullptr};
+}
 
 RelocationStatus PlanTable(const std::vector<ElfRelaEntry>& entries,
                            const ElfMetadata& metadata,
@@ -71,11 +147,24 @@ RelocationStatus PlanTable(const std::vector<ElfRelaEntry>& entries,
         return RelocationStatus::kInvalidSymbolIndex;
       }
       const auto& symbol = metadata.dynamic_info.symbols[entry.symbol()];
-      if (symbol.name.empty()) {
+      const auto reference = ParseImportReference(metadata, symbol.name);
+      if (reference.nid.empty()) {
         return RelocationStatus::kEmptyImportSymbol;
       }
-      const auto resolved = resolver->ResolveImport(
-          symbol.name, metadata.dynamic_info.needed_libraries);
+      if (!reference.valid) {
+        unresolved_imports.push_back(
+            {entry.symbol(), type, target, symbol.name});
+        continue;
+      }
+      std::optional<std::uint64_t> resolved;
+      if (reference.library != nullptr) {
+        const std::span<const std::string> library_scope(
+            &reference.library->name, 1);
+        resolved = resolver->ResolveImport(reference.nid, library_scope);
+      } else {
+        resolved = resolver->ResolveImport(
+            reference.nid, metadata.dynamic_info.needed_libraries);
+      }
       if (!resolved.has_value()) {
         unresolved_imports.push_back(
             {entry.symbol(), type, target, symbol.name});

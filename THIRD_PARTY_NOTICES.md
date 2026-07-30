@@ -72,9 +72,13 @@ No upstream executor or host-memory source was copied.
 The library-scoped HLE import lookup and relocation connection in
 `src/hle/import_registry.cpp`, `tests/hle_import_registry_test.cpp`, and
 `tests/hle_import_link_test.cpp` were based on behavior observed in the pinned
-KytyPS5 and SharpEmu import resolvers. The test-only HLE call path in
-`tests/hle_public_guest_test.cpp` also follows the import thunk and dispatch
-behavior in those pinned projects. No thunk source was copied.
+KytyPS5 and SharpEmu import resolvers. The scoped PS5 symbol handling in
+`src/loader/relocator.cpp` follows KytyPS5's compact library and module ID
+matching in `src/loader/runtimeLinker.cpp` and adapts SharpEmu's NID extraction
+from `src/SharpEmu.Core/Loader/SelfLoader.cs` at the pinned commits. The
+test-only HLE call path in `tests/hle_public_guest_test.cpp` also follows the
+import thunk and dispatch behavior in those pinned projects. No thunk or
+resolver source was copied.
 
 The bounded trace in `src/loader/relocation_trace.cpp` and
 `tests/relocation_trace_test.cpp` adapts SharpEmu's focus on structured,

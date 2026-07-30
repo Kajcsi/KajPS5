@@ -24,8 +24,9 @@ The current core includes:
 - An ELF64 loader that checks program headers, standard and PS5 dynamic-link
   metadata, x86-64 `RELA` relocations, and symbols before it changes guest
   memory. It preserves each `PT_LOAD` segment's read, write, and execute flags.
-- Library-scoped import linking and HLE dispatch, with bounded diagnostics for
-  unresolved symbols and checked guest register and memory access.
+- Library-scoped PS5 NID import linking and HLE dispatch, with bounded
+  diagnostics for unresolved symbols and checked guest register and memory
+  access.
 - Typed kernel handles and one cooperative scheduler for ready, running,
   blocked, and exited guest threads.
 - Event flags, semaphores, user-event queues, portable clocks, guest memory

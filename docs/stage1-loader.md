@@ -78,10 +78,17 @@ keeps its numeric ID, version, and checked name from the SCE string table. Both
 known tag generations are accepted. The stable trace reports the string-table
 source and import and export counts without printing untrusted names.
 
+Import relocations recognize the PS5 `NID#library#module` symbol form. The
+linker decodes the compact IDs, requires both IDs to exist in the parsed
+metadata, extracts the NID as SharpEmu does, and limits lookup to the selected
+library. A malformed or unknown scope remains unresolved and cannot fall back
+to an unrelated HLE library.
+
 Synthetic tests cover SCE precedence, size-based symbols, relocations,
 module and library identities, missing and repeated dynlib-data segments,
 truncated ranges, and invalid table and name offsets. No fixture contains
-proprietary data.
+proprietary data. The valid fixture also runs through checked guest loading,
+scoped NID resolution, and transactional relocation writes.
 
 This milestone does not parse SELF containers. The separate controlled native
 tests are documented in `stage2-cpu.md` and `stage2-hle.md`.

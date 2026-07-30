@@ -3,6 +3,7 @@
 // Behavior reference: Copyright (C) 2026 SharpEmu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
@@ -11,8 +12,10 @@
 #include <utility>
 #include <vector>
 
+#include "hle/import_registry.h"
 #include "loader/elf.h"
 #include "loader/elf_trace.h"
+#include "loader/relocator.h"
 
 namespace {
 
@@ -185,7 +188,7 @@ std::vector<std::byte> MakeSceDynamicElf() {
   WriteString(image, 28, "exportModule");
   WriteString(image, 41, "importLibrary");
   WriteString(image, 55, "exportLibrary");
-  WriteString(image, 69, "symbolNid");
+  WriteString(image, 69, "open#BER#BI0");
 
   const auto symbol = kSceDataOffset + kSymbolTableOffset + 24;
   Write32(image, symbol, 69);
@@ -213,7 +216,9 @@ void CheckError(std::vector<std::byte> image, kajps5::loader::ElfError expected,
 int main() {
   using kajps5::loader::ElfDynamicDataSource;
   using kajps5::loader::ElfError;
+  using kajps5::loader::LoadElf64;
   using kajps5::loader::ParseElf64;
+  using kajps5::memory::GuestMemory;
 
   const auto image = MakeSceDynamicElf();
   const auto parsed = ParseElf64(image);
@@ -248,7 +253,7 @@ int main() {
             info.export_libraries[0].version == 0x0405 &&
             info.export_libraries[0].name == "exportLibrary",
         "the exported library identity is incorrect");
-  Check(info.symbols.size() == 2 && info.symbols[1].name == "symbolNid",
+  Check(info.symbols.size() == 2 && info.symbols[1].name == "open#BER#BI0",
         "the size-based SCE symbol table is incorrect");
   Check(info.relocations.size() == 1 && info.relocations[0].type() == 8,
         "the SCE relocation table is incorrect");
@@ -263,6 +268,40 @@ int main() {
             trace.find("elf.import_libraries=1\n") != std::string::npos &&
             trace.find("elf.export_libraries=1\n") != std::string::npos,
         "the SCE metadata summary is missing from the stable trace");
+
+  GuestMemory guest_memory(
+      kLoadAddress, kLoadSize,
+      kajps5::memory::GuestMemoryProtection::kNone);
+  const auto loaded = LoadElf64(image, guest_memory);
+  if (!loaded) {
+    std::cerr << "elf_sce_dynamic_test: load error: "
+              << kajps5::loader::ElfErrorName(loaded.error) << '\n';
+  }
+  Check(static_cast<bool>(loaded), "valid SCE ELF did not load");
+  kajps5::hle::ImportRegistry registry;
+  Check(registry.Register("importLibrary", "open", 0x8877665544332211) ==
+            kajps5::hle::ImportRegistryStatus::kOk,
+        "scoped SCE import registration failed");
+  const auto linked =
+      kajps5::loader::ApplyRelocations(loaded.metadata, guest_memory, registry);
+  Check(linked && linked.applied_count == 2 &&
+            linked.resolved_import_count == 1 &&
+            linked.unresolved_import_count == 0,
+        "parsed SCE import metadata did not reach relocation linking");
+  std::array<std::byte, 8> relative_value{};
+  std::array<std::byte, 8> import_value{};
+  const std::array expected_relative = {
+      std::byte{0x20}, std::byte{0}, std::byte{0}, std::byte{0},
+      std::byte{0},    std::byte{0}, std::byte{0}, std::byte{0}};
+  const std::array expected_import = {
+      std::byte{0x11}, std::byte{0x22}, std::byte{0x33}, std::byte{0x44},
+      std::byte{0x55}, std::byte{0x66}, std::byte{0x77}, std::byte{0x88}};
+  Check(guest_memory.Read(kLoadAddress + 0x10, relative_value) &&
+            relative_value == expected_relative,
+        "parsed SCE relative relocation wrote the wrong value");
+  Check(guest_memory.Read(kLoadAddress + 0x18, import_value) &&
+            import_value == expected_import,
+        "parsed SCE import relocation wrote the wrong value");
 
   auto missing_data = image;
   Write32(missing_data, kProgramHeaderOffset + kProgramHeaderSize, 0);

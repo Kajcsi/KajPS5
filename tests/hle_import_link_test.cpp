@@ -1,4 +1,5 @@
 // Copyright (C) 2026 KajPS5 contributors
+// Architecture reference: KytyPS5
 // Behavior reference: Copyright (C) 2026 SharpEmu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -32,6 +33,19 @@ kajps5::loader::ElfMetadata MakeImportMetadata() {
       {0x1000, (std::uint64_t{1} << 32U) | 6U, 0});
   metadata.dynamic_info.plt_relocations.push_back(
       {0x1008, (std::uint64_t{1} << 32U) | 7U, 0});
+  return metadata;
+}
+
+kajps5::loader::ElfMetadata MakeSceImportMetadata(std::string symbol) {
+  kajps5::loader::ElfMetadata metadata;
+  metadata.dynamic_info.import_libraries.push_back(
+      {0x1234, 0x0100, "libkernel"});
+  metadata.dynamic_info.import_modules.push_back(
+      {0x0040, 1, 2, "kernelModule"});
+  metadata.dynamic_info.symbols.resize(2);
+  metadata.dynamic_info.symbols[1].name = std::move(symbol);
+  metadata.dynamic_info.relocations.push_back(
+      {0x3000, (std::uint64_t{1} << 32U) | 6U, 0});
   return metadata;
 }
 
@@ -112,6 +126,45 @@ int main() {
   Check(transactional_memory.Read(0x1000, unchanged) &&
             unchanged == std::array<std::byte, 16>{},
         "failed import link changed guest memory");
+
+  ImportRegistry sce_registry;
+  Check(sce_registry.Register("libkernel", "open", 0x8877665544332211) ==
+            ImportRegistryStatus::kOk,
+        "SCE import registration failed");
+  GuestMemory sce_memory(0x3000, 8);
+  const auto sce_linked = ApplyRelocations(
+      MakeSceImportMetadata("open#BI0#BA"), sce_memory, sce_registry);
+  Check(sce_linked && sce_linked.applied_count == 1 &&
+            sce_linked.resolved_import_count == 1 &&
+            sce_linked.unresolved_import_count == 0,
+        "scoped SCE import was not linked");
+  std::array<std::byte, 8> sce_value{};
+  const std::array expected_sce_value = {
+      std::byte{0x11}, std::byte{0x22}, std::byte{0x33}, std::byte{0x44},
+      std::byte{0x55}, std::byte{0x66}, std::byte{0x77}, std::byte{0x88}};
+  Check(sce_memory.Read(0x3000, sce_value) && sce_value == expected_sce_value,
+        "scoped SCE import wrote the wrong address");
+
+  for (const auto malformed : {"open#A#BA", "open#AI0#BA",
+                               "open#BI0#A", "open#BI0#B!",
+                               "open#BI0#BA#extra"}) {
+    GuestMemory rejected_memory(0x3000, 8);
+    const auto rejected = ApplyRelocations(
+        MakeSceImportMetadata(malformed), rejected_memory, sce_registry);
+    Check(rejected && rejected.applied_count == 0 &&
+              rejected.resolved_import_count == 0 &&
+              rejected.unresolved_import_count == 1,
+          "invalid SCE import scope escaped metadata validation");
+    Check(rejected_memory.Read(0x3000, sce_value) &&
+              sce_value == std::array<std::byte, 8>{},
+          "invalid SCE import scope changed guest memory");
+  }
+
+  GuestMemory empty_nid_memory(0x3000, 8);
+  Check(ApplyRelocations(MakeSceImportMetadata("#BI0#BA"), empty_nid_memory,
+                         sce_registry)
+            .status == RelocationStatus::kEmptyImportSymbol,
+        "an empty SCE NID was accepted");
 
   Check(kajps5::loader::RelocationStatusName(
             RelocationStatus::kInvalidSymbolIndex) == "invalid-symbol-index",

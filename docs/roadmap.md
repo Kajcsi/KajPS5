@@ -36,6 +36,7 @@
 - [x] Add deterministic thread-exit joins.
 - [x] Add deterministic library-scoped HLE import lookup.
 - [x] Connect checked import lookup to standard relocation targets.
+- [x] Resolve scoped PS5 NID symbols through parsed module and library IDs.
 - [x] Add bounded stable diagnostics for unresolved imports.
 - [x] Add a platform-neutral checked HLE call context.
 - [x] Add deterministic library-scoped HLE handler dispatch.
