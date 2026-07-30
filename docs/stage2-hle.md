@@ -63,3 +63,11 @@ the released bytes. `getpagesize` reports the same 16 KiB size.
 `sceKernelQueryMemoryProtection` returns the canonical start, exclusive end,
 and full CPU/GPU protection mask. It checks every optional output before
 writing any of them.
+
+`sceKernelMapFlexibleMemory` and its named variants map 16 KiB-aligned ranges
+inside the same guest address space. A nonfixed request uses the input address
+as a search hint and returns the first aligned gap. A zero hint tries the PS5
+default window, then the available guest range. Fixed mappings require an
+aligned free range; they never replace an existing mapping. The handler checks
+the output pointer, flags, protection, size, and optional 31-byte name before
+mapping. A rejected request does not change the range table or output value.

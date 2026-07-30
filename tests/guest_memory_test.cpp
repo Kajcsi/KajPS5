@@ -120,6 +120,16 @@ int main() {
   Check(!mapped.Map(0x201c, 4,
                     static_cast<GuestMemoryProtection>(0x80)),
         "mapping accepted unknown protection bits");
+  Check(mapped.FindUnmappedRange(0x2000, 4, 4) == 0x200c,
+        "first-fit search missed the first aligned gap");
+  Check(mapped.FindUnmappedRange(0x200d, 4, 4) == 0x201c,
+        "first-fit search did not realign after a mapped range");
+  Check(!mapped.FindUnmappedRange(0x2000, 8, 3).has_value() &&
+            !mapped.FindUnmappedRange(0x2000, 0, 4).has_value() &&
+            !mapped.FindUnmappedRange(
+                 std::numeric_limits<std::uint64_t>::max(), 4, 8)
+                 .has_value(),
+        "first-fit search accepted invalid or overflowing input");
   const auto queried_region = mapped.QueryRegion(0x2005);
   Check(queried_region && queried_region->address == 0x2004 &&
             queried_region->size == 8 &&

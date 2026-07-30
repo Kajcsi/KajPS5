@@ -47,6 +47,9 @@ class GuestMemory final {
                               std::uint64_t length) const noexcept;
   [[nodiscard]] bool CanMap(std::uint64_t address,
                             std::uint64_t length) const noexcept;
+  [[nodiscard]] std::optional<std::uint64_t> FindUnmappedRange(
+      std::uint64_t search_start, std::uint64_t length,
+      std::uint64_t alignment) const noexcept;
   [[nodiscard]] bool Map(std::uint64_t address, std::uint64_t length,
                          GuestMemoryProtection protection);
   [[nodiscard]] bool Protect(std::uint64_t address, std::uint64_t length,

@@ -53,13 +53,151 @@ int main() {
   ExportRegistry registry;
   Check(kajps5::hle::RegisterKernelMemoryExports(registry) ==
             ExportRegistryStatus::kOk &&
-            registry.size() == 12,
+            registry.size() == 18,
         "memory exports did not register atomically");
 
   HleCallContext page_size_context(memory);
   Check(Dispatch(registry, kajps5::hle::kPosixGetPageSizeNid,
                  page_size_context) == kajps5::hle::kKernelMemoryPageSize,
         "getpagesize returned the wrong guest page size");
+
+  GuestMemory flexible_memory(0x10000, 0x20000,
+                              GuestMemoryProtection::kNone);
+  Check(flexible_memory.Map(
+            0x10000, 0x4000,
+            GuestMemoryProtection::kRead | GuestMemoryProtection::kWrite),
+        "flexible-memory control page setup failed");
+  HleCallContext flexible_context(flexible_memory);
+  Check(flexible_context.WriteUInt64(0x10000, 0x18001) ==
+            kajps5::hle::HleContextStatus::kOk &&
+            flexible_context.SetRegister(HleRegister::kRdi, 0x10000) &&
+            flexible_context.SetRegister(HleRegister::kRsi, 0x4000) &&
+            flexible_context.SetRegister(
+                HleRegister::kRdx,
+                kajps5::hle::kKernelProtectionCpuRead |
+                    kajps5::hle::kKernelProtectionCpuWrite),
+        "flexible-memory map setup failed");
+  std::uint64_t mapped_address = 0;
+  Check(Dispatch(registry,
+                 kajps5::hle::kKernelMapFlexibleMemoryNid,
+                 flexible_context) == 0 &&
+            flexible_context.ReadUInt64(0x10000, mapped_address) ==
+                kajps5::hle::HleContextStatus::kOk &&
+            mapped_address == 0x1c000 &&
+            flexible_memory.CanAccess(
+                mapped_address, 0x4000,
+                GuestMemoryProtection::kRead |
+                    GuestMemoryProtection::kWrite),
+        "hinted flexible-memory map returned the wrong range");
+
+  HleCallContext fixed_collision(flexible_memory);
+  Check(fixed_collision.WriteUInt64(0x10008, mapped_address) ==
+            kajps5::hle::HleContextStatus::kOk &&
+            fixed_collision.SetRegister(HleRegister::kRdi, 0x10008) &&
+            fixed_collision.SetRegister(HleRegister::kRsi, 0x4000) &&
+            fixed_collision.SetRegister(
+                HleRegister::kRdx,
+                kajps5::hle::kKernelProtectionCpuRead) &&
+            fixed_collision.SetRegister(
+                HleRegister::kRcx,
+                kajps5::hle::kKernelMapFixed |
+                    kajps5::hle::kKernelMapNoOverwrite),
+        "fixed collision setup failed");
+  std::uint64_t unchanged_address = 0;
+  Check(Dispatch(registry,
+                 kajps5::hle::kKernelMapFlexibleMemoryName,
+                 fixed_collision) ==
+                KernelResult(kajps5::hle::kKernelHleErrorNoMemory) &&
+            fixed_collision.ReadUInt64(0x10008, unchanged_address) ==
+                kajps5::hle::HleContextStatus::kOk &&
+            unchanged_address == mapped_address,
+        "fixed no-overwrite map replaced an existing range");
+
+  const std::array map_name = {
+      std::byte{'h'}, std::byte{'e'}, std::byte{'a'}, std::byte{'p'},
+      std::byte{0}};
+  Check(flexible_memory.Write(0x10080, map_name),
+        "named flexible-memory string setup failed");
+  HleCallContext named_context(flexible_memory);
+  Check(named_context.WriteUInt64(0x10010, 0) ==
+            kajps5::hle::HleContextStatus::kOk &&
+            named_context.SetRegister(HleRegister::kRdi, 0x10010) &&
+            named_context.SetRegister(HleRegister::kRsi, 0x4000) &&
+            named_context.SetRegister(
+                HleRegister::kRdx,
+                kajps5::hle::kKernelProtectionCpuExecute) &&
+            named_context.SetRegister(HleRegister::kR8, 0x10080),
+        "named flexible-memory map setup failed");
+  Check(Dispatch(registry,
+                 kajps5::hle::kKernelMapNamedFlexibleMemoryNid,
+                 named_context) == 0 &&
+            named_context.ReadUInt64(0x10010, mapped_address) ==
+                kajps5::hle::HleContextStatus::kOk &&
+            mapped_address == 0x14000 &&
+            flexible_memory.CanExecute(mapped_address, 0x4000),
+        "named flexible-memory map did not use the checked fallback range");
+
+  HleCallContext fixed_context(flexible_memory);
+  Check(fixed_context.WriteUInt64(0x10018, 0x24000) ==
+            kajps5::hle::HleContextStatus::kOk &&
+            fixed_context.SetRegister(HleRegister::kRdi, 0x10018) &&
+            fixed_context.SetRegister(HleRegister::kRsi, 0x4000) &&
+            fixed_context.SetRegister(
+                HleRegister::kRdx,
+                kajps5::hle::kKernelProtectionGpuRead) &&
+            fixed_context.SetRegister(HleRegister::kRcx,
+                                      kajps5::hle::kKernelMapFixed),
+        "fixed flexible-memory map setup failed");
+  Check(Dispatch(registry,
+                 kajps5::hle::kKernelMapFlexibleMemoryInternalNid,
+                 fixed_context) == 0 &&
+            flexible_memory.IsMapped(0x24000, 0x4000) &&
+            !flexible_memory.CanAccess(0x24000, 1,
+                                       GuestMemoryProtection::kRead),
+        "fixed flexible-memory map returned the wrong protection");
+
+  std::array<std::byte, 32> long_name{};
+  long_name.fill(std::byte{'x'});
+  Check(flexible_memory.Write(0x10100, long_name),
+        "long map name setup failed");
+  const auto flexible_region_count = flexible_memory.regions().size();
+  HleCallContext long_name_context(flexible_memory);
+  Check(long_name_context.WriteUInt64(0x10020, 0x28000) ==
+            kajps5::hle::HleContextStatus::kOk &&
+            long_name_context.SetRegister(HleRegister::kRdi, 0x10020) &&
+            long_name_context.SetRegister(HleRegister::kRsi, 0x4000) &&
+            long_name_context.SetRegister(HleRegister::kRdx, 0) &&
+            long_name_context.SetRegister(HleRegister::kR8, 0x10100),
+        "long map name dispatch setup failed");
+  Check(Dispatch(registry,
+                 kajps5::hle::kKernelMapNamedFlexibleMemoryName,
+                 long_name_context) ==
+                KernelResult(kajps5::hle::kKernelHleErrorNameTooLong) &&
+            flexible_memory.regions().size() == flexible_region_count,
+        "overlong map name changed guest memory");
+
+  HleCallContext invalid_map_context(flexible_memory);
+  Check(invalid_map_context.SetRegister(HleRegister::kRdi, 0x18000) &&
+            invalid_map_context.SetRegister(HleRegister::kRsi, 0x4000),
+        "invalid flexible-memory map setup failed");
+  Check(Dispatch(registry,
+                 kajps5::hle::kKernelMapFlexibleMemoryNid,
+                 invalid_map_context) ==
+                KernelResult(kajps5::hle::kKernelHleErrorFault),
+        "unmapped flexible-memory output pointer was accepted");
+  HleCallContext invalid_flags_context(flexible_memory);
+  Check(invalid_flags_context.WriteUInt64(0x10028, 0x28000) ==
+            kajps5::hle::HleContextStatus::kOk &&
+            invalid_flags_context.SetRegister(HleRegister::kRdi, 0x10028) &&
+            invalid_flags_context.SetRegister(HleRegister::kRsi, 0x4000) &&
+            invalid_flags_context.SetRegister(HleRegister::kRcx, 0x08),
+        "invalid flexible-memory flags setup failed");
+  Check(Dispatch(registry,
+                 kajps5::hle::kKernelMapFlexibleMemoryNid,
+                 invalid_flags_context) ==
+                KernelResult(kajps5::hle::kKernelHleErrorInvalidArgument) &&
+            !flexible_memory.IsMapped(0x28000, 1),
+        "unknown flexible-memory flags changed guest memory");
 
   HleCallContext read_context(memory);
   Check(read_context.SetRegister(HleRegister::kRdi, 0x5000) &&
@@ -239,7 +377,7 @@ int main() {
 
   Check(kajps5::hle::RegisterKernelMemoryExports(registry) ==
             ExportRegistryStatus::kAlreadyExists &&
-            registry.size() == 12,
+            registry.size() == 18,
         "duplicate memory export batch changed the registry");
   return failures == 0 ? 0 : 1;
 }

@@ -90,6 +90,44 @@ bool GuestMemory::CanMap(std::uint64_t address,
   return insertion == regions_.end() || end_address <= insertion->address;
 }
 
+std::optional<std::uint64_t> GuestMemory::FindUnmappedRange(
+    std::uint64_t search_start, std::uint64_t length,
+    std::uint64_t alignment) const noexcept {
+  if (length == 0 || alignment == 0 ||
+      (alignment & (alignment - 1)) != 0) {
+    return std::nullopt;
+  }
+
+  const auto align_up = [alignment](std::uint64_t address)
+      -> std::optional<std::uint64_t> {
+    const auto mask = alignment - 1;
+    if (address > std::numeric_limits<std::uint64_t>::max() - mask) {
+      return std::nullopt;
+    }
+    return (address + mask) & ~mask;
+  };
+
+  auto candidate = align_up(std::max(search_start, base_address_));
+  if (!candidate.has_value()) {
+    return std::nullopt;
+  }
+  for (const auto& region : regions_) {
+    const auto region_end = region.address + region.size;
+    if (region_end <= *candidate) {
+      continue;
+    }
+    if (*candidate < region.address &&
+        length <= region.address - *candidate) {
+      return *candidate;
+    }
+    candidate = align_up(region_end);
+    if (!candidate.has_value()) {
+      return std::nullopt;
+    }
+  }
+  return Contains(*candidate, length) ? candidate : std::nullopt;
+}
+
 bool GuestMemory::Map(std::uint64_t address, std::uint64_t length,
                       GuestMemoryProtection protection) {
   if (!IsValidProtection(protection) || !CanMap(address, length)) {

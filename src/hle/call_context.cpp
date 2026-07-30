@@ -149,6 +149,18 @@ bool HleCallContext::CanWriteMemory(std::uint64_t address,
                             memory::GuestMemoryProtection::kWrite));
 }
 
+std::optional<std::uint64_t> HleCallContext::FindUnmappedMemory(
+    std::uint64_t search_start, std::uint64_t length,
+    std::uint64_t alignment) const noexcept {
+  return memory_.FindUnmappedRange(search_start, length, alignment);
+}
+
+bool HleCallContext::MapMemory(
+    std::uint64_t address, std::uint64_t length,
+    memory::GuestMemoryProtection protection) {
+  return memory_.Map(address, length, protection);
+}
+
 bool HleCallContext::ProtectMemory(
     std::uint64_t address, std::uint64_t length,
     memory::GuestMemoryProtection protection) {

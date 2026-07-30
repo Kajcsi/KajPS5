@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+
 cmake_minimum_required(VERSION 3.24)
 
 project(KajPS5 VERSION 0.1.0 LANGUAGES CXX)

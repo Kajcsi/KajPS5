@@ -38,6 +38,7 @@
 - [x] Add checked semaphore counts and scheduler wait integration.
 - [x] Add typed user-event queues and scheduler wake integration.
 - [x] Add portable realtime, monotonic, and process-clock conversions.
+- [x] Add checked fixed and first-fit flexible-memory mappings.
 - [x] Add checked guest paths and memory-backed read-only files.
 - [x] Add deterministic directory reads for the memory-backed namespace.
 - [x] Add deterministic thread-exit joins.

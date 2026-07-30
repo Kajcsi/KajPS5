@@ -80,6 +80,12 @@ class HleCallContext final {
       std::uint64_t address, std::span<const std::byte> value) noexcept;
   [[nodiscard]] bool CanWriteMemory(std::uint64_t address,
                                     std::uint64_t length) const noexcept;
+  [[nodiscard]] std::optional<std::uint64_t> FindUnmappedMemory(
+      std::uint64_t search_start, std::uint64_t length,
+      std::uint64_t alignment) const noexcept;
+  [[nodiscard]] bool MapMemory(
+      std::uint64_t address, std::uint64_t length,
+      memory::GuestMemoryProtection protection);
   [[nodiscard]] bool ProtectMemory(
       std::uint64_t address, std::uint64_t length,
       memory::GuestMemoryProtection protection);

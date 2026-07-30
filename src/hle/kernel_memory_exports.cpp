@@ -15,6 +15,11 @@ constexpr std::uint32_t kKnownProtection =
     kKernelProtectionCpuRead | kKernelProtectionCpuWrite |
     kKernelProtectionCpuExecute | kKernelProtectionGpuRead |
     kKernelProtectionGpuWrite;
+constexpr std::uint32_t kKnownMapFlags =
+    0x01 | 0x02 | kKernelMapFixed | kKernelMapNoOverwrite | 0x100 | 0x400 |
+    0x800 | 0x1000 | 0x8000 | 0x20000 | 0x400000;
+constexpr std::uint64_t kDefaultPs5MapBase = 0x200000000;
+constexpr std::size_t kMaximumMapNameBytes = 32;
 
 void SetKernelResult(HleCallContext& context, std::int32_t result) noexcept {
   context.SetReturn(
@@ -106,6 +111,96 @@ HleContextStatus KernelMunmap(HleCallContext& context) {
   return HleContextStatus::kOk;
 }
 
+HleContextStatus KernelMapFlexibleMemory(HleCallContext& context,
+                                         bool named) {
+  const auto address_pointer = context.Argument(0).value_or(0);
+  const auto length = context.Argument(1).value_or(0);
+  const auto protection_value =
+      static_cast<std::uint32_t>(context.Argument(2).value_or(0));
+  const auto flags =
+      static_cast<std::uint32_t>(context.Argument(3).value_or(0));
+  if (address_pointer == 0 || length == 0 ||
+      (length & (kKernelMemoryPageSize - 1)) != 0 ||
+      (flags & ~kKnownMapFlags) != 0) {
+    SetKernelResult(context, kKernelHleErrorInvalidArgument);
+    return HleContextStatus::kOk;
+  }
+
+  memory::GuestMemoryProtection protection;
+  if (!DecodeProtection(protection_value, protection)) {
+    SetKernelResult(context, kKernelHleErrorInvalidArgument);
+    return HleContextStatus::kOk;
+  }
+  if (!context.CanWriteMemory(address_pointer, sizeof(std::uint64_t))) {
+    SetKernelResult(context, kKernelHleErrorFault);
+    return HleContextStatus::kOk;
+  }
+  std::uint64_t requested_address = 0;
+  if (context.ReadUInt64(address_pointer, requested_address) !=
+      HleContextStatus::kOk) {
+    SetKernelResult(context, kKernelHleErrorFault);
+    return HleContextStatus::kOk;
+  }
+  if (named) {
+    const auto name_address = context.Argument(4).value_or(0);
+    if (name_address == 0) {
+      SetKernelResult(context, kKernelHleErrorFault);
+      return HleContextStatus::kOk;
+    }
+    const auto name = context.ReadNullTerminatedString(
+        name_address, kMaximumMapNameBytes);
+    if (name.status == HleContextStatus::kUnterminatedString) {
+      SetKernelResult(context, kKernelHleErrorNameTooLong);
+      return HleContextStatus::kOk;
+    }
+    if (!name) {
+      SetKernelResult(context, kKernelHleErrorFault);
+      return HleContextStatus::kOk;
+    }
+  }
+
+  std::optional<std::uint64_t> mapped_address;
+  if ((flags & kKernelMapFixed) != 0) {
+    if (requested_address == 0 ||
+        (requested_address & (kKernelMemoryPageSize - 1)) != 0) {
+      SetKernelResult(context, kKernelHleErrorInvalidArgument);
+      return HleContextStatus::kOk;
+    }
+    mapped_address = requested_address;
+  } else {
+    const auto search_address =
+        requested_address == 0 ? kDefaultPs5MapBase : requested_address;
+    mapped_address = context.FindUnmappedMemory(
+        search_address, length, kKernelMemoryPageSize);
+    if (!mapped_address.has_value() && requested_address == 0) {
+      mapped_address = context.FindUnmappedMemory(
+          0, length, kKernelMemoryPageSize);
+    }
+  }
+  if (!mapped_address.has_value() ||
+      !context.MapMemory(*mapped_address, length, protection)) {
+    SetKernelResult(context, kKernelHleErrorNoMemory);
+    return HleContextStatus::kOk;
+  }
+  if (context.WriteUInt64(address_pointer, *mapped_address) !=
+      HleContextStatus::kOk) {
+    (void)context.UnmapMemory(*mapped_address, length);
+    SetKernelResult(context, kKernelHleErrorFault);
+    return HleContextStatus::kOk;
+  }
+
+  SetKernelResult(context, 0);
+  return HleContextStatus::kOk;
+}
+
+HleContextStatus KernelMapNamedFlexibleMemory(HleCallContext& context) {
+  return KernelMapFlexibleMemory(context, true);
+}
+
+HleContextStatus KernelMapUnnamedFlexibleMemory(HleCallContext& context) {
+  return KernelMapFlexibleMemory(context, false);
+}
+
 HleContextStatus PosixGetPageSize(HleCallContext& context) {
   context.SetReturn(kKernelMemoryPageSize);
   return HleContextStatus::kOk;
@@ -153,7 +248,7 @@ HleContextStatus KernelQueryMemoryProtection(HleCallContext& context) {
 
 std::vector<HleExportDefinition> detail::MakeKernelMemoryExports() {
   std::vector<HleExportDefinition> exports;
-  exports.reserve(12);
+  exports.reserve(18);
   exports.push_back({kLibKernelName, kKernelMprotectName, KernelMprotect});
   exports.push_back({kLibKernelName, kKernelMprotectNid, KernelMprotect});
   exports.push_back({kLibKernelName, kPosixMprotectName, KernelMprotect});
@@ -162,6 +257,18 @@ std::vector<HleExportDefinition> detail::MakeKernelMemoryExports() {
   exports.push_back({kLibKernelName, kKernelMunmapNid, KernelMunmap});
   exports.push_back({kLibKernelName, kPosixMunmapName, KernelMunmap});
   exports.push_back({kLibKernelName, kPosixMunmapNid, KernelMunmap});
+  exports.push_back({kLibKernelName, kKernelMapNamedFlexibleMemoryName,
+                     KernelMapNamedFlexibleMemory});
+  exports.push_back({kLibKernelName, kKernelMapNamedFlexibleMemoryNid,
+                     KernelMapNamedFlexibleMemory});
+  exports.push_back({kLibKernelName, kKernelMapFlexibleMemoryName,
+                     KernelMapUnnamedFlexibleMemory});
+  exports.push_back({kLibKernelName, kKernelMapFlexibleMemoryNid,
+                     KernelMapUnnamedFlexibleMemory});
+  exports.push_back({kLibKernelName, kKernelMapFlexibleMemoryInternalName,
+                     KernelMapUnnamedFlexibleMemory});
+  exports.push_back({kLibKernelName, kKernelMapFlexibleMemoryInternalNid,
+                     KernelMapUnnamedFlexibleMemory});
   exports.push_back(
       {kLibKernelName, kPosixGetPageSizeName, PosixGetPageSize});
   exports.push_back(

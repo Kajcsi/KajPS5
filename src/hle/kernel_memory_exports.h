@@ -18,6 +18,15 @@ inline constexpr auto kPosixMprotectName = "mprotect";
 inline constexpr auto kPosixMprotectNid = "YQOfxL4QfeU";
 inline constexpr auto kKernelMunmapName = "sceKernelMunmap";
 inline constexpr auto kKernelMunmapNid = "cQke9UuBQOk";
+inline constexpr auto kKernelMapNamedFlexibleMemoryName =
+    "sceKernelMapNamedFlexibleMemory";
+inline constexpr auto kKernelMapNamedFlexibleMemoryNid = "mL8NDH86iQI";
+inline constexpr auto kKernelMapFlexibleMemoryName =
+    "sceKernelMapFlexibleMemory";
+inline constexpr auto kKernelMapFlexibleMemoryNid = "IWIBBdTHit4";
+inline constexpr auto kKernelMapFlexibleMemoryInternalName =
+    "sceKernelMapNamedFlexibleMemoryInternal";
+inline constexpr auto kKernelMapFlexibleMemoryInternalNid = "4h6F1LLbTiw";
 inline constexpr auto kPosixMunmapName = "munmap";
 inline constexpr auto kPosixMunmapNid = "UqDGjXA5yUM";
 inline constexpr auto kPosixGetPageSizeName = "getpagesize";
@@ -31,6 +40,8 @@ inline constexpr std::uint32_t kKernelProtectionCpuWrite = 0x02;
 inline constexpr std::uint32_t kKernelProtectionCpuExecute = 0x04;
 inline constexpr std::uint32_t kKernelProtectionGpuRead = 0x10;
 inline constexpr std::uint32_t kKernelProtectionGpuWrite = 0x20;
+inline constexpr std::uint32_t kKernelMapFixed = 0x10;
+inline constexpr std::uint32_t kKernelMapNoOverwrite = 0x80;
 
 namespace detail {
 [[nodiscard]] std::vector<HleExportDefinition> MakeKernelMemoryExports();

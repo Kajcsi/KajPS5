@@ -37,8 +37,8 @@ The current core includes:
 - Typed kernel handles and one cooperative scheduler for ready, running,
   blocked, and exited guest threads.
 - Event flags, semaphores, user-event queues, portable clocks, guest memory
-  operations, and a read-only in-memory file namespace. The matching
-  `libKernel` handlers share the same services.
+  protection and flexible mappings, and a read-only in-memory file namespace.
+  The matching `libKernel` handlers share the same services.
 - Small public and generated test fixtures, including an ELF that loads
   without running guest code and controlled x86-64 leaf programs used only by
   tests.

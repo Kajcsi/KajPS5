@@ -74,8 +74,10 @@ The memory HLE handlers in `src/hle/kernel_memory_exports.cpp` and
 `src/SharpEmu.Libs/Kernel/KernelMemoryCompatExports.cs` at the pinned commits.
 They use the 16 KiB guest page size and the `mprotect`, `munmap`,
 `getpagesize`, and memory-protection query names and NIDs confirmed by both
-references. The query uses KytyPS5's exclusive range end. No memory-export
-source was copied.
+references. Flexible mappings use the names and NIDs confirmed by both
+references, KytyPS5's page, flag, protection, and name checks, and SharpEmu's
+checked first-fit address search. The query uses KytyPS5's exclusive range end.
+No memory-export source was copied.
 
 ## Native execution, imports, and HLE
 
