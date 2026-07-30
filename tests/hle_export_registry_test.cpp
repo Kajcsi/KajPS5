@@ -95,6 +95,10 @@ int main() {
         "empty export batch was accepted");
 
   const std::vector<std::string> kernel_first = {"libkernel", "compat"};
+  const auto looked_up = registry.Lookup("length", kernel_first);
+  Check(looked_up && looked_up.library == "libkernel" &&
+            dispatch_count == 0,
+        "ordered HLE lookup called a handler or returned the wrong result");
   const auto dispatched =
       registry.Dispatch("length", kernel_first, context);
   Check(dispatched && dispatched.library == "libkernel" &&
@@ -113,7 +117,14 @@ int main() {
             ExportRegistryStatus::kAmbiguous &&
             dispatch_count == 1,
         "ambiguous unscoped handler was dispatched");
+  Check(registry.Lookup("length").status ==
+            ExportRegistryStatus::kAmbiguous &&
+            dispatch_count == 1,
+        "ambiguous unscoped lookup changed handler state");
   const std::vector<std::string> missing_library = {"missing"};
+  Check(registry.Lookup("length", missing_library).status ==
+            ExportRegistryStatus::kNotFound,
+        "lookup escaped the needed-library scope");
   Check(registry.Dispatch("length", missing_library, context).status ==
             ExportRegistryStatus::kNotFound,
         "dispatch escaped the needed-library scope");

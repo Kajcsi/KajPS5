@@ -5,7 +5,6 @@
 
 #include "loader/relocator.h"
 
-#include <algorithm>
 #include <array>
 #include <bit>
 #include <limits>
@@ -39,50 +38,6 @@ struct PlannedRelocation {
   std::array<std::byte, sizeof(std::uint64_t)> value{};
   std::size_t size = sizeof(std::uint64_t);
 };
-
-struct ImportReference {
-  std::string_view nid;
-  const ElfLibraryIdentity* library = nullptr;
-  const ElfModuleIdentity* module = nullptr;
-  bool valid = false;
-};
-
-template <typename Identity>
-const Identity* FindIdentity(std::uint16_t id,
-                             const std::vector<Identity>& imports,
-                             const std::vector<Identity>& exports) noexcept {
-  const auto find = [id](const std::vector<Identity>& identities) {
-    const auto identity = std::find_if(
-        identities.begin(), identities.end(),
-        [id](const Identity& candidate) { return candidate.id == id; });
-    return identity == identities.end() ? nullptr : &*identity;
-  };
-  if (const auto* identity = find(imports); identity != nullptr) {
-    return identity;
-  }
-  return find(exports);
-}
-
-ImportReference ParseImportReference(const ElfMetadata& metadata,
-                                     std::string_view symbol) noexcept {
-  const auto first_separator = symbol.find('#');
-  if (first_separator == std::string_view::npos) {
-    return {symbol, nullptr, nullptr, !symbol.empty()};
-  }
-  const auto parsed = ParseSceSymbolReference(symbol);
-  if (!parsed.has_value()) {
-    return {symbol.substr(0, first_separator), nullptr, nullptr, false};
-  }
-
-  const auto* library = FindIdentity(
-      parsed->library_id, metadata.dynamic_info.import_libraries,
-      metadata.dynamic_info.export_libraries);
-  const auto* module = FindIdentity(
-      parsed->module_id, metadata.dynamic_info.import_modules,
-      metadata.dynamic_info.export_modules);
-  return {parsed->nid, library, module,
-          library != nullptr && module != nullptr};
-}
 
 constexpr bool IsSymbolRelocation(std::uint32_t type) noexcept {
   switch (type) {
@@ -214,7 +169,8 @@ RelocationStatus PlanTable(const std::vector<ElfRelaEntry>& entries,
             {entry.symbol(), type, target, symbol->name});
         continue;
       } else {
-        const auto reference = ParseImportReference(metadata, symbol->name);
+        const auto reference =
+            ResolveElfImportReference(metadata, symbol->name);
         if (reference.nid.empty()) {
           return RelocationStatus::kEmptyImportSymbol;
         }

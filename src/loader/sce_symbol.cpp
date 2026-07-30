@@ -5,6 +5,7 @@
 
 #include "loader/sce_symbol.h"
 
+#include <algorithm>
 #include <limits>
 
 namespace kajps5::loader {
@@ -33,6 +34,22 @@ std::optional<std::uint16_t> DecodeSceId(std::string_view value) noexcept {
   return static_cast<std::uint16_t>(decoded);
 }
 
+template <typename Identity>
+const Identity* FindIdentity(std::uint16_t id,
+                             const std::vector<Identity>& imports,
+                             const std::vector<Identity>& exports) noexcept {
+  const auto find = [id](const std::vector<Identity>& identities) {
+    const auto identity = std::find_if(
+        identities.begin(), identities.end(),
+        [id](const Identity& candidate) { return candidate.id == id; });
+    return identity == identities.end() ? nullptr : &*identity;
+  };
+  if (const auto* identity = find(imports); identity != nullptr) {
+    return identity;
+  }
+  return find(exports);
+}
+
 }  // namespace
 
 std::optional<SceSymbolReference> ParseSceSymbolReference(
@@ -55,6 +72,27 @@ std::optional<SceSymbolReference> ParseSceSymbolReference(
   }
   return SceSymbolReference{symbol.substr(0, first_separator), *library_id,
                             *module_id};
+}
+
+ElfImportReference ResolveElfImportReference(
+    const ElfMetadata& metadata, std::string_view symbol) noexcept {
+  const auto first_separator = symbol.find('#');
+  if (first_separator == std::string_view::npos) {
+    return {symbol, nullptr, nullptr, !symbol.empty()};
+  }
+  const auto parsed = ParseSceSymbolReference(symbol);
+  if (!parsed.has_value()) {
+    return {symbol.substr(0, first_separator), nullptr, nullptr, false};
+  }
+
+  const auto* library = FindIdentity(
+      parsed->library_id, metadata.dynamic_info.import_libraries,
+      metadata.dynamic_info.export_libraries);
+  const auto* module = FindIdentity(
+      parsed->module_id, metadata.dynamic_info.import_modules,
+      metadata.dynamic_info.export_modules);
+  return {parsed->nid, library, module,
+          library != nullptr && module != nullptr};
 }
 
 }  // namespace kajps5::loader

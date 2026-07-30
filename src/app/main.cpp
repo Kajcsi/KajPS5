@@ -13,7 +13,11 @@
 
 #include "core/memory/guest_memory.h"
 #include "core/project_info.h"
+#include "hle/export_registry.h"
+#include "hle/import_coverage.h"
 #include "hle/import_registry.h"
+#include "hle/kernel_exports.h"
+#include "kernel/runtime.h"
 #include "loader/elf.h"
 #include "loader/elf_trace.h"
 #include "loader/launch_metadata.h"
@@ -113,6 +117,26 @@ int TraceExecutableFile(const char* path) {
                 << kajps5::loader::LaunchMetadataStatusName(launch.status)
                 << '\n';
       return 5;
+    }
+
+    kajps5::kernel::KernelRuntime kernel_runtime;
+    kajps5::hle::ExportRegistry hle_exports;
+    const auto export_status = kajps5::hle::RegisterKernelExports(
+        hle_exports, kernel_runtime);
+    if (export_status != kajps5::hle::ExportRegistryStatus::kOk) {
+      std::cerr << "HLE coverage check failed: export registration returned "
+                << kajps5::hle::ExportRegistryStatusName(export_status)
+                << '\n';
+      return 7;
+    }
+    const auto coverage = kajps5::hle::AnalyzeImportCoverage(
+        loaded.metadata, hle_exports);
+    std::cout << kajps5::hle::FormatImportCoverageTrace(coverage);
+    if (!coverage) {
+      std::cerr << "HLE coverage check failed: "
+                << kajps5::hle::ImportCoverageStatusName(coverage.status)
+                << '\n';
+      return 7;
     }
 
     const kajps5::hle::ImportRegistry empty_registry;

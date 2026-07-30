@@ -29,8 +29,9 @@ The current core includes:
   `PT_LOAD` segment's read, write, and execute flags. The inspection path also
   reports unresolved imports and validates the entry point, process
   parameters, TLS template, and module startup and shutdown metadata without
-  running code. After relocation, it builds bounded startup and shutdown call
-  lists from checked guest memory.
+  running code. The same trace measures how many required import relocations
+  and unique imports match the built-in HLE handlers. After relocation, it
+  builds bounded startup and shutdown call lists from checked guest memory.
 - Versioned PS5 NID linking between supplied modules and library-scoped HLE
   dispatch, with bounded diagnostics for unresolved symbols, deterministic
   dependency order, and checked guest register and memory access.
@@ -74,9 +75,10 @@ _Build\src\Release\kajps5.exe --trace-elf R:\path\sample.bin
 ```
 
 The command reads at most 512 MiB and rejects a guest range larger than
-512 MiB. Its stable summary is suitable for trace comparisons. KajPS5 does not
-decrypt retail SELF payloads. It accepts only payload bytes that are already
-available in the input file.
+512 MiB. Its stable summary is suitable for trace comparisons. Import coverage
+is read-only: it does not call HLE handlers or write fake target addresses.
+KajPS5 does not decrypt retail SELF payloads. It accepts only payload bytes
+that are already available in the input file.
 
 ## Legal use
 

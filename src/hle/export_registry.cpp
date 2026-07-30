@@ -14,12 +14,6 @@ bool IsValidName(std::string_view name, std::size_t maximum_length) noexcept {
          name.find('\0') == std::string_view::npos;
 }
 
-struct ResolvedHandler {
-  ExportRegistryStatus status = ExportRegistryStatus::kNotFound;
-  HleHandler handler;
-  std::string library;
-};
-
 }  // namespace
 
 ExportRegistryStatus ExportRegistry::Register(std::string library,
@@ -66,46 +60,63 @@ ExportRegistryStatus ExportRegistry::RegisterBatch(
   return ExportRegistryStatus::kOk;
 }
 
+ExportRegistry::ResolvedExport ExportRegistry::ResolveLocked(
+    std::string_view symbol,
+    std::span<const std::string> library_order) const {
+  if (!IsValidName(symbol, kMaximumExportSymbolLength)) {
+    return {ExportRegistryStatus::kInvalidArgument, {}, {}};
+  }
+
+  ResolvedExport resolved;
+  for (const auto& library : library_order) {
+    if (!IsValidName(library, kMaximumExportLibraryLength)) {
+      return {ExportRegistryStatus::kInvalidArgument, {}, {}};
+    }
+    const auto found = entries_.find(Key{library, std::string(symbol)});
+    if (found != entries_.end()) {
+      resolved = {ExportRegistryStatus::kOk, found->second,
+                  found->first.first};
+      break;
+    }
+  }
+
+  if (resolved.status != ExportRegistryStatus::kOk &&
+      !library_order.empty()) {
+    return resolved;
+  }
+  if (library_order.empty()) {
+    for (const auto& [key, handler] : entries_) {
+      if (key.second != symbol) {
+        continue;
+      }
+      if (resolved.status == ExportRegistryStatus::kOk) {
+        return {ExportRegistryStatus::kAmbiguous, {}, {}};
+      }
+      resolved = {ExportRegistryStatus::kOk, handler, key.first};
+    }
+  }
+  return resolved;
+}
+
+HleLookupResult ExportRegistry::Lookup(
+    std::string_view symbol,
+    std::span<const std::string> library_order) const {
+  std::lock_guard lock(mutex_);
+  const auto resolved = ResolveLocked(symbol, library_order);
+  return {resolved.status, resolved.library};
+}
+
+HleLookupResult ExportRegistry::Lookup(std::string_view symbol) const {
+  return Lookup(symbol, std::span<const std::string>{});
+}
+
 HleDispatchResult ExportRegistry::Dispatch(
     std::string_view symbol, std::span<const std::string> library_order,
     HleCallContext& context) const {
-  if (!IsValidName(symbol, kMaximumExportSymbolLength)) {
-    return {ExportRegistryStatus::kInvalidArgument,
-            HleContextStatus::kOk, {}};
-  }
-
-  ResolvedHandler resolved;
+  ResolvedExport resolved;
   {
     std::lock_guard lock(mutex_);
-    for (const auto& library : library_order) {
-      if (!IsValidName(library, kMaximumExportLibraryLength)) {
-        return {ExportRegistryStatus::kInvalidArgument,
-                HleContextStatus::kOk, {}};
-      }
-      const auto found = entries_.find(Key{library, std::string(symbol)});
-      if (found != entries_.end()) {
-        resolved = {ExportRegistryStatus::kOk, found->second,
-                    found->first.first};
-        break;
-      }
-    }
-
-    if (resolved.status != ExportRegistryStatus::kOk &&
-        !library_order.empty()) {
-      return {ExportRegistryStatus::kNotFound, HleContextStatus::kOk, {}};
-    }
-    if (library_order.empty()) {
-      for (const auto& [key, handler] : entries_) {
-        if (key.second != symbol) {
-          continue;
-        }
-        if (resolved.status == ExportRegistryStatus::kOk) {
-          return {ExportRegistryStatus::kAmbiguous, HleContextStatus::kOk,
-                  {}};
-        }
-        resolved = {ExportRegistryStatus::kOk, handler, key.first};
-      }
-    }
+    resolved = ResolveLocked(symbol, library_order);
   }
 
   if (resolved.status != ExportRegistryStatus::kOk) {

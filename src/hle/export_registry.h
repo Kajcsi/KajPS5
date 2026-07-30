@@ -48,6 +48,15 @@ struct HleDispatchResult {
   }
 };
 
+struct HleLookupResult {
+  ExportRegistryStatus status = ExportRegistryStatus::kOk;
+  std::string library;
+
+  [[nodiscard]] explicit operator bool() const noexcept {
+    return status == ExportRegistryStatus::kOk;
+  }
+};
+
 class ExportRegistry final {
  public:
   [[nodiscard]] ExportRegistryStatus Register(std::string library,
@@ -55,6 +64,10 @@ class ExportRegistry final {
                                               HleHandler handler);
   [[nodiscard]] ExportRegistryStatus RegisterBatch(
       std::vector<HleExportDefinition> exports);
+  [[nodiscard]] HleLookupResult Lookup(
+      std::string_view symbol,
+      std::span<const std::string> library_order) const;
+  [[nodiscard]] HleLookupResult Lookup(std::string_view symbol) const;
   [[nodiscard]] HleDispatchResult Dispatch(
       std::string_view symbol, std::span<const std::string> library_order,
       HleCallContext& context) const;
@@ -64,6 +77,16 @@ class ExportRegistry final {
 
  private:
   using Key = std::pair<std::string, std::string>;
+
+  struct ResolvedExport {
+    ExportRegistryStatus status = ExportRegistryStatus::kNotFound;
+    HleHandler handler;
+    std::string library;
+  };
+
+  [[nodiscard]] ResolvedExport ResolveLocked(
+      std::string_view symbol,
+      std::span<const std::string> library_order) const;
 
   mutable std::mutex mutex_;
   std::map<Key, HleHandler> entries_;

@@ -5,6 +5,7 @@ add_library(kajps5_core STATIC
   cpu/native_leaf_executor.cpp
   hle/call_context.cpp
   hle/export_registry.cpp
+  hle/import_coverage.cpp
   hle/import_registry.cpp
   hle/kernel_clock_exports.cpp
   hle/kernel_event_queue_exports.cpp
