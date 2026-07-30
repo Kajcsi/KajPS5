@@ -69,6 +69,15 @@ kajps5_deploy_msvc_asan_runtime(kajps5_hle_kernel_clock_exports_test)
 add_test(NAME kajps5_hle_kernel_clock_exports
          COMMAND kajps5_hle_kernel_clock_exports_test)
 
+add_executable(kajps5_hle_kernel_event_queue_exports_test
+               hle_kernel_event_queue_exports_test.cpp)
+target_link_libraries(kajps5_hle_kernel_event_queue_exports_test
+                      PRIVATE kajps5_core)
+kajps5_deploy_msvc_asan_runtime(kajps5_hle_kernel_event_queue_exports_test)
+
+add_test(NAME kajps5_hle_kernel_event_queue_exports
+         COMMAND kajps5_hle_kernel_event_queue_exports_test)
+
 add_executable(kajps5_hle_kernel_event_flag_exports_test
                hle_kernel_event_flag_exports_test.cpp)
 target_link_libraries(kajps5_hle_kernel_event_flag_exports_test
@@ -164,3 +173,9 @@ target_link_libraries(kajps5_kernel_file_test PRIVATE kajps5_core)
 kajps5_deploy_msvc_asan_runtime(kajps5_kernel_file_test)
 
 add_test(NAME kajps5_kernel_file COMMAND kajps5_kernel_file_test)
+
+add_executable(kajps5_kernel_event_queue_test kernel_event_queue_test.cpp)
+target_link_libraries(kajps5_kernel_event_queue_test PRIVATE kajps5_core)
+kajps5_deploy_msvc_asan_runtime(kajps5_kernel_event_queue_test)
+
+add_test(NAME kajps5_kernel_event_queue COMMAND kajps5_kernel_event_queue_test)

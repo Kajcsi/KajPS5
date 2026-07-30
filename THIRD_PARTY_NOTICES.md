@@ -117,6 +117,23 @@ commits. They use the NIDs confirmed by both references, KytyPS5's
 kernel-compatible errors, and SharpEmu's checked optional result-pattern
 write before clear-mode mutation. No event-flag source code was copied.
 
+The typed event-queue architecture in `src/kernel/event_queue.h` and
+`src/kernel/event_queue.cpp`, the nonblocking handlers in
+`src/hle/kernel_event_queue_exports.cpp`, and their focused tests adapt
+behavior from KytyPS5 `src/kernel/eventQueue.h` and
+`src/kernel/eventQueue.cpp` at commit
+`f6e01e54031a3c615f089f061a4eab2f3c59acba`, and SharpEmu
+`src/SharpEmu.Libs/Kernel/KernelEventQueueCompatExports.cs` at commit
+`d5108e854d609808f17093a6f5dbbc711d09ad2e`. The implementation uses Kyty's
+typed user-event contract and SharpEmu's deterministic pending-trigger
+coalescing behavior. The SharpEmu reference states:
+
+`Copyright (C) 2026 SharpEmu Emulator Project`
+
+Both upstreams are GPL-2.0-or-later. No upstream event-queue source code was
+copied verbatim. Blocking wait dispatch remains deferred until a saved guest
+continuation can resume.
+
 Add an entry here when a later change imports or adapts code. Each entry must
 state the project, commit, source path, destination path, copyright notice, and
 license.

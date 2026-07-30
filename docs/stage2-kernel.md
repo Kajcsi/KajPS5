@@ -1,8 +1,9 @@
 # Stage 2 kernel research
 
 KajPS5 now has one kernel runtime, one typed handle table, deterministic
-event-flag polling, and one cooperative guest scheduler. It does not execute
-guest CPU instructions or resume blocked guest calls yet.
+event-flag polling, typed user-event queues, and one cooperative guest
+scheduler. It does not execute guest CPU instructions or resume blocked guest
+calls yet.
 
 The behavior review used these pinned upstream files:
 
@@ -25,6 +26,11 @@ The behavior review used these pinned upstream files:
   pinned KytyPS5 commit.
 - SharpEmu open, close, read, seek, stat, and directory-read behavior in
   `src/SharpEmu.Libs/Kernel/KernelMemoryCompatExports.cs` at the pinned
+  SharpEmu commit.
+- KytyPS5 `src/kernel/eventQueue.h` and `src/kernel/eventQueue.cpp` at the
+  pinned KytyPS5 commit.
+- SharpEmu
+  `src/SharpEmu.Libs/Kernel/KernelEventQueueCompatExports.cs` at the pinned
   SharpEmu commit.
 
 The focused tests record these shared behaviors:
@@ -92,9 +98,9 @@ The focused tests record these shared behaviors:
 - `sceKernelGetdirentries` uses the same record path and can write the captured
   entry position to an optional base pointer. All output ranges are checked
   before the cursor advances.
-- One atomic export batch binds all current clock, event-flag, file, and
-  semaphore handlers to the same kernel runtime. A registration conflict
-  leaves the destination registry unchanged.
+- One atomic export batch binds all current clock, event-queue, event-flag,
+  file, and semaphore handlers to the same kernel runtime. A registration
+  conflict leaves the destination registry unchanged.
 - The reachability handler checks only the registered guest namespace. Missing,
   invalid, and unreadable paths return distinct kernel-compatible results.
 - Non-blocking semaphore HLE handlers create, delete, poll, and signal the same
@@ -112,6 +118,15 @@ The focused tests record these shared behaviors:
 - The memory-protection query returns Kyty's exclusive region end and
   round-trips CPU and GPU permission bits through the same region table. A
   bad optional output does not change an earlier output.
+- Event queues use Kyty's typed queue, registration, trigger, and user-event
+  flag contract. Triggered records use the 32-byte kernel event layout.
+- Repeated pending triggers for one identifier use SharpEmu's deterministic
+  coalescing behavior. The newest data replaces the older data and `fflags`
+  counts the extra triggers without changing queue order.
+- Trigger and delete operations wake threads through the shared scheduler.
+  The nonblocking HLE set exposes queue creation, deletion, user-event add,
+  edge add, trigger, and removal by name and NID. Blocking wait dispatch stays
+  deferred until a guest call continuation can resume.
 
 KajPS5 implements these behaviors in its own C++ interfaces. It does not copy
 the upstream host-thread executor, continuation system, object ownership

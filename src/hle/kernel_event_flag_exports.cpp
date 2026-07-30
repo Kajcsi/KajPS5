@@ -23,6 +23,8 @@ std::int32_t EventFlagStatusResult(kernel::KernelStatus status) noexcept {
       return kKernelHleErrorInvalidArgument;
     case kernel::KernelStatus::kNotFound:
       return kKernelHleErrorNoSuchProcess;
+    case kernel::KernelStatus::kNoSuchEntry:
+      return kKernelHleErrorNotFound;
     case kernel::KernelStatus::kBusy: return kKernelHleErrorBusy;
     case kernel::KernelStatus::kNoResources: return kKernelHleErrorNoMemory;
     case kernel::KernelStatus::kPermissionDenied:

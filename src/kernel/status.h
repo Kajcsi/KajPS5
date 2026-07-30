@@ -9,6 +9,7 @@ enum class KernelStatus {
   kOk,
   kInvalidArgument,
   kNotFound,
+  kNoSuchEntry,
   kBusy,
   kWouldBlock,
   kPermissionDenied,

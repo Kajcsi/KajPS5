@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "kernel/clock.h"
+#include "kernel/event_queue.h"
 #include "kernel/event_flag.h"
 #include "kernel/file.h"
 #include "kernel/guest_scheduler.h"
@@ -18,10 +19,12 @@ namespace kajps5::kernel {
 class KernelRuntime final {
 public:
   KernelRuntime()
-      : scheduler_(handles_), event_flags_(handles_, scheduler_),
+      : scheduler_(handles_), event_queues_(handles_, scheduler_),
+        event_flags_(handles_, scheduler_),
         semaphores_(handles_, scheduler_), files_(handles_) {}
   explicit KernelRuntime(std::unique_ptr<KernelClockSource> clock_source)
-      : scheduler_(handles_), event_flags_(handles_, scheduler_),
+      : scheduler_(handles_), event_queues_(handles_, scheduler_),
+        event_flags_(handles_, scheduler_),
         semaphores_(handles_, scheduler_), files_(handles_),
         clock_(std::move(clock_source)) {}
 
@@ -30,6 +33,9 @@ public:
 
   [[nodiscard]] HandleTable &handles() noexcept { return handles_; }
   [[nodiscard]] GuestScheduler &scheduler() noexcept { return scheduler_; }
+  [[nodiscard]] EventQueueService &event_queues() noexcept {
+    return event_queues_;
+  }
   [[nodiscard]] EventFlagService &event_flags() noexcept {
     return event_flags_;
   }
@@ -40,6 +46,7 @@ public:
 private:
   HandleTable handles_;
   GuestScheduler scheduler_;
+  EventQueueService event_queues_;
   EventFlagService event_flags_;
   SemaphoreService semaphores_;
   FileService files_;

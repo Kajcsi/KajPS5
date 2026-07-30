@@ -49,6 +49,8 @@ counter, counter-frequency, and checked `sceKernelClockGettime` behavior from
 the shared kernel clock. `sceKernelGettimeofday` uses the same checked output
 boundary. Each clock handler is available by export name and NID.
 The kernel foundation has typed handles and deterministic event-flag polling.
+It also has typed event queues with registered user events, deterministic
+trigger order, duplicate-trigger coalescing, and scheduler wake integration.
 One cooperative scheduler owns guest thread state and
 deterministic ready, block, wake, yield, and exit transitions. A test-only
 native x86-64 path runs one controlled no-import leaf entry from checked guest
@@ -67,16 +69,18 @@ snapshot of the same in-memory namespace. `sceKernelGetdents` and
 `sceKernelGetdirentries` return checked 512-byte records with stable `.` and
 `..` entries. The latter also reports the captured entry position. The service
 does not expose the host file system.
-One atomic default registration binds all current clock, event-flag, file,
-memory, and semaphore handlers to the same kernel runtime and guest call
-context. Checked `mprotect` and `munmap` handlers use the same guest-memory
-region table and support their POSIX aliases. `getpagesize` reports the same
-16 KiB granularity. A checked protection query returns the canonical region
-and preserves CPU and GPU permission bits. The non-blocking event-flag set
-supports create, delete, set, clear, and poll. The non-blocking semaphore set
+One atomic default registration binds all current clock, event-queue,
+event-flag, file, memory, and semaphore handlers to the same kernel runtime and
+guest call context. Checked `mprotect` and `munmap` handlers use the same
+guest-memory region table and support their POSIX aliases. `getpagesize`
+reports the same 16 KiB granularity. A checked protection query returns the
+canonical region and preserves CPU and GPU permission bits. The non-blocking
+event-flag set supports create, delete, set, clear, and poll. The non-blocking semaphore set
 supports create, delete, poll, and signal. Event-flag and semaphore waits
 remain in the kernel services until guest continuation resumption is
-available.
+available. The first event-queue export set supports create, delete, add,
+trigger, and remove operations for user events. Its blocking wait export is
+also deferred until the same continuation boundary is available.
 
 The tests build small ELF images in memory, including a six-byte leaf program
 that returns 42. The repository does not contain a game, firmware, system

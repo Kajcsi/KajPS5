@@ -84,6 +84,7 @@ std::int32_t FileStatusResult(kernel::KernelStatus status) noexcept {
     case kernel::KernelStatus::kInvalidArgument:
       return kKernelHleErrorInvalidArgument;
     case kernel::KernelStatus::kNotFound: return kKernelHleErrorNotFound;
+    case kernel::KernelStatus::kNoSuchEntry: return kKernelHleErrorNotFound;
     case kernel::KernelStatus::kPermissionDenied:
       return kKernelHleErrorPermissionDenied;
     case kernel::KernelStatus::kNoResources:
