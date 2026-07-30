@@ -13,6 +13,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include "loader/relocator.h"
 
@@ -39,11 +40,19 @@ struct ImportLookupResult {
   }
 };
 
+struct ImportDefinition {
+  std::string library;
+  std::string symbol;
+  std::uint64_t target_address = 0;
+};
+
 class ImportRegistry final : public loader::ImportResolver {
  public:
   [[nodiscard]] ImportRegistryStatus Register(std::string library,
                                               std::string symbol,
                                               std::uint64_t target_address);
+  [[nodiscard]] ImportRegistryStatus RegisterBatch(
+      std::vector<ImportDefinition> imports);
   [[nodiscard]] ImportLookupResult Resolve(
       std::string_view symbol,
       std::span<const std::string> library_order = {}) const;

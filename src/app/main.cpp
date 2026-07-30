@@ -4,8 +4,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -13,6 +15,7 @@
 
 #include "core/memory/guest_memory.h"
 #include "core/project_info.h"
+#include "hle/data_symbols.h"
 #include "hle/export_registry.h"
 #include "hle/import_coverage.h"
 #include "hle/import_registry.h"
@@ -30,6 +33,15 @@ namespace {
 
 constexpr std::uint64_t kMaximumExecutableFileSize = 512U * 1024U * 1024U;
 constexpr std::uint64_t kMaximumTraceMemorySize = 512U * 1024U * 1024U;
+
+std::optional<std::uint64_t> AlignUp(std::uint64_t value,
+                                     std::uint64_t alignment) noexcept {
+  const auto mask = alignment - 1;
+  if (value > std::numeric_limits<std::uint64_t>::max() - mask) {
+    return std::nullopt;
+  }
+  return (value + mask) & ~mask;
+}
 
 std::optional<std::vector<std::byte>> ReadExecutableFile(const char* path,
                                                          std::string& error) {
@@ -91,9 +103,25 @@ int TraceExecutableFile(const char* path) {
     return 3;
   }
 
+  const auto load_end = range.base_address + range.size;
+  const auto hle_data_address =
+      AlignUp(load_end, kajps5::hle::kHleDataPageSize);
+  if (!hle_data_address ||
+      *hle_data_address > std::numeric_limits<std::uint64_t>::max() -
+                              kajps5::hle::kHleDataPageSize) {
+    std::cerr << "Executable load check failed: HLE data range overflows\n";
+    return 3;
+  }
+  const auto trace_memory_size =
+      *hle_data_address + kajps5::hle::kHleDataPageSize - range.base_address;
+  if (trace_memory_size > std::numeric_limits<std::size_t>::max()) {
+    std::cerr << "Executable load check failed: guest range is too large\n";
+    return 3;
+  }
+
   try {
     kajps5::memory::GuestMemory memory(
-        range.base_address, static_cast<std::size_t>(range.size),
+        range.base_address, static_cast<std::size_t>(trace_memory_size),
         kajps5::memory::GuestMemoryProtection::kNone);
     const auto loaded = kajps5::loader::LoadExecutable64(*image, memory);
     if (!loaded) {
@@ -118,6 +146,19 @@ int TraceExecutableFile(const char* path) {
                 << kajps5::loader::LaunchMetadataStatusName(launch.status)
                 << '\n';
       return 5;
+    }
+
+    kajps5::hle::ImportRegistry hle_data;
+    const auto data_status = kajps5::hle::InstallHleDataSymbols(
+        hle_data, memory, *hle_data_address,
+        std::filesystem::path(path).filename().string());
+    std::cout << "hle.data.status="
+              << kajps5::hle::HleDataStatusName(data_status.status) << '\n'
+              << "hle.data.symbols=" << hle_data.size() << '\n';
+    if (!data_status) {
+      std::cerr << "HLE data setup failed: "
+                << kajps5::hle::HleDataStatusName(data_status.status) << '\n';
+      return 7;
     }
 
     kajps5::kernel::KernelRuntime kernel_runtime;
@@ -149,10 +190,9 @@ int TraceExecutableFile(const char* path) {
       return 7;
     }
 
-    const kajps5::hle::ImportRegistry empty_registry;
     const auto tls_module_id = launch.metadata.tls.has_value() ? 1U : 0U;
     const auto relocated = kajps5::loader::ApplyRelocations(
-        loaded.metadata, memory, empty_registry, 0, tls_module_id);
+        loaded.metadata, memory, hle_data, 0, tls_module_id);
     std::cout << kajps5::loader::FormatRelocationTrace(relocated);
     if (!relocated) {
       std::cerr << "Executable relocation check failed: "

@@ -131,6 +131,14 @@ adapts SharpEmu's ordered unique-NID inventory and relocation descriptor
 counts from `src/SharpEmu.Core/Loader/SelfLoader.cs` at the pinned commits. It
 does not copy upstream source or create SharpEmu import stubs.
 
+The guest-owned HLE data page in `src/hle/data_symbols.cpp` and
+`tests/hle_data_symbols_test.cpp` uses the four object NIDs and library scopes
+confirmed by pinned KytyPS5 `src/libs/libKernel.cpp` and `src/libs/libC.cpp`.
+Its bounded process name, duplicate terminator canary, and initial need flags
+adapt pinned SharpEmu `src/SharpEmu.HLE/HleDataSymbols.cs`. KajPS5 stores every
+address in checked guest memory instead of exposing a host pointer. No data
+symbol source was copied.
+
 The register and memory boundary in `src/hle/call_context.cpp` and
 `tests/hle_call_context_test.cpp` follows behavior in SharpEmu's
 `src/SharpEmu.HLE/CpuContext.cs`. No context source was copied.

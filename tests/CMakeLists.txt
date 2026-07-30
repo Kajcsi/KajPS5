@@ -106,6 +106,12 @@ kajps5_deploy_msvc_asan_runtime(kajps5_hle_call_context_test)
 
 add_test(NAME kajps5_hle_call_context COMMAND kajps5_hle_call_context_test)
 
+add_executable(kajps5_hle_data_symbols_test hle_data_symbols_test.cpp)
+target_link_libraries(kajps5_hle_data_symbols_test PRIVATE kajps5_core)
+kajps5_deploy_msvc_asan_runtime(kajps5_hle_data_symbols_test)
+
+add_test(NAME kajps5_hle_data_symbols COMMAND kajps5_hle_data_symbols_test)
+
 add_executable(kajps5_hle_export_registry_test hle_export_registry_test.cpp)
 target_link_libraries(kajps5_hle_export_registry_test PRIVATE kajps5_core)
 kajps5_deploy_msvc_asan_runtime(kajps5_hle_export_registry_test)

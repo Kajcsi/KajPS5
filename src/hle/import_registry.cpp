@@ -32,6 +32,34 @@ ImportRegistryStatus ImportRegistry::Register(std::string library,
                   : ImportRegistryStatus::kAlreadyExists;
 }
 
+ImportRegistryStatus ImportRegistry::RegisterBatch(
+    std::vector<ImportDefinition> imports) {
+  if (imports.empty()) {
+    return ImportRegistryStatus::kInvalidArgument;
+  }
+  for (const auto& definition : imports) {
+    if (!IsValidName(definition.library, kMaximumImportLibraryLength) ||
+        !IsValidName(definition.symbol, kMaximumImportSymbolLength) ||
+        definition.target_address == 0) {
+      return ImportRegistryStatus::kInvalidArgument;
+    }
+  }
+
+  std::lock_guard lock(mutex_);
+  auto updated = entries_;
+  for (auto& definition : imports) {
+    const auto [entry, inserted] = updated.emplace(
+        Key{std::move(definition.library), std::move(definition.symbol)},
+        definition.target_address);
+    (void)entry;
+    if (!inserted) {
+      return ImportRegistryStatus::kAlreadyExists;
+    }
+  }
+  entries_.swap(updated);
+  return ImportRegistryStatus::kOk;
+}
+
 ImportLookupResult ImportRegistry::Resolve(
     std::string_view symbol,
     std::span<const std::string> library_order) const {

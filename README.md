@@ -77,9 +77,10 @@ _Build\src\Release\kajps5.exe --trace-elf R:\path\sample.bin
 
 The command reads at most 512 MiB and rejects a guest range larger than
 512 MiB. Its stable summary is suitable for trace comparisons. Import coverage
-is read-only: it does not call HLE handlers or write fake target addresses.
-KajPS5 does not decrypt retail SELF payloads. It accepts only payload bytes
-that are already available in the input file.
+is read-only: it does not call HLE handlers or write fake target addresses. A
+separate guest-owned data page supplies four known runtime values during the
+load check. KajPS5 does not decrypt retail SELF payloads. It accepts only
+payload bytes that are already available in the input file.
 
 ## Legal use
 

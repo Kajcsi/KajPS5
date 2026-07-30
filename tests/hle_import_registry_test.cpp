@@ -53,6 +53,27 @@ int main() {
             ImportRegistryStatus::kInvalidArgument,
         "long symbol was accepted");
 
+  ImportRegistry batch_registry;
+  Check(batch_registry.RegisterBatch(
+            {{"libc", "first", 0x5000}, {"libc", "second", 0x6000}}) ==
+            ImportRegistryStatus::kOk &&
+            batch_registry.size() == 2,
+        "valid import batch did not register");
+  Check(batch_registry.RegisterBatch(
+            {{"libc", "third", 0x7000}, {"libc", "first", 0x8000}}) ==
+            ImportRegistryStatus::kAlreadyExists &&
+            batch_registry.size() == 2 &&
+            batch_registry.Resolve("third").status ==
+                ImportRegistryStatus::kNotFound,
+        "conflicting import batch changed the registry");
+  Check(batch_registry.RegisterBatch({}) ==
+                ImportRegistryStatus::kInvalidArgument &&
+            batch_registry.RegisterBatch(
+                {{"libc", "third", 0x7000}, {"", "bad", 0x8000}}) ==
+                ImportRegistryStatus::kInvalidArgument &&
+            batch_registry.size() == 2,
+        "invalid import batch changed the registry");
+
   const std::vector<std::string> kernel_first = {"libkernel", "compat"};
   const auto ordered = registry.Resolve("open", kernel_first);
   Check(ordered && ordered.target_address == 0x1000 &&

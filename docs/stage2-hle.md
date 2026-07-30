@@ -49,6 +49,14 @@ inventory, while lookup preserves KytyPS5's library scope. Missing imports are
 ranked by relocation count. Names and scope use a bounded hex format, so guest
 text cannot add trace lines.
 
+Known runtime data never points into host memory. Startup maps one checked
+16 KiB guest page for the stack guard, process name, and two libc need flags.
+The four exact library and NID pairs come from KytyPS5. The bounded process
+name, duplicate terminator canary, and useful data-symbol set adapt SharpEmu.
+Registration is atomic. A conflict removes the new page and keeps the earlier
+registry state. The normal relocation pass can then bind these data imports to
+real guest addresses.
+
 The first `libc` batch implements `__cxa_guard_acquire`,
 `__cxa_guard_release`, and `__cxa_guard_abort`. It preserves the upper six
 bytes of each guest guard word. One guest thread owns initialization, a
