@@ -98,6 +98,11 @@ metadata, extracts the NID as SharpEmu does, and limits lookup to the selected
 library. A malformed or unknown scope remains unresolved and cannot fall back
 to an unrelated HLE library.
 
+The layered import resolver keeps an exact export from an already loaded
+module. When that lookup has no result, it checks the same library in the HLE
+address table. An unresolved import stays unchanged and is reported by the
+existing bounded relocation trace.
+
 SELF/FSELF parsing follows KytyPS5's native header, segment table, and
 program-header containment model. SharpEmu's structural header checks,
 checked fallback offsets, and already-dumped encrypted or compressed payload

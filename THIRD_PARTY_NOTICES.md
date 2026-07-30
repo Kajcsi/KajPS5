@@ -101,7 +101,10 @@ from `src/SharpEmu.Core/Loader/SelfLoader.cs` at the pinned commits. Absolute
 symbol relocations follow the KytyPS5 `R_X86_64_64` flow and SharpEmu's
 unresolved weak-symbol rule. The test-only HLE call path in
 `tests/hle_public_guest_test.cpp` also follows the import thunk and dispatch
-behavior in those pinned projects. No thunk or resolver source was copied.
+behavior in those pinned projects. The ordered resolver in
+`src/loader/layered_import_resolver.cpp` keeps KytyPS5-style loaded-module
+exports and then uses the SharpEmu-style HLE registry as a fallback. No thunk
+or resolver source was copied.
 
 The bounded trace in `src/loader/relocation_trace.cpp` and
 `tests/relocation_trace_test.cpp` adapts SharpEmu's focus on structured,

@@ -48,6 +48,14 @@ kajps5_deploy_msvc_asan_runtime(kajps5_module_export_registry_test)
 add_test(NAME kajps5_module_export_registry
          COMMAND kajps5_module_export_registry_test)
 
+add_executable(kajps5_layered_import_resolver_test
+               layered_import_resolver_test.cpp)
+target_link_libraries(kajps5_layered_import_resolver_test PRIVATE kajps5_core)
+kajps5_deploy_msvc_asan_runtime(kajps5_layered_import_resolver_test)
+
+add_test(NAME kajps5_layered_import_resolver
+         COMMAND kajps5_layered_import_resolver_test)
+
 add_executable(kajps5_elf_dynamic_test elf_dynamic_test.cpp)
 target_link_libraries(kajps5_elf_dynamic_test PRIVATE kajps5_core)
 kajps5_deploy_msvc_asan_runtime(kajps5_elf_dynamic_test)
