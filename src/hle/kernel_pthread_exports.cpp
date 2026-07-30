@@ -466,8 +466,11 @@ HleContextStatus PthreadMutexDestroy(HleCallContext& context,
 }
 
 bool ResolveMutex(HleCallContext& context, kernel::PthreadService& pthreads,
-                  bool posix_errors, std::uint64_t& handle) {
-  const auto address = context.Argument(0).value_or(0);
+                  bool posix_errors, std::uint64_t& handle,
+                  std::uint64_t supplied_address = 0) {
+  const auto address = supplied_address != 0
+                           ? supplied_address
+                           : context.Argument(0).value_or(0);
   if (!ReadOpaqueHandle(context, address, posix_errors, handle)) {
     return false;
   }
@@ -522,6 +525,129 @@ HleContextStatus PthreadMutexUnlock(HleCallContext& context,
   SetSignedResult(context,
                   PthreadStatusResult(pthreads.UnlockMutex(handle),
                                       posix_errors));
+  return HleContextStatus::kOk;
+}
+
+HleContextStatus PthreadCondInit(HleCallContext& context,
+                                 kernel::PthreadService& pthreads,
+                                 bool posix_errors) {
+  const auto output_address = context.Argument(0).value_or(0);
+  if (output_address == 0) {
+    SetSignedResult(context, InvalidArgument(posix_errors));
+    return HleContextStatus::kOk;
+  }
+  if (!context.CanWriteMemory(output_address, sizeof(std::uint64_t))) {
+    SetSignedResult(context, MemoryFault(posix_errors));
+    return HleContextStatus::kOk;
+  }
+  const auto created = pthreads.CreateCondition();
+  if (!created) {
+    SetSignedResult(context, PthreadStatusResult(created.status, posix_errors));
+    return HleContextStatus::kOk;
+  }
+  if (context.WriteUInt64(output_address, created.handle) !=
+      HleContextStatus::kOk) {
+    (void)pthreads.DestroyCondition(created.handle);
+    SetSignedResult(context, MemoryFault(posix_errors));
+    return HleContextStatus::kOk;
+  }
+  context.SetReturn(0);
+  return HleContextStatus::kOk;
+}
+
+HleContextStatus PthreadCondDestroy(HleCallContext& context,
+                                    kernel::PthreadService& pthreads,
+                                    bool posix_errors) {
+  const auto address = context.Argument(0).value_or(0);
+  if (address == 0) {
+    SetSignedResult(context, InvalidArgument(posix_errors));
+    return HleContextStatus::kOk;
+  }
+  if (!context.CanWriteMemory(address, sizeof(std::uint64_t))) {
+    SetSignedResult(context, MemoryFault(posix_errors));
+    return HleContextStatus::kOk;
+  }
+  std::uint64_t handle = 0;
+  if (!ReadOpaqueHandle(context, address, posix_errors, handle)) {
+    return HleContextStatus::kOk;
+  }
+  const auto status = pthreads.DestroyCondition(handle);
+  if (status != kernel::KernelStatus::kOk) {
+    SetSignedResult(context, PthreadStatusResult(status, posix_errors));
+    return HleContextStatus::kOk;
+  }
+  if (context.WriteUInt64(address, 0) != HleContextStatus::kOk) {
+    SetSignedResult(context, MemoryFault(posix_errors));
+    return HleContextStatus::kOk;
+  }
+  context.SetReturn(0);
+  return HleContextStatus::kOk;
+}
+
+bool ResolveCondition(HleCallContext& context,
+                      kernel::PthreadService& pthreads, bool posix_errors,
+                      std::uint64_t& handle) {
+  const auto address = context.Argument(0).value_or(0);
+  if (!ReadOpaqueHandle(context, address, posix_errors, handle)) {
+    return false;
+  }
+  if (handle != 0) {
+    return true;
+  }
+  if (!context.CanWriteMemory(address, sizeof(std::uint64_t))) {
+    SetSignedResult(context, MemoryFault(posix_errors));
+    return false;
+  }
+  const auto created = pthreads.CreateCondition();
+  if (!created) {
+    SetSignedResult(context, PthreadStatusResult(created.status, posix_errors));
+    return false;
+  }
+  handle = created.handle;
+  if (context.WriteUInt64(address, handle) != HleContextStatus::kOk) {
+    (void)pthreads.DestroyCondition(handle);
+    SetSignedResult(context, MemoryFault(posix_errors));
+    return false;
+  }
+  return true;
+}
+
+HleContextStatus PthreadCondWait(HleCallContext& context,
+                                 kernel::PthreadService& pthreads,
+                                 bool posix_errors) {
+  std::uint64_t condition_handle = 0;
+  if (!ResolveCondition(context, pthreads, posix_errors, condition_handle)) {
+    return HleContextStatus::kOk;
+  }
+
+  const auto mutex_address = context.Argument(1).value_or(0);
+  if (mutex_address == 0) {
+    SetSignedResult(context, InvalidArgument(posix_errors));
+    return HleContextStatus::kOk;
+  }
+  std::uint64_t mutex_handle = 0;
+  if (!ResolveMutex(context, pthreads, posix_errors, mutex_handle,
+                    mutex_address)) {
+    return HleContextStatus::kOk;
+  }
+  SetSignedResult(context,
+                  PthreadStatusResult(pthreads.WaitCondition(
+                                          condition_handle, mutex_handle),
+                                      posix_errors));
+  return HleContextStatus::kOk;
+}
+
+HleContextStatus PthreadCondSignal(HleCallContext& context,
+                                   kernel::PthreadService& pthreads,
+                                   bool posix_errors, bool broadcast) {
+  std::uint64_t condition_handle = 0;
+  if (!ResolveCondition(context, pthreads, posix_errors, condition_handle)) {
+    return HleContextStatus::kOk;
+  }
+  SetSignedResult(context,
+                  PthreadStatusResult(
+                      pthreads.SignalCondition(condition_handle, broadcast),
+                      posix_errors));
   return HleContextStatus::kOk;
 }
 
@@ -605,7 +731,7 @@ std::vector<HleExportDefinition> detail::MakeKernelPthreadExports(
   auto* const pthread_view = &pthreads;
   auto* const scheduler_view = &scheduler;
   std::vector<HleExportDefinition> exports;
-  exports.reserve(96);
+  exports.reserve(116);
 
   AddAliases(exports, kPosixPthreadSelfName, kPosixPthreadSelfNid,
              [scheduler_view](HleCallContext& context) {
@@ -793,6 +919,53 @@ std::vector<HleExportDefinition> detail::MakeKernelPthreadExports(
              kKernelPthreadMutexUnlockNid,
              [pthread_view](HleCallContext& context) {
                return PthreadMutexUnlock(context, *pthread_view, false);
+             });
+
+  AddAliases(exports, kPosixPthreadCondInitName, kPosixPthreadCondInitNid,
+             [pthread_view](HleCallContext& context) {
+               return PthreadCondInit(context, *pthread_view, true);
+             });
+  AddAliases(exports, kKernelPthreadCondInitName, kKernelPthreadCondInitNid,
+             [pthread_view](HleCallContext& context) {
+               return PthreadCondInit(context, *pthread_view, false);
+             });
+  AddAliases(exports, kPosixPthreadCondDestroyName,
+             kPosixPthreadCondDestroyNid,
+             [pthread_view](HleCallContext& context) {
+               return PthreadCondDestroy(context, *pthread_view, true);
+             });
+  AddAliases(exports, kKernelPthreadCondDestroyName,
+             kKernelPthreadCondDestroyNid,
+             [pthread_view](HleCallContext& context) {
+               return PthreadCondDestroy(context, *pthread_view, false);
+             });
+  AddAliases(exports, kPosixPthreadCondWaitName, kPosixPthreadCondWaitNid,
+             [pthread_view](HleCallContext& context) {
+               return PthreadCondWait(context, *pthread_view, true);
+             });
+  AddAliases(exports, kKernelPthreadCondWaitName, kKernelPthreadCondWaitNid,
+             [pthread_view](HleCallContext& context) {
+               return PthreadCondWait(context, *pthread_view, false);
+             });
+  AddAliases(exports, kPosixPthreadCondSignalName,
+             kPosixPthreadCondSignalNid,
+             [pthread_view](HleCallContext& context) {
+               return PthreadCondSignal(context, *pthread_view, true, false);
+             });
+  AddAliases(exports, kKernelPthreadCondSignalName,
+             kKernelPthreadCondSignalNid,
+             [pthread_view](HleCallContext& context) {
+               return PthreadCondSignal(context, *pthread_view, false, false);
+             });
+  AddAliases(exports, kPosixPthreadCondBroadcastName,
+             kPosixPthreadCondBroadcastNid,
+             [pthread_view](HleCallContext& context) {
+               return PthreadCondSignal(context, *pthread_view, true, true);
+             });
+  AddAliases(exports, kKernelPthreadCondBroadcastName,
+             kKernelPthreadCondBroadcastNid,
+             [pthread_view](HleCallContext& context) {
+               return PthreadCondSignal(context, *pthread_view, false, true);
              });
 
   AddAliases(exports, kPosixPthreadKeyCreateName, kPosixPthreadKeyCreateNid,

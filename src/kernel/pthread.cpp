@@ -114,6 +114,22 @@ bool PthreadService::ExitCurrent(std::uint64_t exit_value) {
   std::vector<std::string> wake_keys;
   {
     std::lock_guard lock(mutex_);
+    const auto completed = completed_condition_waits_.find(*current_thread);
+    if (completed != completed_condition_waits_.end()) {
+      const auto condition =
+          conditions_.find(completed->second.condition_handle);
+      if (condition != conditions_.end() &&
+          condition->second.active_waiter_count != 0) {
+        --condition->second.active_waiter_count;
+      }
+      const auto waiting_mutex =
+          mutexes_.find(completed->second.mutex_handle);
+      if (waiting_mutex != mutexes_.end() &&
+          waiting_mutex->second.condition_waiter_count != 0) {
+        --waiting_mutex->second.condition_waiter_count;
+      }
+      completed_condition_waits_.erase(completed);
+    }
     for (auto& [handle, mutex] : mutexes_) {
       if (mutex.owner != *current_thread) {
         continue;
@@ -245,7 +261,8 @@ KernelStatus PthreadService::DestroyMutex(std::uint64_t handle) {
   }
   if (found->second.owner != kInvalidKernelHandle ||
       !found->second.waiters.empty() ||
-      !found->second.granted_waiters.empty()) {
+      !found->second.granted_waiters.empty() ||
+      found->second.condition_waiter_count != 0) {
     return KernelStatus::kBusy;
   }
   mutexes_.erase(found);
@@ -366,12 +383,198 @@ std::optional<PthreadMutexSnapshot> PthreadService::GetMutex(
                               mutex.protocol,
                               mutex.owner,
                               mutex.recursion_count,
-                              mutex.waiters.size()};
+                              mutex.waiters.size(),
+                              mutex.condition_waiter_count};
+}
+
+PthreadConditionCreateResult PthreadService::CreateCondition() {
+  std::lock_guard lock(mutex_);
+  if (next_condition_id_ == 0 ||
+      next_condition_id_ >
+          std::numeric_limits<std::uint64_t>::max() -
+              kSyntheticConditionHandleBase) {
+    return {KernelStatus::kNoResources, 0};
+  }
+  const auto handle = kSyntheticConditionHandleBase + next_condition_id_++;
+  conditions_.emplace(handle, ConditionState{});
+  return {KernelStatus::kOk, handle};
+}
+
+KernelStatus PthreadService::DestroyCondition(std::uint64_t handle) {
+  if (handle == 0) {
+    return KernelStatus::kInvalidArgument;
+  }
+  std::lock_guard lock(mutex_);
+  const auto found = conditions_.find(handle);
+  if (found == conditions_.end()) {
+    return KernelStatus::kNotFound;
+  }
+  if (found->second.active_waiter_count != 0 ||
+      !found->second.waiters.empty()) {
+    return KernelStatus::kBusy;
+  }
+  conditions_.erase(found);
+  return KernelStatus::kOk;
+}
+
+KernelStatus PthreadService::WaitCondition(std::uint64_t condition_handle,
+                                           std::uint64_t mutex_handle) {
+  const auto current_thread = scheduler_.current_thread();
+  if (!current_thread) {
+    return KernelStatus::kBusy;
+  }
+
+  bool completing = false;
+  {
+    std::lock_guard lock(mutex_);
+    const auto completed = completed_condition_waits_.find(*current_thread);
+    if (completed != completed_condition_waits_.end()) {
+      if (completed->second.condition_handle != condition_handle ||
+          completed->second.mutex_handle != mutex_handle) {
+        return KernelStatus::kInvalidArgument;
+      }
+      completing = true;
+    }
+  }
+  if (completing) {
+    const auto lock_status = LockMutex(mutex_handle, false);
+    if (lock_status != KernelStatus::kOk) {
+      return lock_status;
+    }
+    std::lock_guard lock(mutex_);
+    const auto completed = completed_condition_waits_.find(*current_thread);
+    if (completed == completed_condition_waits_.end()) {
+      return KernelStatus::kInvalidArgument;
+    }
+    const auto condition = conditions_.find(condition_handle);
+    const auto waiting_mutex = mutexes_.find(mutex_handle);
+    if (condition == conditions_.end() || waiting_mutex == mutexes_.end() ||
+        condition->second.active_waiter_count == 0 ||
+        waiting_mutex->second.condition_waiter_count == 0) {
+      return KernelStatus::kInvalidArgument;
+    }
+    --condition->second.active_waiter_count;
+    --waiting_mutex->second.condition_waiter_count;
+    completed_condition_waits_.erase(completed);
+    return KernelStatus::kOk;
+  }
+
+  {
+    std::lock_guard lock(mutex_);
+    const auto condition = conditions_.find(condition_handle);
+    if (condition == conditions_.end()) {
+      return KernelStatus::kNotFound;
+    }
+    const auto waiting_mutex = mutexes_.find(mutex_handle);
+    if (waiting_mutex == mutexes_.end()) {
+      return KernelStatus::kNotFound;
+    }
+    if (waiting_mutex->second.owner != *current_thread) {
+      return KernelStatus::kPermissionDenied;
+    }
+    if (waiting_mutex->second.recursion_count != 1) {
+      return KernelStatus::kInvalidArgument;
+    }
+    condition->second.waiters.push_back(
+        {*current_thread, condition_handle, mutex_handle});
+    ++condition->second.active_waiter_count;
+    ++waiting_mutex->second.condition_waiter_count;
+  }
+
+  const auto unlock_status = UnlockMutex(mutex_handle);
+  if (unlock_status != KernelStatus::kOk) {
+    std::lock_guard lock(mutex_);
+    const auto condition = conditions_.find(condition_handle);
+    const auto waiting_mutex = mutexes_.find(mutex_handle);
+    if (condition != conditions_.end()) {
+      std::erase_if(condition->second.waiters,
+                    [current_thread](const ConditionWaiter& waiter) {
+                      return waiter.thread == *current_thread;
+                    });
+      if (condition->second.active_waiter_count != 0) {
+        --condition->second.active_waiter_count;
+      }
+    }
+    if (waiting_mutex != mutexes_.end() &&
+        waiting_mutex->second.condition_waiter_count != 0) {
+      --waiting_mutex->second.condition_waiter_count;
+    }
+    return unlock_status;
+  }
+
+  if (scheduler_.BlockCurrent(
+          ConditionWaitKey(condition_handle, *current_thread))) {
+    return KernelStatus::kWouldBlock;
+  }
+  {
+    std::lock_guard lock(mutex_);
+    const auto condition = conditions_.find(condition_handle);
+    const auto waiting_mutex = mutexes_.find(mutex_handle);
+    if (condition != conditions_.end()) {
+      std::erase_if(condition->second.waiters,
+                    [current_thread](const ConditionWaiter& waiter) {
+                      return waiter.thread == *current_thread;
+                    });
+      if (condition->second.active_waiter_count != 0) {
+        --condition->second.active_waiter_count;
+      }
+    }
+    if (waiting_mutex != mutexes_.end() &&
+        waiting_mutex->second.condition_waiter_count != 0) {
+      --waiting_mutex->second.condition_waiter_count;
+    }
+  }
+  const auto relock_status = LockMutex(mutex_handle, false);
+  return relock_status == KernelStatus::kOk ? KernelStatus::kBusy
+                                            : relock_status;
+}
+
+KernelStatus PthreadService::SignalCondition(std::uint64_t handle,
+                                             bool broadcast) {
+  std::vector<std::string> wake_keys;
+  {
+    std::lock_guard lock(mutex_);
+    const auto found = conditions_.find(handle);
+    if (found == conditions_.end()) {
+      return KernelStatus::kNotFound;
+    }
+    auto& waiters = found->second.waiters;
+    while (!waiters.empty()) {
+      const auto waiter = waiters.front();
+      waiters.pop_front();
+      completed_condition_waits_[waiter.thread] = waiter;
+      wake_keys.push_back(ConditionWaitKey(handle, waiter.thread));
+      if (!broadcast) {
+        break;
+      }
+    }
+  }
+  for (const auto& wake_key : wake_keys) {
+    (void)scheduler_.WakeBlockedThreads(wake_key, 1);
+  }
+  return KernelStatus::kOk;
+}
+
+std::optional<PthreadConditionSnapshot> PthreadService::GetCondition(
+    std::uint64_t handle) const {
+  std::lock_guard lock(mutex_);
+  const auto found = conditions_.find(handle);
+  if (found == conditions_.end()) {
+    return std::nullopt;
+  }
+  return PthreadConditionSnapshot{handle, found->second.waiters.size(),
+                                  found->second.active_waiter_count};
 }
 
 std::string PthreadService::MutexWaitKey(std::uint64_t mutex_handle,
                                          KernelHandle thread_handle) {
   return "pthread-mutex:" + std::to_string(mutex_handle) + ":" +
+         std::to_string(thread_handle);
+}
+
+std::string PthreadService::ConditionWaitKey(
+    std::uint64_t condition_handle, KernelHandle thread_handle) {
+  return "pthread-condition:" + std::to_string(condition_handle) + ":" +
          std::to_string(thread_handle);
 }
 

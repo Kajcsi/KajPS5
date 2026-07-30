@@ -115,6 +115,29 @@ inline constexpr auto kPosixPthreadMutexUnlockNid = "2Z+PpY6CaJg";
 inline constexpr auto kKernelPthreadMutexUnlockName = "scePthreadMutexUnlock";
 inline constexpr auto kKernelPthreadMutexUnlockNid = "tn3VlD0hG60";
 
+inline constexpr auto kPosixPthreadCondInitName = "pthread_cond_init";
+inline constexpr auto kPosixPthreadCondInitNid = "0TyVk4MSLt0";
+inline constexpr auto kKernelPthreadCondInitName = "scePthreadCondInit";
+inline constexpr auto kKernelPthreadCondInitNid = "2Tb92quprl0";
+inline constexpr auto kPosixPthreadCondDestroyName = "pthread_cond_destroy";
+inline constexpr auto kPosixPthreadCondDestroyNid = "RXXqi4CtF8w";
+inline constexpr auto kKernelPthreadCondDestroyName = "scePthreadCondDestroy";
+inline constexpr auto kKernelPthreadCondDestroyNid = "g+PZd2hiacg";
+inline constexpr auto kPosixPthreadCondWaitName = "pthread_cond_wait";
+inline constexpr auto kPosixPthreadCondWaitNid = "Op8TBGY5KHg";
+inline constexpr auto kKernelPthreadCondWaitName = "scePthreadCondWait";
+inline constexpr auto kKernelPthreadCondWaitNid = "WKAXJ4XBPQ4";
+inline constexpr auto kPosixPthreadCondSignalName = "pthread_cond_signal";
+inline constexpr auto kPosixPthreadCondSignalNid = "2MOy+rUfuhQ";
+inline constexpr auto kKernelPthreadCondSignalName = "scePthreadCondSignal";
+inline constexpr auto kKernelPthreadCondSignalNid = "kDh-NfxgMtE";
+inline constexpr auto kPosixPthreadCondBroadcastName =
+    "pthread_cond_broadcast";
+inline constexpr auto kPosixPthreadCondBroadcastNid = "mkx2fVhNMsg";
+inline constexpr auto kKernelPthreadCondBroadcastName =
+    "scePthreadCondBroadcast";
+inline constexpr auto kKernelPthreadCondBroadcastNid = "JGgj7Uvrl+A";
+
 inline constexpr auto kPosixPthreadKeyCreateName = "pthread_key_create";
 inline constexpr auto kPosixPthreadKeyCreateNid = "mqULNdimTn0";
 inline constexpr auto kKernelPthreadKeyCreateName = "scePthreadKeyCreate";

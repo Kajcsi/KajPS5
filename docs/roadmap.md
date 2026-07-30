@@ -51,6 +51,8 @@
       and exit calls.
 - [x] Add checked pthread mutex attributes, static initialization, recursive
       ownership, FIFO handoff, and exit cleanup.
+- [x] Add scheduler-backed pthread condition waits, one-waiter signals, and
+      broadcasts with required mutex reacquisition.
 - [x] Add deterministic library-scoped HLE import lookup.
 - [x] Connect checked import lookup to standard relocation targets.
 - [x] Resolve scoped PS5 NID symbols through parsed module and library IDs.

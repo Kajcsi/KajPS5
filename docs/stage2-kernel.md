@@ -17,8 +17,8 @@ The behavior review used these pinned upstream files:
   KytyPS5 commit.
 - SharpEmu `src/SharpEmu.Libs/Kernel/KernelSemaphoreCompatExports.cs` at the
   pinned SharpEmu commit.
-- KytyPS5 `src/kernel/pthread.h` and `src/kernel/pthread.cpp` at the pinned
-  KytyPS5 commit.
+- KytyPS5 `src/kernel/pthread.h`, `src/kernel/pthread.cpp`, and
+  `src/libs/libKernel.cpp` at the pinned KytyPS5 commit.
 - SharpEmu `src/SharpEmu.Libs/Kernel/KernelRuntimeCompatExports.cs`,
   `KernelExports.cs`, `KernelPthreadCompatExports.cs`, and
   `KernelPthreadExtendedCompatExports.cs` at the pinned SharpEmu commit.
@@ -66,6 +66,11 @@ The tests capture the behavior below.
   contended lock blocks through the shared scheduler. Unlock grants ownership
   to the first waiter before wakeup, and thread exit releases owned mutexes so
   a stopped worker cannot strand later work.
+- Pthread condition waits add the caller to a FIFO queue, release one owned
+  mutex acquisition, and block through the shared scheduler. Signal wakes one
+  waiter and broadcast wakes all waiters. Each woken caller must reacquire the
+  same mutex before its wait completes. Active waits keep their condition and
+  mutex handles alive.
 - Setting an event flag uses bitwise OR. Clearing retains the bits selected by
   the supplied mask. Poll supports all-bit and any-bit conditions and can clear
   all bits or only the requested pattern after returning the observed value.
@@ -135,9 +140,10 @@ The tests capture the behavior below.
   unmapped ranges leave the table unchanged.
 - Event-queue handlers expose create, delete, user-event add, edge add,
   trigger, and removal by name and NID.
-- Blocking wait exports remain deferred until the runtime can save and resume
-  a guest call continuation. A live pthread join uses the same temporary
-  recheck contract, as does a contended pthread mutex lock.
+- Blocking event, semaphore, and event-queue wait exports remain deferred until
+  the runtime can save and resume a guest call continuation. A live pthread
+  join uses the current temporary recheck contract, as do contended pthread
+  mutex locks and condition waits.
 
 KajPS5 implements this behavior through its own C++ interfaces. It does not
 copy an upstream executor, continuation system, ownership model, or source

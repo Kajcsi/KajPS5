@@ -179,7 +179,11 @@ guest output and shared-scheduler start, join, and exit flow. The SharpEmu
 mutex behavior also supplies checked static initialization, direct waiter
 handoff, distinct type behavior, and abandoned-owner cleanup. KytyPS5 supplies
 the mutex attribute defaults, accepted types and protocols, guest ABI, and
-POSIX error mapping. The SharpEmu files state:
+POSIX error mapping. Condition names, NIDs, and absolute-time semantics follow
+KytyPS5. Synthetic condition handles, checked static initialization, FIFO
+waiters, busy destruction, atomic mutex release, signal and broadcast
+selection, and required mutex reacquisition adapt SharpEmu behavior. The
+SharpEmu files state:
 
 `Copyright (C) 2026 SharpEmu Emulator Project`
 

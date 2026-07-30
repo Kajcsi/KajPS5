@@ -56,7 +56,7 @@ int main() {
   Check(kajps5::hle::RegisterKernelPthreadExports(
             registry, runtime.pthreads(), runtime.scheduler()) ==
             ExportRegistryStatus::kOk &&
-            registry.size() == 96,
+            registry.size() == 116,
         "pthread exports did not register atomically");
 
   GuestMemory memory(0x1000, 0x4000);
@@ -512,6 +512,133 @@ int main() {
                      kajps5::hle::kKernelPthreadMutexUnlockNid,
                      adaptive_unlock) == 0,
         "adaptive pthread mutex needed more than one matching unlock");
+
+  KernelRuntime condition_runtime;
+  ExportRegistry condition_registry;
+  Check(kajps5::hle::RegisterKernelPthreadExports(
+            condition_registry, condition_runtime.pthreads(),
+            condition_runtime.scheduler()) == ExportRegistryStatus::kOk,
+        "pthread condition exports did not register");
+  const auto condition_waiter =
+      condition_runtime.scheduler().CreateThread("condition-waiter", 700);
+  const auto condition_signaler =
+      condition_runtime.scheduler().CreateThread("condition-signaler", 700);
+  Check(condition_waiter && condition_signaler &&
+            condition_runtime.scheduler().SelectNext() ==
+                condition_waiter.handle,
+        "pthread condition scheduler setup failed");
+
+  HleCallContext condition_init(memory);
+  Check(condition_init.SetRegister(HleRegister::kRdi, 0x1400) &&
+            Dispatch(condition_registry,
+                     kajps5::hle::kPosixPthreadCondInitNid,
+                     condition_init) == 0,
+        "pthread condition initialization failed");
+  std::uint64_t condition_handle = 0;
+  Check(condition_init.ReadUInt64(0x1400, condition_handle) ==
+                HleContextStatus::kOk &&
+            condition_handle != 0,
+        "pthread condition initialization did not write a guest handle");
+  HleCallContext condition_mutex_setup(memory);
+  Check(condition_mutex_setup.WriteUInt64(0x1410, 0) ==
+            HleContextStatus::kOk,
+        "pthread condition mutex setup failed");
+  HleCallContext condition_mutex_lock(memory);
+  Check(condition_mutex_lock.SetRegister(HleRegister::kRdi, 0x1410) &&
+            Dispatch(condition_registry,
+                     kajps5::hle::kPosixPthreadMutexLockNid,
+                     condition_mutex_lock) == 0,
+        "pthread condition mutex lock failed");
+  HleCallContext condition_wait(memory);
+  Check(condition_wait.SetRegister(HleRegister::kRdi, 0x1400) &&
+            condition_wait.SetRegister(HleRegister::kRsi, 0x1410) &&
+            Dispatch(condition_registry,
+                     kajps5::hle::kPosixPthreadCondWaitNid,
+                     condition_wait) == 16,
+        "pthread condition wait did not block");
+  const auto hle_waiting_condition =
+      condition_runtime.pthreads().GetCondition(condition_handle);
+  Check(hle_waiting_condition &&
+            hle_waiting_condition->waiting_count == 1 &&
+            hle_waiting_condition->active_waiter_count == 1 &&
+            condition_runtime.scheduler().SelectNext() ==
+                condition_signaler.handle,
+        "pthread condition wait did not enter the scheduler");
+  HleCallContext busy_condition_destroy(memory);
+  Check(busy_condition_destroy.SetRegister(HleRegister::kRdi, 0x1400) &&
+            Dispatch(condition_registry,
+                     kajps5::hle::kPosixPthreadCondDestroyNid,
+                     busy_condition_destroy) == 16,
+        "pthread destroyed a condition with an active waiter");
+  HleCallContext busy_condition_mutex_destroy(memory);
+  Check(busy_condition_mutex_destroy.SetRegister(HleRegister::kRdi, 0x1410) &&
+            Dispatch(condition_registry,
+                     kajps5::hle::kPosixPthreadMutexDestroyNid,
+                     busy_condition_mutex_destroy) == 16,
+        "pthread destroyed a mutex used by a condition wait");
+  HleCallContext condition_signal(memory);
+  Check(condition_signal.SetRegister(HleRegister::kRdi, 0x1400) &&
+            Dispatch(condition_registry,
+                     kajps5::hle::kKernelPthreadCondSignalNid,
+                     condition_signal) == 0 &&
+            condition_runtime.pthreads().ExitCurrent(0) &&
+            condition_runtime.scheduler().SelectNext() ==
+                condition_waiter.handle,
+        "pthread condition signal did not wake its waiter");
+  HleCallContext resumed_condition_wait(memory);
+  Check(resumed_condition_wait.SetRegister(HleRegister::kRdi, 0x1400) &&
+            resumed_condition_wait.SetRegister(HleRegister::kRsi, 0x1410) &&
+            Dispatch(condition_registry,
+                     kajps5::hle::kKernelPthreadCondWaitNid,
+                     resumed_condition_wait) == 0,
+        "pthread condition waiter did not reacquire its mutex");
+  HleCallContext condition_mutex_unlock(memory);
+  Check(condition_mutex_unlock.SetRegister(HleRegister::kRdi, 0x1410) &&
+            Dispatch(condition_registry,
+                     kajps5::hle::kPosixPthreadMutexUnlockNid,
+                     condition_mutex_unlock) == 0,
+        "pthread condition waiter could not unlock its mutex");
+  HleCallContext condition_destroy(memory);
+  Check(condition_destroy.SetRegister(HleRegister::kRdi, 0x1400) &&
+            Dispatch(condition_registry,
+                     kajps5::hle::kKernelPthreadCondDestroyNid,
+                     condition_destroy) == 0 &&
+            condition_destroy.ReadUInt64(0x1400, condition_handle) ==
+                HleContextStatus::kOk &&
+            condition_handle == 0,
+        "pthread condition destruction did not clear its guest handle");
+  HleCallContext condition_mutex_destroy(memory);
+  Check(condition_mutex_destroy.SetRegister(HleRegister::kRdi, 0x1410) &&
+            Dispatch(condition_registry,
+                     kajps5::hle::kPosixPthreadMutexDestroyNid,
+                     condition_mutex_destroy) == 0,
+        "pthread condition mutex destruction failed");
+
+  HleCallContext static_condition_setup(memory);
+  Check(static_condition_setup.WriteUInt64(0x1420, 0) ==
+            HleContextStatus::kOk,
+        "static pthread condition setup failed");
+  HleCallContext static_condition_broadcast(memory);
+  Check(static_condition_broadcast.SetRegister(HleRegister::kRdi, 0x1420) &&
+            Dispatch(condition_registry,
+                     kajps5::hle::kPosixPthreadCondBroadcastNid,
+                     static_condition_broadcast) == 0 &&
+            static_condition_broadcast.ReadUInt64(0x1420, condition_handle) ==
+                HleContextStatus::kOk &&
+            condition_handle != 0,
+        "static pthread condition was not initialized on first use");
+  HleCallContext static_condition_destroy(memory);
+  Check(static_condition_destroy.SetRegister(HleRegister::kRdi, 0x1420) &&
+            Dispatch(condition_registry,
+                     kajps5::hle::kPosixPthreadCondDestroyNid,
+                     static_condition_destroy) == 0,
+        "static pthread condition destruction failed");
+  HleCallContext condition_fault(memory);
+  Check(condition_fault.SetRegister(HleRegister::kRdi, 0x800) &&
+            Dispatch(condition_registry,
+                     kajps5::hle::kPosixPthreadCondInitNid,
+                     condition_fault) == 14,
+        "invalid pthread condition output changed service state");
 
   return failures == 0 ? 0 : 1;
 }

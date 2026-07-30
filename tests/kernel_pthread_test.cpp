@@ -111,6 +111,181 @@ int main() {
             KernelStatus::kNotFound,
         "stale mutex attribute was accepted");
 
+  KernelRuntime condition_runtime;
+  auto& condition_pthreads = condition_runtime.pthreads();
+  auto& condition_scheduler = condition_runtime.scheduler();
+  const auto condition = condition_pthreads.CreateCondition();
+  const auto condition_mutex = condition_pthreads.CreateMutex(0);
+  const auto condition_waiter =
+      condition_scheduler.CreateThread("condition-waiter", 700);
+  const auto condition_signaler =
+      condition_scheduler.CreateThread("condition-signaler", 700);
+  Check(condition && condition_mutex && condition_waiter &&
+            condition_signaler &&
+            condition_scheduler.SelectNext() == condition_waiter.handle,
+        "condition scheduler setup failed");
+  Check(condition_pthreads.LockMutex(condition_mutex.handle, false) ==
+                KernelStatus::kOk &&
+            condition_pthreads.WaitCondition(condition.handle,
+                                              condition_mutex.handle) ==
+                KernelStatus::kWouldBlock,
+        "condition wait did not release its mutex and block");
+  const auto waiting_condition =
+      condition_pthreads.GetCondition(condition.handle);
+  const auto released_condition_mutex =
+      condition_pthreads.GetMutex(condition_mutex.handle);
+  Check(waiting_condition && waiting_condition->waiting_count == 1 &&
+            waiting_condition->active_waiter_count == 1 &&
+            released_condition_mutex &&
+            released_condition_mutex->owner == kInvalidKernelHandle &&
+            released_condition_mutex->condition_waiter_count == 1,
+        "condition wait state was not recorded");
+  Check(condition_pthreads.DestroyCondition(condition.handle) ==
+                KernelStatus::kBusy &&
+            condition_pthreads.DestroyMutex(condition_mutex.handle) ==
+                KernelStatus::kBusy,
+        "condition wait resources were destroyed while in use");
+  Check(condition_scheduler.SelectNext() == condition_signaler.handle &&
+            condition_pthreads.LockMutex(condition_mutex.handle, false) ==
+                KernelStatus::kOk &&
+            condition_pthreads.SignalCondition(condition.handle, false) ==
+                KernelStatus::kOk &&
+            condition_scheduler.YieldCurrent() &&
+            condition_scheduler.SelectNext() == condition_waiter.handle &&
+            condition_pthreads.WaitCondition(condition.handle,
+                                              condition_mutex.handle) ==
+                KernelStatus::kWouldBlock,
+        "condition signal did not release one waiter");
+  const auto reacquiring_condition =
+      condition_pthreads.GetCondition(condition.handle);
+  const auto contended_condition_mutex =
+      condition_pthreads.GetMutex(condition_mutex.handle);
+  Check(reacquiring_condition && reacquiring_condition->waiting_count == 0 &&
+            reacquiring_condition->active_waiter_count == 1 &&
+            contended_condition_mutex &&
+            contended_condition_mutex->owner == condition_signaler.handle &&
+            contended_condition_mutex->waiter_count == 1 &&
+            condition_scheduler.SelectNext() == condition_signaler.handle &&
+            condition_pthreads.UnlockMutex(condition_mutex.handle) ==
+                KernelStatus::kOk &&
+            condition_pthreads.ExitCurrent(0),
+        "condition waiter did not block while reacquiring its mutex");
+  Check(condition_scheduler.SelectNext() == condition_waiter.handle &&
+            condition_pthreads.WaitCondition(condition.handle,
+                                              condition_mutex.handle) ==
+                KernelStatus::kOk,
+        "signaled condition waiter did not reacquire its mutex");
+  const auto completed_condition =
+      condition_pthreads.GetCondition(condition.handle);
+  const auto reacquired_condition_mutex =
+      condition_pthreads.GetMutex(condition_mutex.handle);
+  Check(completed_condition && completed_condition->waiting_count == 0 &&
+            completed_condition->active_waiter_count == 0 &&
+            reacquired_condition_mutex &&
+            reacquired_condition_mutex->owner == condition_waiter.handle &&
+            reacquired_condition_mutex->condition_waiter_count == 0,
+        "condition waiter completion left stale state");
+  Check(condition_pthreads.UnlockMutex(condition_mutex.handle) ==
+                KernelStatus::kOk &&
+            condition_pthreads.WaitCondition(condition.handle,
+                                              condition_mutex.handle) ==
+                KernelStatus::kPermissionDenied,
+        "condition wait accepted a mutex owned by another thread");
+  Check(condition_pthreads.DestroyCondition(condition.handle) ==
+                KernelStatus::kOk &&
+            condition_pthreads.DestroyMutex(condition_mutex.handle) ==
+                KernelStatus::kOk,
+        "released condition resources could not be destroyed");
+
+  const auto recursive_attributes =
+      condition_pthreads.CreateMutexAttribute();
+  Check(recursive_attributes &&
+            condition_pthreads.SetMutexAttributeType(
+                recursive_attributes.handle, kPthreadMutexRecursive) ==
+                KernelStatus::kOk,
+        "recursive condition mutex setup failed");
+  const auto recursive_condition = condition_pthreads.CreateCondition();
+  const auto recursive_condition_mutex =
+      condition_pthreads.CreateMutex(recursive_attributes.handle);
+  Check(recursive_condition && recursive_condition_mutex &&
+            condition_pthreads.LockMutex(recursive_condition_mutex.handle,
+                                          false) == KernelStatus::kOk &&
+            condition_pthreads.LockMutex(recursive_condition_mutex.handle,
+                                          false) == KernelStatus::kOk &&
+            condition_pthreads.WaitCondition(
+                recursive_condition.handle,
+                recursive_condition_mutex.handle) ==
+                KernelStatus::kInvalidArgument,
+        "condition wait accepted a multiply locked recursive mutex");
+  Check(condition_pthreads.UnlockMutex(recursive_condition_mutex.handle) ==
+                KernelStatus::kOk &&
+            condition_pthreads.UnlockMutex(recursive_condition_mutex.handle) ==
+                KernelStatus::kOk &&
+            condition_pthreads.DestroyCondition(recursive_condition.handle) ==
+                KernelStatus::kOk &&
+            condition_pthreads.DestroyMutex(recursive_condition_mutex.handle) ==
+                KernelStatus::kOk &&
+            condition_pthreads.DestroyMutexAttribute(
+                recursive_attributes.handle) == KernelStatus::kOk,
+        "recursive condition resources could not be released");
+
+  KernelRuntime broadcast_runtime;
+  auto& broadcast_pthreads = broadcast_runtime.pthreads();
+  auto& broadcast_scheduler = broadcast_runtime.scheduler();
+  const auto broadcast_condition = broadcast_pthreads.CreateCondition();
+  const auto broadcast_mutex = broadcast_pthreads.CreateMutex(0);
+  const auto first_broadcast_waiter =
+      broadcast_scheduler.CreateThread("first-broadcast-waiter", 700);
+  const auto second_broadcast_waiter =
+      broadcast_scheduler.CreateThread("second-broadcast-waiter", 700);
+  const auto broadcaster =
+      broadcast_scheduler.CreateThread("broadcaster", 700);
+  Check(broadcast_condition && broadcast_mutex && first_broadcast_waiter &&
+            second_broadcast_waiter && broadcaster &&
+            broadcast_scheduler.SelectNext() == first_broadcast_waiter.handle,
+        "condition broadcast scheduler setup failed");
+  Check(broadcast_pthreads.LockMutex(broadcast_mutex.handle, false) ==
+                KernelStatus::kOk &&
+            broadcast_pthreads.WaitCondition(broadcast_condition.handle,
+                                              broadcast_mutex.handle) ==
+                KernelStatus::kWouldBlock &&
+            broadcast_scheduler.SelectNext() == second_broadcast_waiter.handle &&
+            broadcast_pthreads.LockMutex(broadcast_mutex.handle, false) ==
+                KernelStatus::kOk &&
+            broadcast_pthreads.WaitCondition(broadcast_condition.handle,
+                                              broadcast_mutex.handle) ==
+                KernelStatus::kWouldBlock,
+        "condition broadcast waiters did not block");
+  Check(broadcast_scheduler.SelectNext() == broadcaster.handle &&
+            broadcast_pthreads.SignalCondition(broadcast_condition.handle,
+                                                true) == KernelStatus::kOk &&
+            broadcast_pthreads.ExitCurrent(0),
+        "condition broadcast did not wake its waiters");
+  Check(broadcast_scheduler.SelectNext() == first_broadcast_waiter.handle &&
+            broadcast_pthreads.WaitCondition(broadcast_condition.handle,
+                                              broadcast_mutex.handle) ==
+                KernelStatus::kOk &&
+            broadcast_pthreads.UnlockMutex(broadcast_mutex.handle) ==
+                KernelStatus::kOk &&
+            broadcast_pthreads.ExitCurrent(0),
+        "first broadcast waiter did not complete");
+  Check(broadcast_scheduler.SelectNext() == second_broadcast_waiter.handle &&
+            broadcast_pthreads.WaitCondition(broadcast_condition.handle,
+                                              broadcast_mutex.handle) ==
+                KernelStatus::kOk &&
+            broadcast_pthreads.UnlockMutex(broadcast_mutex.handle) ==
+                KernelStatus::kOk,
+        "second broadcast waiter did not complete");
+  const auto broadcast_state =
+      broadcast_pthreads.GetCondition(broadcast_condition.handle);
+  Check(broadcast_state && broadcast_state->waiting_count == 0 &&
+            broadcast_state->active_waiter_count == 0 &&
+            broadcast_pthreads.DestroyCondition(broadcast_condition.handle) ==
+                KernelStatus::kOk &&
+            broadcast_pthreads.DestroyMutex(broadcast_mutex.handle) ==
+                KernelStatus::kOk,
+        "condition broadcast left stale waiters");
+
   std::cout << "kernel pthread tests passed\n";
   return 0;
 }

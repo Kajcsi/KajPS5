@@ -76,7 +76,7 @@ int main() {
   ExportRegistry registry;
   Check(kajps5::hle::RegisterKernelExports(registry, runtime) ==
             ExportRegistryStatus::kOk &&
-            registry.size() == 192,
+            registry.size() == 212,
         "default kernel exports did not register atomically");
 
   GuestMemory memory(0x1000, 0x1000);
@@ -125,7 +125,7 @@ int main() {
 
   Check(kajps5::hle::RegisterKernelExports(registry, runtime) ==
             ExportRegistryStatus::kAlreadyExists &&
-            registry.size() == 192,
+            registry.size() == 212,
         "duplicate default registration changed the registry");
 
   ExportRegistry conflict_registry;

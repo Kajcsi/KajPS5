@@ -103,6 +103,22 @@ struct PthreadMutexSnapshot {
   KernelHandle owner = kInvalidKernelHandle;
   std::uint32_t recursion_count = 0;
   std::size_t waiter_count = 0;
+  std::size_t condition_waiter_count = 0;
+};
+
+struct PthreadConditionCreateResult {
+  KernelStatus status = KernelStatus::kOk;
+  std::uint64_t handle = 0;
+
+  [[nodiscard]] explicit operator bool() const noexcept {
+    return status == KernelStatus::kOk;
+  }
+};
+
+struct PthreadConditionSnapshot {
+  std::uint64_t handle = 0;
+  std::size_t waiting_count = 0;
+  std::size_t active_waiter_count = 0;
 };
 
 class PthreadService final {
@@ -145,6 +161,15 @@ class PthreadService final {
   [[nodiscard]] std::optional<PthreadMutexSnapshot> GetMutex(
       std::uint64_t handle) const;
 
+  [[nodiscard]] PthreadConditionCreateResult CreateCondition();
+  [[nodiscard]] KernelStatus DestroyCondition(std::uint64_t handle);
+  [[nodiscard]] KernelStatus WaitCondition(std::uint64_t condition_handle,
+                                           std::uint64_t mutex_handle);
+  [[nodiscard]] KernelStatus SignalCondition(std::uint64_t handle,
+                                             bool broadcast);
+  [[nodiscard]] std::optional<PthreadConditionSnapshot> GetCondition(
+      std::uint64_t handle) const;
+
   [[nodiscard]] PthreadKeyCreateResult CreateKey(
       std::uint64_t destructor_address);
   [[nodiscard]] KernelStatus DeleteKey(std::uint32_t key);
@@ -167,6 +192,18 @@ class PthreadService final {
     std::uint32_t recursion_count = 0;
     std::deque<KernelHandle> waiters;
     std::set<KernelHandle> granted_waiters;
+    std::size_t condition_waiter_count = 0;
+  };
+
+  struct ConditionWaiter {
+    KernelHandle thread = kInvalidKernelHandle;
+    std::uint64_t condition_handle = 0;
+    std::uint64_t mutex_handle = 0;
+  };
+
+  struct ConditionState {
+    std::deque<ConditionWaiter> waiters;
+    std::size_t active_waiter_count = 0;
   };
 
   static constexpr std::uint64_t kSyntheticAttributeHandleBase =
@@ -175,9 +212,13 @@ class PthreadService final {
       0x0000600500000000;
   static constexpr std::uint64_t kSyntheticMutexHandleBase =
       0x0000600600000000;
+  static constexpr std::uint64_t kSyntheticConditionHandleBase =
+      0x0000600700000000;
 
   [[nodiscard]] static std::string MutexWaitKey(std::uint64_t mutex_handle,
                                                 KernelHandle thread_handle);
+  [[nodiscard]] static std::string ConditionWaitKey(
+      std::uint64_t condition_handle, KernelHandle thread_handle);
   [[nodiscard]] static bool IsMutexTypeValid(int type) noexcept;
   [[nodiscard]] static bool IsMutexProtocolValid(int protocol) noexcept;
   void GrantNextMutexWaiterLocked(std::uint64_t mutex_handle,
@@ -190,12 +231,15 @@ class PthreadService final {
   std::map<KernelHandle, PthreadThreadSnapshot> threads_;
   std::map<std::uint64_t, PthreadMutexAttribute> mutex_attributes_;
   std::map<std::uint64_t, MutexState> mutexes_;
+  std::map<std::uint64_t, ConditionState> conditions_;
+  std::map<KernelHandle, ConditionWaiter> completed_condition_waits_;
   std::array<std::optional<KeyState>, kMaximumPthreadKeys> keys_{};
   std::map<KernelHandle, std::map<std::uint32_t, std::uint64_t>>
       specific_values_;
   std::uint64_t next_attribute_id_ = 1;
   std::uint64_t next_mutex_attribute_id_ = 1;
   std::uint64_t next_mutex_id_ = 1;
+  std::uint64_t next_condition_id_ = 1;
 };
 
 }  // namespace kajps5::kernel
