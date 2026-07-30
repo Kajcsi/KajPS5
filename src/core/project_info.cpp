@@ -10,7 +10,7 @@ std::string_view ProjectName() noexcept { return "KajPS5"; }
 std::string_view ProjectVersion() noexcept { return KAJPS5_VERSION; }
 
 std::string_view ProjectStatus() noexcept {
-  return "Foundation build. Emulation is not available.";
+  return "Early research build. Game execution is not available yet.";
 }
 
 }  // namespace kajps5

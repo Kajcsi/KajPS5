@@ -1,8 +1,8 @@
 # Stage 1 loader evidence
 
-KajPS5 now has one checked guest-memory buffer and one ELF64 metadata loader.
-The code is an original KajPS5 implementation of the public ELF64 format. It
-does not copy source code from either upstream project.
+KajPS5 has one guest-memory model and one ELF64 loader. The implementation is
+original KajPS5 code based on the public ELF64 format; it does not copy source
+from either upstream project.
 
 The design review used these pinned references:
 
@@ -25,42 +25,46 @@ The design review used these pinned references:
   `src/SharpEmu.Core/Memory/PhysicalVirtualMemory.cs`: protection changes and
   released-range behavior.
 
-The guest-memory model keeps sorted, non-overlapping mapped regions. Every
-read, write, and execute check must pass across the complete range before an
-access starts. The ELF loader rejects overlapping load segments and mapping
-conflicts before it creates any new region. It then preserves each segment's
-`R/W/X` flags during initialization.
+Guest-memory regions stay sorted and never overlap. A complete range must pass
+its read, write, or execute check before access begins. The ELF loader rejects
+overlapping segments and mapping conflicts before it creates a region, then
+keeps each segment's `R/W/X` flags while copying its data.
 
-The public test fixture is generated from constants in
-`tests/elf_loader_test.cpp`. It has no external or proprietary bytes. The tests
-check metadata, file copies, zero fill, truncated input, integer overflow,
-alignment, permissions, gaps, overlap, guest-memory rejection, and terminated
-16-byte dynamic entries. They also check file-backed standard ELF string
-tables, needed-library names, shared-object names, string offsets, and string
-termination. Focused relocation tests check standard 24-byte `RELA` entries,
-PLT format, file-backed tables, mapped targets, and malformed metadata. A
-rejected load does not change guest memory.
+The public test fixture is built from constants in
+`tests/elf_loader_test.cpp`; it contains no external or proprietary bytes. The
+tests cover metadata, file copies, zero fill, truncated input, integer
+overflow, alignment, permissions, gaps, overlap, guest-memory rejection, and
+terminated 16-byte dynamic entries. Other cases cover file-backed string
+tables, needed libraries, shared-object names, string offsets, and missing
+terminators.
 
-The relocation pass validates every entry before it changes memory. It applies
-`R_X86_64_RELATIVE`, ignores no-operation entries, and counts unresolved
-`R_X86_64_GLOB_DAT` and `R_X86_64_JUMP_SLOT` imports. Other relocation types,
-invalid relative symbols, target overflow, and unmapped writes fail.
-The HLE boundary can resolve checked `GLOB_DAT` and `JUMP_SLOT` imports by
-ordered needed-library name. Its stable relocation trace hex-encodes untrusted
-symbol names, limits each name to 128 input bytes, and limits detailed records
-to 32 entries.
+Repeated decoded strings share one parse budget across needed libraries,
+SONAME, and symbols. The budget is four times the input size, with a 64 KiB
+minimum and a 64 MiB maximum. This keeps repeated references from expanding
+into unbounded copies while preserving ordinary duplicate names.
 
-The guest-memory region table supports transactional protection and unmap
-changes. A requested range must be mapped in full before its metadata changes.
-Protection changes split and merge regions into a stable canonical form.
-Unmapping clears released backing bytes, so a later mapping cannot expose old
-guest data. Region queries preserve separate CPU and GPU permission bits.
+Relocation tests cover standard 24-byte `RELA` entries, PLT format,
+file-backed tables, mapped targets, and malformed metadata. A rejected load
+does not change guest memory.
 
-The standard System V hash header supplies the dynamic symbol count. The
-loader checks the complete hash and symbol-table ranges, requires 24-byte
-x86-64 symbols, and resolves each name inside the checked dynamic string table.
-ELFs that use only another hash format remain loadable, but their symbols are
-not indexed yet.
+The relocation pass validates its full plan before writing memory. It applies
+`R_X86_64_RELATIVE`, skips no-operation entries, and counts unresolved
+`R_X86_64_GLOB_DAT` and `R_X86_64_JUMP_SLOT` imports. Unsupported types,
+invalid relative symbols, target overflow, and unmapped writes fail. The HLE
+layer can resolve `GLOB_DAT` and `JUMP_SLOT` imports by ordered needed-library
+name. Relocation traces encode untrusted names as hex and show at most 32
+records with 128 input bytes per name.
+
+Protection and unmap changes are transactional. The full requested range must
+be mapped before its metadata changes. Protection can split and merge regions
+into a canonical layout. Unmapping clears released bytes so a later mapping
+cannot expose stale guest data. Region queries keep CPU and GPU permission bits
+separate.
+
+The standard System V hash header supplies the dynamic symbol count. The loader
+checks the full hash and symbol-table ranges, requires 24-byte x86-64 symbols,
+and resolves every name inside the dynamic string table. ELFs that use only a
+different hash format still load, but their symbols are not indexed yet.
 
 This milestone does not interpret PS5-specific dynamic tags or parse SELF
 containers. The separate controlled native tests are documented in

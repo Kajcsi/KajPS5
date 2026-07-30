@@ -27,8 +27,8 @@ body:
   - type: textarea
     id: steps
     attributes:
-      label: Steps
-      description: Give the shortest repeatable steps.
+      label: Steps to reproduce
+      description: Give the shortest steps that reproduce the problem.
     validations:
       required: true
   - type: textarea
@@ -43,3 +43,10 @@ body:
       label: Actual result
     validations:
       required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Additional context
+      description: Add any public logs or details that may help.
+    validations:
+      required: false

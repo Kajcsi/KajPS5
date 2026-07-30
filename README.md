@@ -1,91 +1,44 @@
 # KajPS5
 
-KajPS5 is an early PlayStation 5 emulator research project. The repository
-contains a small buildable foundation. It does not run PlayStation 5 games.
+KajPS5 is an early PlayStation 5 emulator research project. It builds, runs a
+growing test suite, and can inspect public ELF files. It does not run
+PlayStation 5 games yet.
 
-The project goal is to combine the strengths of KytyPS5 and SharpEmu where
-possible. KytyPS5 guides the native C++ architecture and runtime. SharpEmu
-guides loader and service behavior, diagnostics, and focused tests.
+The goal is to combine the strengths of KytyPS5 and SharpEmu where that makes
+sense. KytyPS5 is the main reference for the native C++ architecture and
+runtime. SharpEmu provides useful loader and service behavior, diagnostics,
+and tests.
 
-The project uses one clear design:
-
-- Use a native C++ runtime as the primary implementation.
-- Study KytyPS5 for proven native runtime and graphics behavior.
-- Study SharpEmu for proven loader, service, and test behavior.
-- Port one behavior only after a focused test proves that it is useful.
-
-KajPS5 is not a direct 50/50 merge. The two upstream projects use different
-languages and different ownership models. A direct merge would make the
-runtime difficult to test and maintain. KajPS5 keeps one C++ runtime and uses
-trace data and tests as the boundary for C# reference work.
+KajPS5 is not a 50/50 source merge. It keeps one C++20 runtime, scheduler,
+guest-memory model, and graphics owner. KytyPS5 components can be adapted when
+they fit that design. SharpEmu behavior first becomes a small trace or test,
+then a small implementation in the same C++ core.
 
 ## Current status
 
-The program prints its version and project status. The core also has a checked
-guest-memory address space and an ELF64 metadata loader. Guest protection and
-unmap changes are transactional, split and merge region metadata, and clear
-released bytes. The loader validates
-all segments before it changes memory. It maps each `PT_LOAD` range with its
-read, write, and execute flags, copies its file bytes, and clears its
-zero-filled tail. It validates raw non-null `PT_DYNAMIC` entries and resolves
-checked standard ELF string-table references for `DT_NEEDED` and `DT_SONAME`.
-It also validates and records standard x86-64 `RELA` and PLT relocation
-metadata. A checked relocation pass applies `R_X86_64_RELATIVE` entries and
-reports unresolved import relocations without changing them.
-The loader also reads standard `DT_HASH` symbol counts and validates dynamic
-symbol names.
-One checked HLE registry resolves symbols by ordered library name and rejects
-ambiguous unscoped lookups. Checked import linking writes resolved
-`GLOB_DAT` and `JUMP_SLOT` targets and reports each unresolved symbol. It does
-not generate general callable stubs yet. Bounded relocation traces hex-encode
-at most 128 bytes from each untrusted symbol name. A test-only redistributable
-ELF fixture calls one no-argument HLE handler through a linked `JUMP_SLOT`.
-One platform-neutral HLE call context maps the six integer argument registers,
-tracks return writes, and uses checked guest-memory reads and writes.
-A deterministic export registry dispatches context handlers by ordered library
-name and does not run ambiguous unscoped symbols.
-The first registered `libKernel` handlers expose consistent process time,
-counter, counter-frequency, and checked `sceKernelClockGettime` behavior from
-the shared kernel clock. `sceKernelGettimeofday` uses the same checked output
-boundary. Each clock handler is available by export name and NID.
-The kernel foundation has typed handles and deterministic event-flag polling.
-It also has typed event queues with registered user events, deterministic
-trigger order, duplicate-trigger coalescing, and scheduler wake integration.
-One cooperative scheduler owns guest thread state and
-deterministic ready, block, wake, yield, and exit transitions. A test-only
-native x86-64 path runs one controlled no-import leaf entry from checked guest
-memory. General guest CPU execution and continuation-based blocked-call
-resumption are not implemented.
-Thread joins, event waits, and semaphore waits use an explicit block, wake,
-and recheck contract.
-The kernel clock uses portable host clocks and keeps its process counter and
-frequency consistent.
-The file foundation normalizes guest paths and reads registered memory-backed
-files. Checked open, close, read, positioned-read, seek, stat, fstat, and path
-reachability handlers expose that same service by export name and NID.
-Metadata uses the 120-byte kernel stat layout and deterministic values for
-registered regular files. Derived directory handles capture a deterministic
-snapshot of the same in-memory namespace. `sceKernelGetdents` and
-`sceKernelGetdirentries` return checked 512-byte records with stable `.` and
-`..` entries. The latter also reports the captured entry position. The service
-does not expose the host file system.
-One atomic default registration binds all current clock, event-queue,
-event-flag, file, memory, and semaphore handlers to the same kernel runtime and
-guest call context. Checked `mprotect` and `munmap` handlers use the same
-guest-memory region table and support their POSIX aliases. `getpagesize`
-reports the same 16 KiB granularity. A checked protection query returns the
-canonical region and preserves CPU and GPU permission bits. The non-blocking
-event-flag set supports create, delete, set, clear, and poll. The non-blocking semaphore set
-supports create, delete, poll, and signal. Event-flag and semaphore waits
-remain in the kernel services until guest continuation resumption is
-available. The first event-queue export set supports create, delete, add,
-trigger, and remove operations for user events. Its blocking wait export is
-also deferred until the same continuation boundary is available.
+The current core includes:
 
-The tests build small ELF images in memory, including a six-byte leaf program
-that returns 42. The repository does not contain a game, firmware, system
-module, or encrypted executable. General guest execution and SELF decryption
-are not implemented.
+- A guest address space with whole-range access checks and transactional map,
+  protection, and unmap operations. Released bytes are cleared before the
+  range can be reused.
+- An ELF64 loader that checks program headers, dynamic strings, standard
+  x86-64 `RELA` relocations, and `DT_HASH` symbols before it changes guest
+  memory. It preserves each `PT_LOAD` segment's read, write, and execute flags.
+- Library-scoped import linking and HLE dispatch, with bounded diagnostics for
+  unresolved symbols and checked guest register and memory access.
+- Typed kernel handles and one cooperative scheduler for ready, running,
+  blocked, and exited guest threads.
+- Event flags, semaphores, user-event queues, portable clocks, guest memory
+  operations, and a read-only in-memory file namespace. The matching
+  `libKernel` handlers share the same services.
+- Small public and generated test fixtures, including an ELF that loads
+  without running guest code and controlled x86-64 leaf programs used only by
+  tests.
+
+KajPS5 still lacks general guest CPU execution, SELF decryption, resumable
+blocked HLE calls, graphics, audio, and title compatibility. The repository
+contains no games, firmware, keys, proprietary modules, or encrypted
+executables.
 
 ## Build
 
@@ -101,14 +54,14 @@ On Windows, the executable is usually in `_Build/src/Release/kajps5.exe`.
 When MSVC AddressSanitizer is enabled, CMake copies its required runtime DLL
 beside each executable so CTest and direct launches use the same build tree.
 
-Inspect and load-check a public decrypted ELF without executing guest code:
+Inspect and load-check a public decrypted ELF without running guest code:
 
 ```powershell
 _Build\src\Release\kajps5.exe --trace-elf R:\path\sample.elf
 ```
 
-The command reads at most 512 MiB and refuses a guest range larger than
-512 MiB. It prints stable ELF and load summary fields for test comparison.
+The command reads at most 512 MiB and rejects a guest range larger than
+512 MiB. Its stable summary is suitable for trace comparisons.
 
 ## Legal use
 

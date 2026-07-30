@@ -2,10 +2,10 @@
 
 ## Stage 0: Foundation
 
-- Keep a buildable C++20 program.
+- Keep the C++20 project buildable at every step.
 - Build and test on Windows and Linux.
 - Pin the upstream commits used for research.
-- Define source and license records before code import.
+- Record source and license details before importing code.
 
 ## Stage 1: Loader and guest memory
 
@@ -43,8 +43,8 @@
 - [x] Add a transactional libkernel gettimeofday handler.
 - [x] Run a public no-import guest leaf test program.
 - [x] Run a public guest program through checked HLE imports.
-- Add thread, event, file, and time tests.
-- Compare focused traces with the two upstream projects.
+- Expand thread, event, file, and time coverage as their HLE bridges grow.
+- Compare small, repeatable traces with both upstream projects.
 
 ## Stage 3: Graphics and audio
 
@@ -57,5 +57,5 @@
 
 - Load legally obtained title data.
 - Record the first unsupported operation.
-- Fix one generic operation at a time.
+- Fix one reusable operation at a time.
 - Do not add title-specific success claims without repeatable evidence.

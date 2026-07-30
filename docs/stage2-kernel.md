@@ -1,9 +1,8 @@
 # Stage 2 kernel research
 
-KajPS5 now has one kernel runtime, one typed handle table, deterministic
-event-flag polling, typed user-event queues, and one cooperative guest
-scheduler. It does not execute guest CPU instructions or resume blocked guest
-calls yet.
+KajPS5 has one kernel runtime, one typed handle table, user-event queues, and a
+cooperative guest scheduler. It does not execute general guest code or resume
+a blocked guest call yet.
 
 The behavior review used these pinned upstream files:
 
@@ -33,104 +32,92 @@ The behavior review used these pinned upstream files:
   `src/SharpEmu.Libs/Kernel/KernelEventQueueCompatExports.cs` at the pinned
   SharpEmu commit.
 
-The focused tests record these shared behaviors:
+The tests capture the behavior below.
 
-- Setting a pattern uses bitwise OR.
-- Clearing an event flag retains the bits selected by the supplied mask.
-- Polling supports all-bit and any-bit conditions.
-- A successful poll can clear all bits or only the requested pattern.
-- Polling returns the observed pattern before it applies a clear mode.
-- Invalid attributes, wait modes, zero patterns, and stale handles fail.
-- Ready threads use deterministic FIFO selection.
-- Only one guest thread can be running at a time.
-- Blocking records a wait key. A bounded wake moves matching threads back to
-  the ready queue in handle order.
-- Yielding requeues the current thread. Exiting preserves its result for
-  snapshots.
-- Joining a live thread blocks the caller. Thread exit wakes all joiners, and a
-  repeated join returns the preserved exit value.
-- Self joins and stale thread handles fail without changing scheduler state.
-- An unsatisfied event wait blocks the current thread on that event handle.
-- Setting or deleting an event wakes its blocked threads in handle order.
-- A woken thread rechecks its wait condition before it continues. This permits
-  deterministic spurious wakes when a set operation does not satisfy it.
-- Semaphore creation checks its attributes, initial count, and maximum count.
-- Poll and wait operations acquire counts atomically. Signals cannot exceed the
-  maximum count.
-- Semaphore signal and delete operations use the same scheduler wake and
-  recheck contract as event flags.
-- Priority queue attributes are validated but currently use deterministic
-  handle-order wake behavior.
-- Realtime values use Unix time. Monotonic values do not move backward under a
-  valid source.
-- Process time starts with the kernel runtime. Its counter uses nanoseconds and
-  reports a matching one-gigahertz frequency.
-- The first HLE clock handlers expose process microseconds, the same nanosecond
-  counter, and its one-gigahertz frequency through `libKernel`.
-- Clock handlers register both readable export names and the NIDs confirmed by
-  the two pinned references.
-- The clock-gettime HLE handler writes both timespec fields atomically and
-  returns kernel-compatible `EFAULT` or `EINVAL` results.
-- The gettimeofday HLE handler writes both timeval fields through the same
-  checked boundary.
-- Clock conversion tests use an injected source and do not depend on host time.
-- Guest paths use forward slashes, collapse empty and current-directory
-  components, and reject relative paths, parent traversal, and embedded nulls.
-- The initial file service is read-only. It exposes only files registered in
-  memory and never resolves an untrusted guest path against the host file
+## Threads and synchronization
+
+- Ready threads run in FIFO order, and only one guest thread runs at a time.
+  Yield puts the current thread at the end of the ready queue.
+- Blocking records a wait key. Wake operations return matching threads to the
+  ready queue in handle order, with an optional wake limit.
+- Thread exit keeps the return value and wakes every joiner. Joining a live
+  thread blocks; joining an exited thread returns its saved value. Self joins
+  and stale handles leave scheduler state unchanged.
+- Setting an event flag uses bitwise OR. Clearing retains the bits selected by
+  the supplied mask. Poll supports all-bit and any-bit conditions and can clear
+  all bits or only the requested pattern after returning the observed value.
+- Invalid event attributes, wait modes, zero patterns, and stale handles fail.
+  A blocked event wait rechecks its condition after every wake, including a
+  wake that does not satisfy it.
+- Semaphore creation validates its attributes and count range. Poll and wait
+  acquire counts atomically, while signal never exceeds the maximum. Signal
+  and delete follow the same wake-and-recheck rule as event flags.
+- Priority attributes are validated. Wake order remains handle-based until the
+  scheduler implements priority selection.
+- Event queues follow KytyPS5's typed registration, trigger, and user-event
+  flag contract. Records use the 32-byte kernel layout. Repeated pending
+  triggers for one identifier follow SharpEmu's coalescing behavior: new data
+  replaces old data, `fflags` counts extra triggers, and queue order stays put.
+  Trigger and delete operations wake threads through the shared scheduler.
+
+## Time
+
+- Realtime values use Unix time. Monotonic values do not move backward when
+  the injected source is valid.
+- Process time starts with the kernel runtime. Its nanosecond counter reports a
+  matching one-gigahertz frequency.
+- The first `libKernel` clock handlers expose process microseconds, that same
+  counter, and its frequency by readable name and confirmed NID.
+- `sceKernelClockGettime` and `sceKernelGettimeofday` write their complete
+  output structures atomically. Invalid clocks and bad guest pointers return
+  kernel-compatible results.
+- Clock tests inject their time source instead of depending on the host clock.
+
+## Files and directories
+
+- Guest paths use forward slashes, collapse empty and `.` components, and
+  reject relative paths, `..`, and embedded nulls.
+- The initial file service is read-only and exposes only files registered in
+  memory. An untrusted guest path is never resolved against the host file
   system.
-- Read, positioned-read, seek, close, and size operations use typed handles and
-  checked offsets.
-- The first file HLE bridge reads a bounded guest path, maps service failures to
-  kernel-compatible results, and registers open and close by name and NID.
-- Checked read and positioned-read handlers preflight the full guest output
-  range and use bounded temporary chunks. Seek validates signed offsets and
-  origins before it changes the descriptor position.
-- Stat and fstat write the shared 120-byte regular-file layout atomically.
-  Registered memory files report a stable path-based inode, their size,
-  512-byte block accounting, and deterministic zero timestamps.
-- Directory handles capture immediate children from the registered in-memory
-  namespace when they open. Entries start with `.` and `..`, then use stable
-  case-insensitive name order. They do not query the host file system.
-- `sceKernelGetdents` writes one zero-filled 512-byte record per call. It uses
-  deterministic FNV-1a name hashes and distinguishes a regular-file handle,
-  a stale handle, a short request, and a bad guest output range.
-- `sceKernelGetdirentries` uses the same record path and can write the captured
-  entry position to an optional base pointer. All output ranges are checked
-  before the cursor advances.
-- One atomic export batch binds all current clock, event-queue, event-flag,
-  file, and semaphore handlers to the same kernel runtime. A registration
-  conflict leaves the destination registry unchanged.
-- The reachability handler checks only the registered guest namespace. Missing,
-  invalid, and unreadable paths return distinct kernel-compatible results.
-- Non-blocking semaphore HLE handlers create, delete, poll, and signal the same
-  typed objects used by the scheduler. Handle output uses an atomic checked
-  64-bit guest write. Wait export dispatch is deferred until blocked guest
-  continuations can resume.
-- Non-blocking event-flag HLE handlers create, delete, set, clear, and poll the
-  same typed objects. Poll writes the observed pattern before it applies a clear
-  mode. A checked result-pointer fault cannot change the event bits. Wait and
-  cancel export dispatch remain deferred until blocked guest continuations can
-  resume.
-- Checked memory HLE handlers expose `sceKernelMprotect`, `sceKernelMunmap`,
-  and their POSIX aliases. Protection uses 16 KiB guest-page normalization.
-  Invalid or partly unmapped ranges do not change the shared region table.
-- The memory-protection query returns Kyty's exclusive region end and
-  round-trips CPU and GPU permission bits through the same region table. A
-  bad optional output does not change an earlier output.
-- Event queues use Kyty's typed queue, registration, trigger, and user-event
-  flag contract. Triggered records use the 32-byte kernel event layout.
-- Repeated pending triggers for one identifier use SharpEmu's deterministic
-  coalescing behavior. The newest data replaces the older data and `fflags`
-  counts the extra triggers without changing queue order.
-- Trigger and delete operations wake threads through the shared scheduler.
-  The nonblocking HLE set exposes queue creation, deletion, user-event add,
-  edge add, trigger, and removal by name and NID. Blocking wait dispatch stays
-  deferred until a guest call continuation can resume.
+- Open, read, positioned read, seek, close, and size operations use typed
+  handles and validated offsets. Guest output ranges are checked before reads,
+  and large reads use bounded temporary chunks. A failed write does not advance
+  the file position.
+- Stat and fstat write the full 120-byte regular-file layout at once. Memory
+  files report a stable path-based inode, 512-byte block accounting, and zero
+  timestamps.
+- A directory handle captures its immediate children when opened. Entries
+  begin with `.` and `..`, then follow stable case-insensitive name order.
+- `sceKernelGetdents` writes one zero-filled 512-byte record per call and uses
+  FNV-1a name hashes. It distinguishes regular-file handles, stale handles,
+  short requests, and bad output ranges.
+- `sceKernelGetdirentries` uses the same record format and can write the
+  captured entry position to an optional base pointer. Every output is checked
+  before the cursor moves.
+- Reachability queries inspect only the registered guest namespace and return
+  different results for missing, invalid, and unreadable paths.
 
-KajPS5 implements these behaviors in its own C++ interfaces. It does not copy
-the upstream host-thread executor, continuation system, object ownership
-model, or source code.
+## HLE registration
 
-The wait bridges do not resume a saved guest continuation. The caller must
-invoke the wait again after the scheduler selects the woken thread.
+- One atomic batch binds the current clock, event-queue, event-flag, file,
+  memory, and semaphore handlers to the same kernel runtime. A conflict leaves
+  the registry unchanged.
+- Semaphore handlers create, delete, poll, and signal the same objects used by
+  the scheduler. Event-flag handlers create, delete, set, clear, and poll their
+  shared objects. Handle and result outputs are checked before state changes.
+- Memory handlers expose `sceKernelMprotect`, `sceKernelMunmap`, their POSIX
+  aliases, and the protection query. They use 16 KiB guest pages and keep CPU
+  and GPU permission bits in the shared region table. Invalid or partly
+  unmapped ranges leave the table unchanged.
+- Event-queue handlers expose create, delete, user-event add, edge add,
+  trigger, and removal by name and NID.
+- Blocking wait exports remain deferred until the runtime can save and resume
+  a guest call continuation.
+
+KajPS5 implements this behavior through its own C++ interfaces. It does not
+copy an upstream executor, continuation system, ownership model, or source
+code.
+
+The current wait bridges cannot resume a saved guest continuation. A caller
+must invoke the wait again after the scheduler selects the woken thread.

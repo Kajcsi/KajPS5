@@ -1,11 +1,12 @@
 # Stage 2 CPU research
 
-KajPS5 has two narrow native x86-64 execution tests. The first loads a public
-ELF made from constants, copies its six-byte leaf entry from checked guest
-memory into a writable host allocation, changes the allocation to read-execute,
-and calls it. The leaf returns 42 and does not use arguments, memory, imports,
-system calls, or threads. The second test-only fixture calls one no-argument
-HLE handler through a checked import and is documented in `stage2-hle.md`.
+KajPS5 has two deliberately small native x86-64 execution tests. The first
+loads an ELF built from constants, copies its six-byte leaf entry from guest
+memory into a writable host allocation, changes that allocation to
+read-execute, and calls it. The leaf returns 42 without using arguments,
+memory, imports, system calls, or threads. The second fixture calls a
+no-argument HLE handler through a linked import and is described in
+`stage2-hle.md`.
 
 The design review used these pinned references:
 
@@ -17,13 +18,13 @@ The design review used these pinned references:
   `src/SharpEmu.HLE/HostMemory.cs` and
   `src/SharpEmu.Core/Cpu/Native/DirectExecutionBackend.cs`.
 
-The KajPS5 implementation is a new small C++ boundary. It allocates writable
-memory, copies at most 4 KiB from a readable and executable guest range, and
-then removes write access before execution. Windows uses `VirtualAlloc`,
-`VirtualProtect`, and `FlushInstructionCache`. POSIX hosts use `mmap`,
-`mprotect`, and an instruction-cache clear.
+The KajPS5 boundary is small: allocate writable memory, copy at most 4 KiB from
+a readable and executable guest range, then remove write access before the
+call. Windows uses `VirtualAlloc`, `VirtualProtect`, and
+`FlushInstructionCache`. POSIX hosts use `mmap`, `mprotect`, and an
+instruction-cache clear.
 
-The test-only executor is not an ELF command-line option. It has no guest CPU
-context, ABI bridge, import dispatch, signal or exception recovery, timeout,
-or instruction validation. It must only run controlled leaf fixtures until
-those boundaries exist.
+The executor is available only to tests. It has no guest CPU context, ABI
+bridge, general import dispatch, fault recovery, timeout, or instruction
+validation. Until those pieces exist, it must run only controlled leaf
+fixtures.

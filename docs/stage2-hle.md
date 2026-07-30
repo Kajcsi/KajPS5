@@ -1,9 +1,9 @@
 # Stage 2 HLE research
 
-KajPS5 has one checked import registry for future HLE trampolines. Each entry
-has a library name, a symbol name, and a nonzero target address. Exact duplicate
-entries fail. Lookup follows the ELF's ordered needed-library list. An unscoped
-lookup succeeds only when one library owns the symbol.
+KajPS5 has one import registry for future HLE trampolines. Each entry contains
+a library name, symbol name, and nonzero target address. Exact duplicates are
+rejected. Lookup follows the ELF's ordered needed-library list, while an
+unscoped lookup succeeds only when one library owns the symbol.
 
 The design review used these pinned references:
 
@@ -15,53 +15,51 @@ The design review used these pinned references:
   checked context and export boundary in `src/SharpEmu.HLE/CpuContext.cs` and
   `src/SharpEmu.HLE/ExportedFunction.cs`.
 
-The C++ registry does not copy either ownership model or executor. It provides
-a deterministic name boundary for relocation and HLE dispatch work. The
-relocation pass writes resolved `R_X86_64_GLOB_DAT` and
-`R_X86_64_JUMP_SLOT` targets only after it validates the complete plan. Missing
-symbols remain unchanged and produce structured diagnostics. Stable diagnostic
-text limits detail to 32 imports and 128 bytes per hex-encoded symbol name, so
-guest data cannot add trace lines or create unbounded detail. It does not
-generate general executable stubs. One
-test-only redistributable ELF fixture uses the complete parse, load, link, and
-native leaf path to call a no-argument HLE handler. The fixture adjusts its
-stack for the host ABI. It is not a PS5 ABI bridge.
+The C++ registry copies neither upstream ownership model nor executor. It gives
+relocation and HLE dispatch one predictable name lookup. Resolved
+`R_X86_64_GLOB_DAT` and `R_X86_64_JUMP_SLOT` targets are written only after the
+entire relocation plan passes validation. Missing symbols stay unchanged and
+produce structured diagnostics. A trace shows at most 32 imports and 128
+hex-encoded input bytes per name, so guest data cannot inject lines or produce
+unbounded output.
+
+The registry does not generate general executable stubs. One redistributable
+test ELF goes through parse, load, link, and native leaf execution to call a
+no-argument HLE handler. It adjusts its stack for the host ABI, but it is not a
+PS5 ABI bridge.
 
 The platform-neutral HLE call context maps the six System V integer argument
-registers and the return register. Integer and string access goes through the
-checked guest-memory model. String reads are limited to 4 KiB. If a bulk read
-crosses an unmapped boundary, the context checks one byte at a time so it can
-still accept a terminator before the boundary. A missing terminator and a
-memory fault are different results. Native trampoline state capture is not
-connected yet.
+registers and the return register. Integer and string access use guest memory,
+and string reads stop at 4 KiB. If a bulk read crosses an unmapped boundary,
+the context checks bytes individually so it can still accept an earlier null
+terminator. A missing terminator and a memory fault remain distinct results.
+Native trampolines do not capture this state yet.
 
-The HLE export registry stores C++ context handlers separately from executable
-import targets. Dispatch follows the same ordered needed-library scope as
-linking. An unscoped duplicate name is ambiguous and does not run. The registry
-copies the selected handler under its lock and runs it after it releases the
-lock. Handler memory faults remain distinct from lookup failures.
+The HLE export registry keeps C++ context handlers separate from executable
+import targets. Dispatch uses the same ordered library scope as linking. An
+ambiguous unscoped name does not run. The registry copies the selected handler
+while locked, releases the lock, and only then calls it. Memory faults inside a
+handler stay distinct from lookup failures.
 
-The first generic `libKernel` handler batch exposes
+The first `libKernel` handler batch exposes
 `sceKernelGetProcessTime`, `sceKernelGetProcessTimeCounter`, and
 `sceKernelGetProcessTimeCounterFrequency`. All three use the shared kernel
 clock service, so the microsecond value, nanosecond counter, and one-gigahertz
-frequency stay consistent. Batch registration validates all definitions before
-it changes the export table.
+frequency agree. Batch registration validates every definition before it
+changes the export table.
 
 `sceKernelClockGettime` uses the same clock service and writes its 16-byte
-timespec in one checked operation. A bad guest range leaves memory unchanged.
-Guest-visible `EFAULT` and `EINVAL` values follow the pinned KytyPS5 kernel
-contract. SharpEmu's corresponding Gen5 values are documented as synthetic,
-so KajPS5 does not use them as the kernel ABI.
-`sceKernelGettimeofday` uses the same whole-range write for its seconds and
-microseconds fields.
+timespec in one operation. A bad guest range leaves memory unchanged.
+Guest-visible `EFAULT` and `EINVAL` values follow KytyPS5. SharpEmu labels its
+different Gen5 values as synthetic, so KajPS5 does not use them as the kernel
+ABI. `sceKernelGettimeofday` applies the same whole-range rule to its seconds
+and microseconds fields.
 
-The checked `sceKernelMprotect` and `sceKernelMunmap` handlers, plus their
-POSIX aliases, change the memory owned by the active HLE call context. Protect
-ranges use the guest's 16 KiB page granularity. Unknown protection bits and
-overflowing ranges fail before any region changes. GPU-only flags do not grant
-guest CPU access. Unmap requires a fully mapped range and clears released
-backing bytes. `getpagesize` reports the same 16 KiB granularity.
+`sceKernelMprotect`, `sceKernelMunmap`, and their POSIX aliases change the guest
+memory owned by the active call context. Protection uses 16 KiB guest pages.
+Unknown flags and overflowing ranges fail before a region changes, and GPU-only
+flags never grant CPU access. Unmap requires a fully mapped range and clears
+the released bytes. `getpagesize` reports the same 16 KiB size.
 `sceKernelQueryMemoryProtection` returns the canonical start, exclusive end,
-and complete CPU/GPU protection mask. It preflights all optional outputs before
-it writes any of them.
+and full CPU/GPU protection mask. It checks every optional output before
+writing any of them.

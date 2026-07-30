@@ -1,91 +1,99 @@
 # Third-party notices
 
-The current source does not copy source code from KytyPS5 or SharpEmu. It uses
-both projects as research references. See `docs/stage1-loader.md`,
-`docs/stage2-kernel.md`, `docs/stage2-cpu.md`, and `docs/stage2-hle.md` for the
-reviewed files and pinned commits.
+The current source does not copy code from KytyPS5 or SharpEmu. Both projects
+serve as research references. The reviewed files and pinned commits are listed
+in `docs/stage1-loader.md`, `docs/stage2-kernel.md`, `docs/stage2-cpu.md`, and
+`docs/stage2-hle.md`.
 
-The clock, event-flag, file, semaphore, and scheduler behaviors in `src/kernel/`,
-`tests/kernel_event_flag_test.cpp`, `tests/kernel_event_wait_test.cpp`, and
-`tests/kernel_clock_test.cpp`, `tests/kernel_file_test.cpp`,
-`tests/kernel_scheduler_test.cpp`, and `tests/kernel_semaphore_test.cpp` were
-implemented from focused observations of KytyPS5 and SharpEmu. The SharpEmu
-reference files state:
+## Kernel behavior
+
+The clock, event-flag, file, semaphore, and scheduler behavior in `src/kernel/`
+and the matching `tests/kernel_*_test.cpp` files was based on behavior observed
+in KytyPS5 and SharpEmu. The SharpEmu reference files state:
 
 `Copyright (C) 2026 SharpEmu Emulator Project`
 
 Both references are GPL-2.0-or-later. No upstream host executor, continuation
-system, ownership model, or source code was copied.
+system, ownership model, or source was copied.
 
-The checked dynamic-table, standard dynamic-string, and standard `RELA`
-behavior in
+## Loader and guest memory
+
+The dynamic-table, standard dynamic-string, and standard `RELA` behavior in
 `src/loader/elf.cpp`, `src/loader/relocator.cpp`,
 `tests/elf_dynamic_test.cpp`, `tests/elf_relocation_test.cpp`, and
-`tests/elf_symbol_test.cpp` was implemented
-from focused observations of the pinned KytyPS5 and SharpEmu loader files. The
-SharpEmu reference file states:
+`tests/elf_symbol_test.cpp` was based on behavior observed in the pinned
+KytyPS5 and SharpEmu loader files. The SharpEmu reference file states:
 
 `Copyright (C) 2026 SharpEmu Emulator Project`
 
-No upstream loader source code was copied.
+No upstream loader source was copied.
 
-The transactional guest-memory protection and unmap behavior in
-`src/core/memory/guest_memory.cpp` and `tests/guest_memory_test.cpp` uses
-focused observations from KytyPS5 `src/common/virtualMemory.h` and
+Transactional guest-memory protection and unmap behavior in
+`src/core/memory/guest_memory.cpp` and `tests/guest_memory_test.cpp` follows
+behavior observed in KytyPS5 `src/common/virtualMemory.h` and
 `src/common/virtualMemory.cpp`, and SharpEmu
 `src/SharpEmu.HLE/IGuestAddressSpace.cs` and
 `src/SharpEmu.Core/Memory/PhysicalVirtualMemory.cs` at the pinned commits.
-No upstream virtual-memory source code was copied.
+No upstream virtual-memory source was copied.
 
-The checked memory HLE handlers in `src/hle/kernel_memory_exports.cpp` and
-`tests/hle_kernel_memory_exports_test.cpp` use focused behavior observations
-from KytyPS5 `src/kernel/memory.cpp` and `src/libs/libKernel.cpp`, and SharpEmu
+The memory HLE handlers in `src/hle/kernel_memory_exports.cpp` and
+`tests/hle_kernel_memory_exports_test.cpp` follow behavior observed in KytyPS5
+`src/kernel/memory.cpp` and `src/libs/libKernel.cpp`, and SharpEmu
 `src/SharpEmu.Libs/Kernel/KernelMemoryCompatExports.cs` at the pinned commits.
 They use the 16 KiB guest page size and the `mprotect`, `munmap`,
 `getpagesize`, and memory-protection query names and NIDs confirmed by both
 references. The query uses KytyPS5's exclusive range end. No memory-export
-source code was copied.
+source was copied.
+
+## Native execution, imports, and HLE
 
 The W^X native leaf-execution behavior in
 `src/cpu/native_leaf_executor.cpp` and
-`tests/native_leaf_executor_test.cpp` was implemented from focused
-observations of the pinned KytyPS5 and SharpEmu host-memory and native-executor
-files. The SharpEmu reference files state:
+`tests/native_leaf_executor_test.cpp` was based on behavior observed in the
+pinned KytyPS5 and SharpEmu host-memory and native-executor files. The
+SharpEmu reference files state:
 
 `Copyright (C) 2026 SharpEmu Emulator Project`
 
-No upstream executor or host-memory source code was copied.
+No upstream executor or host-memory source was copied.
 
-The library-scoped HLE import lookup and checked relocation connection in
+The library-scoped HLE import lookup and relocation connection in
 `src/hle/import_registry.cpp`, `tests/hle_import_registry_test.cpp`, and
-`tests/hle_import_link_test.cpp` was implemented from focused observations of
-the pinned KytyPS5 and SharpEmu import resolvers. The test-only HLE call path in
-`tests/hle_public_guest_test.cpp` also uses focused observations of import
-thunks and dispatch in those pinned projects. No thunk source code was copied.
+`tests/hle_import_link_test.cpp` were based on behavior observed in the pinned
+KytyPS5 and SharpEmu import resolvers. The test-only HLE call path in
+`tests/hle_public_guest_test.cpp` also follows the import thunk and dispatch
+behavior in those pinned projects. No thunk source was copied.
+
 The bounded trace in `src/loader/relocation_trace.cpp` and
 `tests/relocation_trace_test.cpp` adapts SharpEmu's focus on structured,
-bounded import diagnostics. No diagnostic source code was copied.
-The checked register and memory boundary in `src/hle/call_context.cpp` and
-`tests/hle_call_context_test.cpp` uses focused behavior observations from
-SharpEmu's `src/SharpEmu.HLE/CpuContext.cs`. No context source code was copied.
+bounded import diagnostics. No diagnostic source was copied.
+
+The register and memory boundary in `src/hle/call_context.cpp` and
+`tests/hle_call_context_test.cpp` follows behavior in SharpEmu's
+`src/SharpEmu.HLE/CpuContext.cs`. No context source was copied.
+
 The scoped handler table in `src/hle/export_registry.cpp` and
-`tests/hle_export_registry_test.cpp` uses focused behavior observations from
-SharpEmu's `src/SharpEmu.HLE/ExportedFunction.cs` and KytyPS5's native symbol
-database. No export registry source code was copied.
+`tests/hle_export_registry_test.cpp` follows behavior in SharpEmu's
+`src/SharpEmu.HLE/ExportedFunction.cs` and KytyPS5's native symbol database.
+No export-registry source was copied.
+
 The process-time handlers in `src/hle/kernel_clock_exports.cpp` and
 `tests/hle_kernel_clock_exports_test.cpp` adapt the matching process-time,
 counter, and frequency behavior from the pinned KytyPS5
 `src/kernel/pthread.cpp` and SharpEmu
-`src/SharpEmu.Libs/Kernel/KernelRuntimeCompatExports.cs`. No clock export
-source code was copied. Clock NIDs are confirmed by both pinned references.
+`src/SharpEmu.Libs/Kernel/KernelRuntimeCompatExports.cs`. No clock-export
+source was copied. Clock NIDs are confirmed by both pinned references.
 The clock-gettime and gettimeofday handlers use KytyPS5's kernel-compatible
 `EFAULT` and `EINVAL` values. SharpEmu marks its differing Gen5 error values as
 synthetic.
-The checked open, close, read, positioned-read, seek, stat, fstat,
+
+## Files
+
+The open, close, read, positioned-read, seek, stat, fstat,
 reachability, and directory-read handlers in
 `src/hle/kernel_file_exports.cpp` and
-`tests/hle_kernel_file_exports_test.cpp` use focused behavior observations from
-KytyPS5 `src/kernel/fileSystem.cpp` and SharpEmu
+`tests/hle_kernel_file_exports_test.cpp` follow behavior in KytyPS5
+`src/kernel/fileSystem.cpp` and SharpEmu
 `src/SharpEmu.Libs/Kernel/KernelMemoryCompatExports.cs` at the pinned commits.
 They use KytyPS5's kernel-compatible file errors and the file-operation NIDs
 confirmed by both references. The 120-byte stat field layout matches both
@@ -93,33 +101,36 @@ references. The stable path inode adapts SharpEmu's deterministic FNV-1a
 file-entry hashing behavior. The directory tests adapt SharpEmu's captured
 entry list, `.` and `..` prefix, case-insensitive ordering, typed descriptor
 failure, fixed 512-byte record behavior, and optional directory base-position
-output. No file-service source code was copied.
+output. No file-service source was copied.
+
 The SharpEmu reference files state:
 
 `Copyright (C) 2026 SharpEmu Emulator Project`
 
-No upstream import resolver or stub source code was copied.
+No upstream file-service, import-resolver, or stub source was copied.
+
+## Semaphores, event flags, and event queues
 
 The non-blocking semaphore handlers in
 `src/hle/kernel_semaphore_exports.cpp` and
-`tests/hle_kernel_semaphore_exports_test.cpp` use focused behavior observations
-from KytyPS5 `src/kernel/semaphore.cpp` and SharpEmu
+`tests/hle_kernel_semaphore_exports_test.cpp` follow behavior in KytyPS5
+`src/kernel/semaphore.cpp` and SharpEmu
 `src/SharpEmu.Libs/Kernel/KernelSemaphoreCompatExports.cs` at the pinned
 commits. They use the NIDs confirmed by both references and KytyPS5's
-kernel-compatible semaphore errors. No semaphore source code was copied.
+kernel-compatible semaphore errors. No semaphore source was copied.
 
 The non-blocking event-flag handlers in
 `src/hle/kernel_event_flag_exports.cpp` and
-`tests/hle_kernel_event_flag_exports_test.cpp` use focused behavior
-observations from KytyPS5 `src/kernel/eventFlag.cpp` and SharpEmu
+`tests/hle_kernel_event_flag_exports_test.cpp` follow behavior in KytyPS5
+`src/kernel/eventFlag.cpp` and SharpEmu
 `src/SharpEmu.Libs/Kernel/KernelEventFlagCompatExports.cs` at the pinned
 commits. They use the NIDs confirmed by both references, KytyPS5's
-kernel-compatible errors, and SharpEmu's checked optional result-pattern
-write before clear-mode mutation. No event-flag source code was copied.
+kernel-compatible errors, and SharpEmu's rule that an optional result-pattern
+write must succeed before clear-mode mutation. No event-flag source was copied.
 
 The typed event-queue architecture in `src/kernel/event_queue.h` and
 `src/kernel/event_queue.cpp`, the nonblocking handlers in
-`src/hle/kernel_event_queue_exports.cpp`, and their focused tests adapt
+`src/hle/kernel_event_queue_exports.cpp`, and their matching tests adapt
 behavior from KytyPS5 `src/kernel/eventQueue.h` and
 `src/kernel/eventQueue.cpp` at commit
 `f6e01e54031a3c615f089f061a4eab2f3c59acba`, and SharpEmu
@@ -130,9 +141,11 @@ coalescing behavior. The SharpEmu reference states:
 
 `Copyright (C) 2026 SharpEmu Emulator Project`
 
-Both upstreams are GPL-2.0-or-later. No upstream event-queue source code was
-copied verbatim. Blocking wait dispatch remains deferred until a saved guest
-continuation can resume.
+Both upstreams are GPL-2.0-or-later. No upstream event-queue source was copied
+verbatim. Blocking wait dispatch remains deferred until the runtime can resume
+a saved guest continuation.
+
+## Contributor guidance
 
 The AI-assisted contribution guidance in `CONTRIBUTING.md` and
 `.github/pull_request_template.md` adapts policy concepts from KytyPS5
@@ -145,6 +158,7 @@ and SharpEmu `CONTRIBUTING.md` and `.github/pull_request_template.md` at commit
 Both references are GPL-2.0-or-later. The KajPS5 text is adapted for this
 project and does not copy the upstream wording verbatim.
 
-Add an entry here when a later change imports or adapts code. Each entry must
-state the project, commit, source path, destination path, copyright notice, and
-license.
+## New adaptations
+
+Add an entry when a later change imports or adapts code. Include the project,
+commit, source path, destination path, copyright notice, and license.
