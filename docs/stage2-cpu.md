@@ -5,8 +5,8 @@ loads an ELF built from constants, copies its six-byte leaf entry from guest
 memory into a writable host allocation, changes that allocation to
 read-execute, and calls it. The leaf returns 42 without using arguments,
 memory, imports, system calls, or threads. The second fixture calls a
-no-argument HLE handler through a linked import and is described in
-`stage2-hle.md`.
+checked HLE handler with six integer arguments through a linked import and is
+described in `stage2-hle.md`.
 
 The design review used these pinned references:
 
@@ -22,9 +22,16 @@ The KajPS5 boundary is small: allocate writable memory, copy at most 4 KiB from
 a readable and executable guest range, then remove write access before the
 call. Windows uses `VirtualAlloc`, `VirtualProtect`, and
 `FlushInstructionCache`. POSIX hosts use `mmap`, `mprotect`, and an
-instruction-cache clear.
+instruction-cache clear. Guest code and generated HLE trampolines use the same
+write-then-execute buffer, so generated code is not left writable.
 
-The executor is available only to tests. It has no guest CPU context, ABI
-bridge, general import dispatch, fault recovery, timeout, or instruction
-validation. Until those pieces exist, it must run only controlled leaf
+On Windows, a small entry bridge preserves the extra nonvolatile integer and
+floating-point state required by the host ABI before it calls System V guest
+code. This keeps optimized host callers intact even when guest code uses
+registers that are volatile on PS5.
+
+The executor is available only to tests. The first ABI bridge captures the six
+System V integer arguments and returns the checked handler's `RAX` value. It
+does not capture the guest stack, vector registers, a full CPU context, faults,
+or timeouts. Until those pieces exist, it must run only controlled leaf
 fixtures.

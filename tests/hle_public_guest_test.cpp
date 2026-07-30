@@ -10,7 +10,9 @@
 #include <vector>
 
 #include "core/memory/guest_memory.h"
+#include "cpu/native_hle_trampoline.h"
 #include "cpu/native_leaf_executor.h"
+#include "hle/export_registry.h"
 #include "hle/import_registry.h"
 #include "loader/elf.h"
 #include "loader/relocator.h"
@@ -29,9 +31,9 @@ constexpr std::size_t kDynamicEntryCount = 10;
 constexpr std::size_t kStringSize = 32;
 constexpr std::size_t kSymbolEntrySize = 24;
 constexpr std::size_t kRelaEntrySize = 24;
-constexpr std::size_t kProgramSize = 32;
+constexpr std::size_t kProgramSize = 64;
 constexpr std::uint64_t kProgramAddress = 0x1000;
-constexpr std::uint64_t kGotAddress = kProgramAddress + 24;
+constexpr std::uint64_t kGotAddress = kProgramAddress + 56;
 constexpr std::uint64_t kMetadataAddress = 0x2000;
 constexpr std::uint64_t kStringAddress =
     kMetadataAddress + kStringOffset - kDynamicOffset;
@@ -165,13 +167,16 @@ std::vector<std::byte> MakePublicHleElf() {
   Write64(image, kRelaOffset + 8, (std::uint64_t{1} << 32U) | 7U);
   Write64(image, kRelaOffset + 16, 0);
 
-  const auto stack_adjustment =
-#if defined(_WIN32)
-      std::byte{0x28};
-#else
-      std::byte{0x08};
-#endif
+  constexpr auto stack_adjustment = std::byte{0x08};
   const std::array code = {
+      std::byte{0xbf}, std::byte{10}, std::byte{0}, std::byte{0},
+      std::byte{0},    std::byte{0xbe}, std::byte{20}, std::byte{0},
+      std::byte{0},    std::byte{0},    std::byte{0xba}, std::byte{30},
+      std::byte{0},    std::byte{0},    std::byte{0},    std::byte{0xb9},
+      std::byte{40},   std::byte{0},    std::byte{0},    std::byte{0},
+      std::byte{0x41}, std::byte{0xb8}, std::byte{50},   std::byte{0},
+      std::byte{0},    std::byte{0},    std::byte{0x41}, std::byte{0xb9},
+      std::byte{60},   std::byte{0},    std::byte{0},    std::byte{0},
       std::byte{0x48}, std::byte{0x83}, std::byte{0xec}, stack_adjustment,
       std::byte{0xff}, std::byte{0x15}, std::byte{0x0e}, std::byte{0x00},
       std::byte{0x00}, std::byte{0x00}, std::byte{0x48}, std::byte{0x83},
@@ -182,13 +187,16 @@ std::vector<std::byte> MakePublicHleElf() {
   return image;
 }
 
-extern "C" std::uint64_t PublicHleAnswer() noexcept { return 73; }
-
 }  // namespace
 
 int main() {
+  using kajps5::cpu::NativeHleTrampoline;
+  using kajps5::cpu::NativeHleTrampolineStatus;
   using kajps5::cpu::NativeExecutionStatus;
   using kajps5::cpu::NativeLeafExecutor;
+  using kajps5::hle::ExportRegistry;
+  using kajps5::hle::ExportRegistryStatus;
+  using kajps5::hle::HleContextStatus;
   using kajps5::hle::ImportRegistry;
   using kajps5::hle::ImportRegistryStatus;
   using kajps5::memory::GuestMemory;
@@ -207,14 +215,45 @@ int main() {
             loaded.metadata.dynamic_info.plt_relocations.size() == 1,
         "public HLE ELF metadata is incomplete");
 
-  ImportRegistry registry;
-  const auto handler_address = static_cast<std::uint64_t>(
-      reinterpret_cast<std::uintptr_t>(&PublicHleAnswer));
-  Check(registry.Register("libkajps5_test", "answer", handler_address) ==
+  ExportRegistry exports;
+  Check(exports.Register(
+            "libkajps5_test", "answer",
+            [](kajps5::hle::HleCallContext& context) {
+              const std::array expected = {10ULL, 20ULL, 30ULL,
+                                           40ULL, 50ULL, 60ULL};
+              std::uint64_t sum = 0;
+              for (std::size_t index = 0; index < expected.size(); ++index) {
+                const auto argument = context.Argument(index).value_or(0);
+                Check(argument == expected[index],
+                      "native trampoline changed a guest argument");
+                sum += argument;
+              }
+              context.SetReturn(sum);
+              return HleContextStatus::kOk;
+            }) == ExportRegistryStatus::kOk,
+        "checked HLE handler registration failed");
+  NativeHleTrampoline trampoline(memory, exports, "answer",
+                                 {"libkajps5_test"});
+  if (trampoline.status() == NativeHleTrampolineStatus::kUnsupportedHost) {
+    std::cout << "native HLE guest execution is unsupported on this host\n";
+    return failures == 0 ? 0 : 1;
+  }
+  Check(trampoline.status() == NativeHleTrampolineStatus::kOk &&
+            trampoline.address() != 0,
+        "native HLE trampoline creation failed");
+  NativeHleTrampoline missing_trampoline(
+      memory, exports, "missing", {"libkajps5_test"});
+  Check(missing_trampoline.status() ==
+                NativeHleTrampolineStatus::kInvalidArgument &&
+            missing_trampoline.address() == 0,
+        "missing HLE export produced an executable trampoline");
+
+  ImportRegistry imports;
+  Check(imports.Register("libkajps5_test", "answer", trampoline.address()) ==
             ImportRegistryStatus::kOk,
-        "public HLE handler registration failed");
+        "native HLE trampoline registration failed");
   const auto linked =
-      kajps5::loader::ApplyRelocations(loaded.metadata, memory, registry);
+      kajps5::loader::ApplyRelocations(loaded.metadata, memory, imports);
   Check(linked && linked.applied_count == 1 &&
             linked.resolved_import_count == 1 &&
             linked.unresolved_import_count == 0,
@@ -227,7 +266,17 @@ int main() {
     std::cout << "public HLE guest execution is unsupported on this host\n";
     return failures == 0 ? 0 : 1;
   }
-  Check(executed && executed.return_value == 73,
-        "public guest did not return the HLE result");
+  const auto dispatch = trampoline.last_dispatch();
+  Check(executed && executed.return_value == 210,
+        "public guest did not return the checked HLE result");
+  Check(dispatch.lookup_status == ExportRegistryStatus::kOk &&
+            dispatch.handler_status == HleContextStatus::kOk &&
+            dispatch.return_written && !dispatch.host_exception &&
+            dispatch.library == "libkajps5_test",
+        "native trampoline did not preserve the HLE dispatch result");
+  Check(kajps5::cpu::NativeHleTrampolineStatusName(
+            NativeHleTrampolineStatus::kHostProtectionFailed) ==
+            "host-protection-failed",
+        "native trampoline status name is unstable");
   return failures == 0 ? 0 : 1;
 }

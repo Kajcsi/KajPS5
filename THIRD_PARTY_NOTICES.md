@@ -183,6 +183,15 @@ thread-safe callback records and explicit exit request adapt pinned SharpEmu
 callback until an executor can resume it safely. No upstream handler source
 was copied.
 
+The native HLE bridge in `src/cpu/native_hle_trampoline.cpp` adapts the
+register-pack and host-call boundary from pinned SharpEmu
+`src/SharpEmu.Core/Cpu/Native/DirectExecutionBackend.Imports.cs`. Its shared
+write-then-execute buffer follows the virtual-memory boundary in pinned
+KytyPS5 `src/common/virtualMemory.cpp` and the matching platform files. KajPS5
+currently captures only the six System V integer arguments. The Windows entry
+bridge also preserves host-only nonvolatile state around the System V call.
+No upstream trampoline bytes or handler source were copied.
+
 The process-time handlers in `src/hle/kernel_clock_exports.cpp` and
 `tests/hle_kernel_clock_exports_test.cpp` adapt the matching process-time,
 counter, and frequency behavior from the pinned KytyPS5

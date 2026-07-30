@@ -4,89 +4,63 @@
 
 #include "cpu/native_leaf_executor.h"
 
-#include <cstring>
+#include <cstddef>
+#include <initializer_list>
 #include <vector>
 
-#if defined(_WIN32)
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-#include <Windows.h>
-#elif defined(__unix__) || defined(__APPLE__)
-#include <sys/mman.h>
-#include <unistd.h>
-#endif
+#include "cpu/host_executable_buffer.h"
 
 namespace kajps5::cpu {
 namespace {
 
-#if defined(_WIN32)
+#if defined(_WIN32) && defined(_M_X64)
 
-void* AllocateWritable(std::size_t size) noexcept {
-  return VirtualAlloc(nullptr, size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-}
-
-bool MakeExecutable(void* address, std::size_t size) noexcept {
-  DWORD old_protection = 0;
-  if (VirtualProtect(address, size, PAGE_EXECUTE_READ, &old_protection) == 0) {
-    return false;
-  }
-  return FlushInstructionCache(GetCurrentProcess(), address, size) != 0;
-}
-
-void FreeAllocation(void* address, std::size_t) noexcept {
-  if (address != nullptr) {
-    VirtualFree(address, 0, MEM_RELEASE);
+void Emit(std::vector<std::byte>& code,
+          std::initializer_list<unsigned int> bytes) {
+  for (const auto byte : bytes) {
+    code.push_back(static_cast<std::byte>(byte));
   }
 }
 
-#elif defined(__unix__) || defined(__APPLE__)
-
-void* AllocateWritable(std::size_t size) noexcept {
-  auto* allocation =
-      mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS,
-           -1, 0);
-  return allocation == MAP_FAILED ? nullptr : allocation;
-}
-
-bool MakeExecutable(void* address, std::size_t size) noexcept {
-  if (mprotect(address, size, PROT_READ | PROT_EXEC) != 0) {
-    return false;
-  }
-  auto* begin = static_cast<char*>(address);
-  __builtin___clear_cache(begin, begin + size);
-  return true;
-}
-
-void FreeAllocation(void* address, std::size_t size) noexcept {
-  if (address != nullptr) {
-    munmap(address, size);
+void EmitUInt64(std::vector<std::byte>& code, std::uint64_t value) {
+  for (std::size_t index = 0; index < sizeof(value); ++index) {
+    code.push_back(
+        static_cast<std::byte>((value >> (index * 8U)) & 0xffU));
   }
 }
 
-#else
+NativeExecutionResult ExecuteThroughWindowsAbiBridge(void* guest_entry) {
+  constexpr std::size_t kBridgeSize = 64;
+  std::vector<std::byte> bridge;
+  bridge.reserve(kBridgeSize);
+  // Preserve Windows-only nonvolatile state before entering System V code.
+  Emit(bridge, {0x57, 0x56});
+  Emit(bridge, {0x48, 0x81, 0xec, 0x08, 0x02, 0x00, 0x00});
+  Emit(bridge, {0x48, 0x0f, 0xae, 0x04, 0x24});
+  // Call the guest entry with a System V-aligned stack.
+  Emit(bridge, {0x48, 0xb8});
+  EmitUInt64(bridge, static_cast<std::uint64_t>(
+                         reinterpret_cast<std::uintptr_t>(guest_entry)));
+  Emit(bridge, {0xff, 0xd0});
+  // Restore the host floating-point and integer state before returning.
+  Emit(bridge, {0x48, 0x0f, 0xae, 0x0c, 0x24});
+  Emit(bridge, {0x48, 0x81, 0xc4, 0x08, 0x02, 0x00, 0x00});
+  Emit(bridge, {0x5e, 0x5f, 0xc3});
 
-void* AllocateWritable(std::size_t) noexcept { return nullptr; }
-bool MakeExecutable(void*, std::size_t) noexcept { return false; }
-void FreeAllocation(void*, std::size_t) noexcept {}
+  HostExecutableBuffer entry_bridge(kBridgeSize);
+  if (!entry_bridge.allocated() || !entry_bridge.Write(bridge)) {
+    return {NativeExecutionStatus::kHostAllocationFailed, 0};
+  }
+  if (!entry_bridge.Seal()) {
+    return {NativeExecutionStatus::kHostProtectionFailed, 0};
+  }
+  using EntryBridge = std::uint64_t (*)();
+  const auto function =
+      reinterpret_cast<EntryBridge>(entry_bridge.address());
+  return {NativeExecutionStatus::kOk, function()};
+}
 
 #endif
-
-class HostAllocation final {
- public:
-  explicit HostAllocation(std::size_t size) noexcept
-      : address_(AllocateWritable(size)), size_(size) {}
-  ~HostAllocation() { FreeAllocation(address_, size_); }
-
-  HostAllocation(const HostAllocation&) = delete;
-  HostAllocation& operator=(const HostAllocation&) = delete;
-
-  [[nodiscard]] void* address() const noexcept { return address_; }
-
- private:
-  void* address_ = nullptr;
-  std::size_t size_ = 0;
-};
 
 }  // namespace
 
@@ -112,18 +86,21 @@ NativeExecutionResult NativeLeafExecutor::Execute(
     return {NativeExecutionStatus::kGuestCodeNotReadable, 0};
   }
 
-  HostAllocation allocation(code_size);
-  if (allocation.address() == nullptr) {
+  HostExecutableBuffer allocation(code_size);
+  if (!allocation.allocated() || !allocation.Write(code)) {
     return {NativeExecutionStatus::kHostAllocationFailed, 0};
   }
-  std::memcpy(allocation.address(), code.data(), code.size());
-  if (!MakeExecutable(allocation.address(), code.size())) {
+  if (!allocation.Seal()) {
     return {NativeExecutionStatus::kHostProtectionFailed, 0};
   }
 
+#if defined(_WIN32) && defined(_M_X64)
+  return ExecuteThroughWindowsAbiBridge(allocation.address());
+#else
   using LeafFunction = std::uint64_t (*)();
   const auto function = reinterpret_cast<LeafFunction>(allocation.address());
   return {NativeExecutionStatus::kOk, function()};
+#endif
 #endif
 }
 
