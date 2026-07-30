@@ -29,6 +29,7 @@ add_library(kajps5_core STATIC
   kernel/guest_scheduler.cpp
   kernel/handle_table.cpp
   kernel/json_value.cpp
+  kernel/libc_heap.cpp
   kernel/process_lifecycle.cpp
   kernel/pthread.cpp
   kernel/semaphore.cpp

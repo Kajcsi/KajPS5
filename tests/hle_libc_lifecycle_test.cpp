@@ -40,18 +40,18 @@ int main() {
   using kajps5::memory::GuestMemory;
   using kajps5::memory::GuestMemoryProtection;
 
-  KernelRuntime runtime;
-  ExportRegistry registry;
-  Check(kajps5::hle::RegisterLibcExports(
-            registry, runtime.cxa_guards(), runtime.process_lifecycle()) ==
-                ExportRegistryStatus::kOk &&
-            registry.size() == 20,
-        "libc lifecycle exports did not register atomically");
-
   GuestMemory memory(
       0x1000, 0x1000,
       GuestMemoryProtection::kRead | GuestMemoryProtection::kWrite |
           GuestMemoryProtection::kExecute);
+  KernelRuntime runtime;
+  ExportRegistry registry;
+  Check(kajps5::hle::RegisterLibcExports(
+            registry, runtime.cxa_guards(), runtime.process_lifecycle(),
+            runtime.libc_heap(), memory) == ExportRegistryStatus::kOk &&
+            registry.size() == 36,
+        "libc lifecycle exports did not register atomically");
+
   const std::vector<std::string> libc_scope = {kajps5::hle::kLibcName};
   constexpr std::uint64_t kParams = 0x1200;
   HleCallContext environment_setup(memory);

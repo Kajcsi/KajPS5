@@ -8,7 +8,12 @@
 
 namespace kajps5::kernel {
 class CxaGuardService;
+class LibcHeapService;
 class ProcessLifecycleService;
+}
+
+namespace kajps5::memory {
+class GuestMemory;
 }
 
 namespace kajps5::hle {
@@ -34,9 +39,26 @@ inline constexpr auto kLibcExitName = "exit";
 inline constexpr auto kLibcExitNid = "uMei1W9uyNo";
 inline constexpr auto kLibcAbortName = "abort";
 inline constexpr auto kLibcAbortNid = "L1SBTkC+Cvw";
+inline constexpr auto kLibcMallocName = "malloc";
+inline constexpr auto kLibcMallocNid = "gQX+4GDQjpM";
+inline constexpr auto kLibcFreeName = "free";
+inline constexpr auto kLibcFreeNid = "tIhsqj0qsFE";
+inline constexpr auto kLibcCallocName = "calloc";
+inline constexpr auto kLibcCallocNid = "2X5agFjKxMc";
+inline constexpr auto kLibcReallocName = "realloc";
+inline constexpr auto kLibcReallocNid = "Y7aJ1uydPMo";
+inline constexpr auto kLibcMemalignName = "memalign";
+inline constexpr auto kLibcMemalignNid = "Ujf3KzMvRmI";
+inline constexpr auto kLibcAlignedAllocName = "aligned_alloc";
+inline constexpr auto kLibcAlignedAllocNid = "2Btkg8k24Zg";
+inline constexpr auto kLibcPosixMemalignName = "posix_memalign";
+inline constexpr auto kLibcPosixMemalignNid = "cVSk9y8URbc";
+inline constexpr auto kLibcMallocUsableSizeName = "malloc_usable_size";
+inline constexpr auto kLibcMallocUsableSizeNid = "NDcSfcYZRC8";
 
 [[nodiscard]] ExportRegistryStatus RegisterLibcExports(
     ExportRegistry& registry, kernel::CxaGuardService& guards,
-    kernel::ProcessLifecycleService& lifecycle);
+    kernel::ProcessLifecycleService& lifecycle,
+    kernel::LibcHeapService& heap, memory::GuestMemory& memory);
 
 }  // namespace kajps5::hle

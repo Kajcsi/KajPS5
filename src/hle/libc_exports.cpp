@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "kernel/cxa_guard.h"
+#include "kernel/libc_heap.h"
 #include "kernel/process_lifecycle.h"
 
 namespace kajps5::hle {
@@ -20,6 +21,12 @@ constexpr std::uint64_t kGuardComplete = 0x0001;
 constexpr std::uint64_t kGuardPending = 0x0100;
 constexpr std::uint64_t kGuardStateMask = 0xffff;
 constexpr std::int32_t kMaximumInitArgumentCount = 2;
+constexpr std::uint64_t kPosixEinval = 22;
+constexpr std::uint64_t kPosixEnomem = 12;
+
+bool IsPowerOfTwo(std::uint64_t value) noexcept {
+  return value != 0 && (value & (value - 1)) == 0;
+}
 
 HleContextStatus CxaGuardAcquire(HleCallContext& context,
                                  kernel::CxaGuardService& guards) {
@@ -180,6 +187,113 @@ HleContextStatus RequestExit(HleCallContext& context,
   return HleContextStatus::kGuestExit;
 }
 
+HleContextStatus AllocateHeap(HleCallContext& context,
+                              kernel::LibcHeapService& heap,
+                              memory::GuestMemory& memory,
+                              std::uint64_t size,
+                              std::uint64_t alignment,
+                              bool zero_fill) {
+  const auto allocated = heap.Allocate(memory, size, alignment, zero_fill);
+  context.SetReturn(allocated ? allocated.address : 0);
+  return HleContextStatus::kOk;
+}
+
+HleContextStatus Malloc(HleCallContext& context,
+                        kernel::LibcHeapService& heap,
+                        memory::GuestMemory& memory) {
+  return AllocateHeap(context, heap, memory,
+                      context.Argument(0).value_or(0),
+                      kernel::kDefaultLibcHeapAlignment, false);
+}
+
+HleContextStatus Free(HleCallContext& context,
+                      kernel::LibcHeapService& heap,
+                      memory::GuestMemory& memory) {
+  (void)heap.Release(memory, context.Argument(0).value_or(0));
+  context.SetReturn(0);
+  return HleContextStatus::kOk;
+}
+
+HleContextStatus Calloc(HleCallContext& context,
+                        kernel::LibcHeapService& heap,
+                        memory::GuestMemory& memory) {
+  const auto count = context.Argument(0).value_or(0);
+  const auto element_size = context.Argument(1).value_or(0);
+  if (count != 0 &&
+      element_size > std::numeric_limits<std::uint64_t>::max() / count) {
+    context.SetReturn(0);
+    return HleContextStatus::kOk;
+  }
+  return AllocateHeap(context, heap, memory, count * element_size,
+                      kernel::kDefaultLibcHeapAlignment, true);
+}
+
+HleContextStatus Realloc(HleCallContext& context,
+                         kernel::LibcHeapService& heap,
+                         memory::GuestMemory& memory) {
+  const auto resized = heap.Reallocate(
+      memory, context.Argument(0).value_or(0),
+      context.Argument(1).value_or(0));
+  context.SetReturn(resized ? resized.address : 0);
+  return HleContextStatus::kOk;
+}
+
+HleContextStatus Memalign(HleCallContext& context,
+                          kernel::LibcHeapService& heap,
+                          memory::GuestMemory& memory,
+                          bool require_size_multiple) {
+  const auto alignment = context.Argument(0).value_or(0);
+  const auto size = context.Argument(1).value_or(0);
+  if (!IsPowerOfTwo(alignment) ||
+      (require_size_multiple && size % alignment != 0)) {
+    context.SetReturn(0);
+    return HleContextStatus::kOk;
+  }
+  return AllocateHeap(context, heap, memory, size, alignment, false);
+}
+
+HleContextStatus PosixMemalign(HleCallContext& context,
+                               kernel::LibcHeapService& heap,
+                               memory::GuestMemory& memory) {
+  const auto output = context.Argument(0).value_or(0);
+  const auto alignment = context.Argument(1).value_or(0);
+  const auto size = context.Argument(2).value_or(0);
+  if (output == 0 || !IsPowerOfTwo(alignment) ||
+      alignment % sizeof(std::uint64_t) != 0) {
+    if (output != 0 &&
+        context.WriteUInt64(output, 0) != HleContextStatus::kOk) {
+      context.SetReturn(kPosixEinval);
+      return HleContextStatus::kMemoryFault;
+    }
+    context.SetReturn(kPosixEinval);
+    return HleContextStatus::kOk;
+  }
+
+  const auto allocated = heap.Allocate(memory, size, alignment, false);
+  if (!allocated) {
+    (void)context.WriteUInt64(output, 0);
+    context.SetReturn(kPosixEnomem);
+    return HleContextStatus::kOk;
+  }
+  if (context.WriteUInt64(output, allocated.address) !=
+      HleContextStatus::kOk) {
+    (void)heap.Release(memory, allocated.address);
+    context.SetReturn(kPosixEinval);
+    return HleContextStatus::kMemoryFault;
+  }
+  context.SetReturn(0);
+  return HleContextStatus::kOk;
+}
+
+HleContextStatus MallocUsableSize(HleCallContext& context,
+                                  kernel::LibcHeapService& heap,
+                                  memory::GuestMemory& memory) {
+  context.SetReturn(heap.UsableSize(
+                             memory, context.Argument(0).value_or(0))
+                        .value_or(0));
+  return HleContextStatus::kOk;
+}
+
 template <typename Handler>
 void AddAliases(std::vector<HleExportDefinition>& exports, const char* name,
                 const char* nid, Handler handler) {
@@ -191,11 +305,15 @@ void AddAliases(std::vector<HleExportDefinition>& exports, const char* name,
 
 ExportRegistryStatus RegisterLibcExports(ExportRegistry& registry,
                                          kernel::CxaGuardService& guards,
-                                         kernel::ProcessLifecycleService& lifecycle) {
+                                         kernel::ProcessLifecycleService& lifecycle,
+                                         kernel::LibcHeapService& heap,
+                                         memory::GuestMemory& memory) {
   auto* const guard_view = &guards;
   auto* const lifecycle_view = &lifecycle;
+  auto* const heap_view = &heap;
+  auto* const memory_view = &memory;
   std::vector<HleExportDefinition> exports;
-  exports.reserve(20);
+  exports.reserve(36);
   AddAliases(exports, kCxaGuardAcquireName, kCxaGuardAcquireNid,
              [guard_view](HleCallContext& context) {
                return CxaGuardAcquire(context, *guard_view);
@@ -236,6 +354,39 @@ ExportRegistryStatus RegisterLibcExports(ExportRegistry& registry,
   AddAliases(exports, kLibcAbortName, kLibcAbortNid,
              [](HleCallContext&) {
                return HleContextStatus::kFatalGuestError;
+             });
+  AddAliases(exports, kLibcMallocName, kLibcMallocNid,
+             [heap_view, memory_view](HleCallContext& context) {
+               return Malloc(context, *heap_view, *memory_view);
+             });
+  AddAliases(exports, kLibcFreeName, kLibcFreeNid,
+             [heap_view, memory_view](HleCallContext& context) {
+               return Free(context, *heap_view, *memory_view);
+             });
+  AddAliases(exports, kLibcCallocName, kLibcCallocNid,
+             [heap_view, memory_view](HleCallContext& context) {
+               return Calloc(context, *heap_view, *memory_view);
+             });
+  AddAliases(exports, kLibcReallocName, kLibcReallocNid,
+             [heap_view, memory_view](HleCallContext& context) {
+               return Realloc(context, *heap_view, *memory_view);
+             });
+  AddAliases(exports, kLibcMemalignName, kLibcMemalignNid,
+             [heap_view, memory_view](HleCallContext& context) {
+               return Memalign(context, *heap_view, *memory_view, false);
+             });
+  AddAliases(exports, kLibcAlignedAllocName, kLibcAlignedAllocNid,
+             [heap_view, memory_view](HleCallContext& context) {
+               return Memalign(context, *heap_view, *memory_view, true);
+             });
+  AddAliases(exports, kLibcPosixMemalignName, kLibcPosixMemalignNid,
+             [heap_view, memory_view](HleCallContext& context) {
+               return PosixMemalign(context, *heap_view, *memory_view);
+             });
+  AddAliases(exports, kLibcMallocUsableSizeName,
+             kLibcMallocUsableSizeNid,
+             [heap_view, memory_view](HleCallContext& context) {
+               return MallocUsableSize(context, *heap_view, *memory_view);
              });
   return registry.RegisterBatch(std::move(exports));
 }

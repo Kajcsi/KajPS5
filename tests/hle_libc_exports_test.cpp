@@ -46,15 +46,15 @@ int main() {
   using kajps5::kernel::KernelRuntime;
   using kajps5::memory::GuestMemory;
 
+  GuestMemory memory(0x1000, 0x100);
   KernelRuntime runtime;
   ExportRegistry registry;
   Check(kajps5::hle::RegisterLibcExports(
-            registry, runtime.cxa_guards(), runtime.process_lifecycle()) ==
-            ExportRegistryStatus::kOk &&
-            registry.size() == 20,
+            registry, runtime.cxa_guards(), runtime.process_lifecycle(),
+            runtime.libc_heap(), memory) == ExportRegistryStatus::kOk &&
+            registry.size() == 36,
         "libc exports did not register atomically");
 
-  GuestMemory memory(0x1000, 0x100);
   constexpr std::uint64_t kGuardAddress = 0x1020;
   constexpr std::uint64_t kUpperWord = 0xaabbccdd00000000;
   HleCallContext setup(memory);

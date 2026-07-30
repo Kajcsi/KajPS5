@@ -15,6 +15,7 @@
 #include "kernel/guest_scheduler.h"
 #include "kernel/handle_table.h"
 #include "kernel/json_value.h"
+#include "kernel/libc_heap.h"
 #include "kernel/process_lifecycle.h"
 #include "kernel/pthread.h"
 #include "kernel/semaphore.h"
@@ -60,6 +61,7 @@ public:
   [[nodiscard]] JsonValueService& json_values() noexcept {
     return json_values_;
   }
+  [[nodiscard]] LibcHeapService& libc_heap() noexcept { return libc_heap_; }
   [[nodiscard]] ProcessLifecycleService& process_lifecycle() noexcept {
     return process_lifecycle_;
   }
@@ -76,6 +78,7 @@ private:
   FileService files_;
   DirectMemoryService direct_memory_;
   JsonValueService json_values_;
+  LibcHeapService libc_heap_;
   ProcessLifecycleService process_lifecycle_;
 };
 

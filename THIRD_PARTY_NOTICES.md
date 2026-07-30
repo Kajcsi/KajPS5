@@ -183,6 +183,15 @@ thread-safe callback records and explicit exit request adapt pinned SharpEmu
 callback until an executor can resume it safely. No upstream handler source
 was copied.
 
+The guest libc heap service in `src/kernel/libc_heap.cpp`, its bridge in
+`src/hle/libc_exports.cpp`, and `tests/hle_libc_heap_test.cpp` adapt the
+allocation, clearing, alignment, resize, and failure behavior in pinned
+SharpEmu `src/SharpEmu.Libs/Kernel/KernelMemoryCompatExports.cs`. KajPS5 keeps
+the allocations in its checked guest-memory model instead of exposing host
+heap addresses. The default 16-byte alignment follows the application-heap
+boundary in pinned KytyPS5 `src/libs/libKernel.cpp`. No upstream allocator
+source was copied.
+
 The native HLE bridge in `src/cpu/native_hle_trampoline.cpp` adapts the
 register-pack and host-call boundary from pinned SharpEmu
 `src/SharpEmu.Core/Cpu/Native/DirectExecutionBackend.Imports.cs`. Its shared

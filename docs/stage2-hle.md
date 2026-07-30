@@ -39,6 +39,11 @@ The first native trampoline captures those six integer registers, XMM0-XMM7,
 and up to 16 declared stack arguments. A larger execution context still needs
 the remaining machine state.
 
+The libc heap service reserves checked read-write ranges inside guest memory.
+It supports allocation, release, clearing, resizing, aligned allocation, and
+usable-size queries. Allocation counts and copy sizes are bounded. Failed
+requests return the libc result without mapping partial guest ranges.
+
 The HLE export registry keeps C++ context handlers separate from executable
 import targets. Dispatch uses the same ordered library scope as linking. An
 ambiguous unscoped name does not run. The registry copies the selected handler
