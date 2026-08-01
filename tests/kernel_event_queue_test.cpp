@@ -4,7 +4,9 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <cstdlib>
+#include <cstdint>
 #include <iostream>
+#include <memory>
 #include <string>
 
 #include "kernel/event_queue.h"
@@ -12,6 +14,22 @@
 #include "kernel/runtime.h"
 
 namespace {
+
+class TestClockSource final : public kajps5::kernel::KernelClockSource {
+public:
+  [[nodiscard]] std::int64_t RealtimeNanoseconds() const override {
+    return static_cast<std::int64_t>(monotonic_nanoseconds_);
+  }
+
+  [[nodiscard]] std::uint64_t MonotonicNanoseconds() const override {
+    return monotonic_nanoseconds_;
+  }
+
+  void Set(std::uint64_t value) noexcept { monotonic_nanoseconds_ = value; }
+
+private:
+  std::uint64_t monotonic_nanoseconds_ = 0;
+};
 
 void Check(bool condition, const char *message) {
   if (!condition) {
@@ -253,10 +271,46 @@ void TestEventQueueService() {
         "stale event queue handle remained valid");
 }
 
+void TestTimedEventQueueWait() {
+  using namespace kajps5::kernel;
+
+  auto clock = std::make_unique<TestClockSource>();
+  auto *const clock_view = clock.get();
+  KernelRuntime runtime(std::move(clock));
+  auto &queues = runtime.event_queues();
+  auto &scheduler = runtime.scheduler();
+  const auto queue = queues.Create("timed");
+  Check(queue && queues.AddUserEvent(queue.handle, 1, true) ==
+                     KernelStatus::kOk &&
+            queues.Wait(queue.handle, 1, 0).status ==
+                KernelStatus::kTimedOut,
+        "zero-time event queue poll did not time out");
+
+  clock_view->Set(1'000'000);
+  const auto waiter = scheduler.CreateThread("timed-waiter", 0);
+  Check(waiter && scheduler.SelectNext() == waiter.handle &&
+            queues.Wait(queue.handle, 1, 25).status ==
+                KernelStatus::kWouldBlock,
+        "timed event queue wait did not block");
+  clock_view->Set(1'025'000);
+  Check(queues.TriggerUserEvent(queue.handle, 1, 0x55) ==
+                KernelStatus::kOk &&
+            scheduler.SelectNext() == waiter.handle &&
+            queues.Wait(queue.handle, 1, 25).status ==
+                KernelStatus::kTimedOut,
+        "expired event queue wait accepted a late event");
+  const auto late_event = queues.Poll(queue.handle, 1);
+  Check(late_event && late_event.events.size() == 1 &&
+            late_event.events[0].user_data == 0x55 &&
+            scheduler.ExitCurrent(0),
+        "late event was lost after a timed wait");
+}
+
 } // namespace
 
 int main() {
   TestEventQueueService();
+  TestTimedEventQueueWait();
   std::cout << "kernel event queue tests passed\n";
   return 0;
 }

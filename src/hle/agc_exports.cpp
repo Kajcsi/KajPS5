@@ -31,6 +31,31 @@ void SetSignedResult(HleCallContext& context, std::int32_t value) noexcept {
       static_cast<std::uint64_t>(static_cast<std::int64_t>(value)));
 }
 
+bool ReadDriverEvent(HleCallContext& context, kernel::KernelEvent& event) {
+  const auto address = context.Argument(0).value_or(0);
+  if (address == 0 ||
+      address > std::numeric_limits<std::uint64_t>::max() -
+                    (sizeof(kernel::KernelEvent) - 1U)) {
+    return false;
+  }
+  std::uint32_t filter_and_flags = 0;
+  if (context.ReadUInt64(address, event.ident) != HleContextStatus::kOk ||
+      context.ReadUInt32(address + 8U, filter_and_flags) !=
+          HleContextStatus::kOk ||
+      context.ReadUInt32(address + 12U, event.fflags) !=
+          HleContextStatus::kOk ||
+      context.ReadUInt64(address + 16U, event.data) !=
+          HleContextStatus::kOk ||
+      context.ReadUInt64(address + 24U, event.user_data) !=
+          HleContextStatus::kOk) {
+    return false;
+  }
+  event.filter = std::bit_cast<std::int16_t>(
+      static_cast<std::uint16_t>(filter_and_flags));
+  event.flags = static_cast<std::uint16_t>(filter_and_flags >> 16U);
+  return true;
+}
+
 template <typename Handler>
 void Add(std::vector<HleExportDefinition>& exports, const char* name,
          const char* nid, Handler handler) {
@@ -447,6 +472,32 @@ ExportRegistryStatus RegisterAgcExports(ExportRegistry& registry,
               SetSignedResult(context, status == kernel::KernelStatus::kOk
                                            ? 0
                                            : kGen5ErrorNotFound);
+              return HleContextStatus::kOk;
+            });
+  AddDriver(exports, "sceAgcDriverGetEqEventType",
+            kAgcDriverGetEqEventTypeNid,
+            [](HleCallContext& context) {
+              kernel::KernelEvent event;
+              const auto value =
+                  ReadDriverEvent(context, event)
+                      ? (event.filter == kernel::kEventFilterGraphics
+                             ? event.ident
+                             : event.data)
+                      : 0;
+              context.SetReturn(static_cast<std::uint32_t>(value));
+              return HleContextStatus::kOk;
+            });
+  AddDriver(exports, "sceAgcDriverGetEqContextId",
+            kAgcDriverGetEqContextIdNid,
+            [](HleCallContext& context) {
+              kernel::KernelEvent event;
+              const auto value =
+                  ReadDriverEvent(context, event)
+                      ? (event.filter == kernel::kEventFilterGraphics
+                             ? event.data
+                             : event.ident)
+                      : 0;
+              context.SetReturn(static_cast<std::uint32_t>(value));
               return HleContextStatus::kOk;
             });
 

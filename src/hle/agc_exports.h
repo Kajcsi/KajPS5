@@ -72,7 +72,9 @@ inline constexpr auto kAgcDriverSubmitMultiCommandBuffersNid =
 inline constexpr auto kAgcDriverSubmitMultiAcbsNid = "HF3YllT3mXU";
 inline constexpr auto kAgcDriverAddEqEventNid = "w2rJhmD+dsE";
 inline constexpr auto kAgcDriverDeleteEqEventNid = "DL2RXaXOy88";
-inline constexpr std::size_t kRegisteredAgcFunctionCount = 49;
+inline constexpr auto kAgcDriverGetEqEventTypeNid = "5CdQTZIQPxM";
+inline constexpr auto kAgcDriverGetEqContextIdNid = "Zw7uUVPulbw";
+inline constexpr std::size_t kRegisteredAgcFunctionCount = 51;
 
 [[nodiscard]] ExportRegistryStatus RegisterAgcExports(
     ExportRegistry& registry, gpu::GpuRuntime& gpu_runtime,

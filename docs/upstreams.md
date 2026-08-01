@@ -111,6 +111,11 @@ adapted paths change.
   their NIDs. SharpEmu independently confirms the multi-DCB array ABI and a
   4096-entry input bound. KajPS5 first checks and snapshots every supplied
   command buffer, then commits the complete batch to its existing queues.
+- KytyPS5 supplies the 32-byte event record, blocking wait ABI, field
+  accessors, and AGC event query rules. SharpEmu independently confirms the
+  record offsets, checked guest writes, continuation retry, and filter-based
+  graphics payload. KajPS5 connects these rules to its existing scheduler and
+  rejects late events after a timed wait expires.
 
 When KajPS5 imports code, identify the upstream file and commit, keep its
 copyright and license notice, and update `THIRD_PARTY_NOTICES.md` in the same

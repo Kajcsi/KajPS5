@@ -395,6 +395,7 @@ int main() {
   constexpr std::uint64_t kDriverLabel = kBase + 0x1f00;
   constexpr std::uint64_t kBatchAddresses = kBase + 0x500;
   constexpr std::uint64_t kBatchSizes = kBase + 0x520;
+  constexpr std::uint64_t kDriverEvent = kBase + 0x600;
   constexpr std::uint64_t kBatchFirst = kBase + 0x1500;
   constexpr std::uint64_t kBatchSecond = kBase + 0x1600;
   const std::array driver_commands = {
@@ -648,6 +649,39 @@ int main() {
                 history_before_invalid_batch &&
             gpu_runtime.submissions().PendingSubmissionCount() == 0,
         "invalid multi-DCB batch partly changed GPU state");
+
+  std::array<std::byte, sizeof(kajps5::kernel::KernelEvent)> driver_event{};
+  Write64(driver_event, 0, 0x20);
+  Write32(driver_event, 8, 0xfff2U);
+  Write64(driver_event, 16, 7);
+  Check(memory.Write(kDriverEvent, driver_event),
+        "driver event record setup failed");
+  const std::array driver_event_arguments = {kDriverEvent};
+  SetArguments(context, driver_event_arguments);
+  Check(registry.Dispatch(kajps5::hle::kAgcDriverGetEqEventTypeNid,
+                          context) &&
+            ReturnValue(context) == 0x20,
+        "graphics event type did not preserve the registered event ID");
+  SetArguments(context, driver_event_arguments);
+  Check(registry.Dispatch(kajps5::hle::kAgcDriverGetEqContextIdNid,
+                          context) &&
+            ReturnValue(context) == 7,
+        "graphics event context did not preserve the hardware event type");
+  Write64(driver_event, 0, 0x33);
+  Write32(driver_event, 8, 0xfff5U);
+  Write64(driver_event, 16, 0x44);
+  Check(memory.Write(kDriverEvent, driver_event),
+        "non-graphics event record setup failed");
+  SetArguments(context, driver_event_arguments);
+  Check(registry.Dispatch(kajps5::hle::kAgcDriverGetEqEventTypeNid,
+                          context) &&
+            ReturnValue(context) == 0x44,
+        "non-graphics event type did not use event data");
+  SetArguments(context, driver_event_arguments);
+  Check(registry.Dispatch(kajps5::hle::kAgcDriverGetEqContextIdNid,
+                          context) &&
+            ReturnValue(context) == 0x33,
+        "non-graphics event context did not use the event ID");
 
   const std::array invalid_submit_arguments = {std::uint64_t{0}};
   SetArguments(context, invalid_submit_arguments);

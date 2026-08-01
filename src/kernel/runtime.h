@@ -28,13 +28,13 @@ public:
   KernelRuntime()
       : scheduler_(handles_, clock_), cxa_guards_(scheduler_),
         pthreads_(scheduler_, clock_),
-        event_queues_(handles_, scheduler_),
+        event_queues_(handles_, scheduler_, clock_),
         event_flags_(handles_, scheduler_),
         semaphores_(handles_, scheduler_), files_(handles_) {}
   explicit KernelRuntime(std::unique_ptr<KernelClockSource> clock_source)
       : clock_(std::move(clock_source)), scheduler_(handles_, clock_),
         cxa_guards_(scheduler_), pthreads_(scheduler_, clock_),
-        event_queues_(handles_, scheduler_),
+        event_queues_(handles_, scheduler_, clock_),
         event_flags_(handles_, scheduler_),
         semaphores_(handles_, scheduler_), files_(handles_) {}
 

@@ -11,6 +11,7 @@
 #include <new>
 #include <utility>
 
+#include "kernel/clock.h"
 #include "kernel/guest_scheduler.h"
 
 namespace kajps5::kernel {
@@ -183,8 +184,9 @@ bool EventQueue::IsCurrent(const RegisteredKernelEvent &event) const {
 }
 
 EventQueueService::EventQueueService(HandleTable &handles,
-                                     GuestScheduler &scheduler) noexcept
-    : handles_(handles), scheduler_(scheduler) {}
+                                     GuestScheduler &scheduler,
+                                     KernelClockService &clock) noexcept
+    : handles_(handles), scheduler_(scheduler), clock_(clock) {}
 
 EventQueueCreateResult EventQueueService::Create(std::string name) {
   if (name.size() > kMaximumEventQueueNameLength) {
@@ -311,7 +313,9 @@ EventQueuePollResult EventQueueService::PollLocked(
 }
 
 EventQueuePollResult EventQueueService::Wait(KernelHandle handle,
-                                             std::size_t maximum_count) {
+                                             std::size_t maximum_count,
+                                             std::optional<std::uint64_t>
+                                                 timeout_microseconds) {
   std::lock_guard wait_lock(wait_mutex_);
   if (maximum_count == 0) {
     return {KernelStatus::kInvalidArgument, {}};
@@ -321,6 +325,7 @@ EventQueuePollResult EventQueueService::Wait(KernelHandle handle,
   if (current_thread) {
     const auto existing = waiters_.find(*current_thread);
     if (existing != waiters_.end()) {
+      const auto wait_key = MakeWaitKey(handle);
       if (existing->second.queue_handle != handle) {
         return {KernelStatus::kBusy, {}};
       }
@@ -342,12 +347,22 @@ EventQueuePollResult EventQueueService::Wait(KernelHandle handle,
         existing->second.completion = WaitCompletion::kWaiting;
       }
 
+      if (scheduler_.ConsumeCurrentThreadTimeout(wait_key)) {
+        waiters_.erase(existing);
+        return {KernelStatus::kTimedOut, {}};
+      }
+
       auto result = PollLocked(handle, existing->second.maximum_count);
       if (result.status != KernelStatus::kBusy) {
         waiters_.erase(existing);
         return result;
       }
-      if (scheduler_.BlockCurrent(MakeWaitKey(handle))) {
+      const auto blocked = existing->second.deadline_nanoseconds
+                               ? scheduler_.BlockCurrentUntil(
+                                     wait_key,
+                                     *existing->second.deadline_nanoseconds)
+                               : scheduler_.BlockCurrent(wait_key);
+      if (blocked) {
         return {KernelStatus::kWouldBlock, {}};
       }
       return result;
@@ -358,12 +373,32 @@ EventQueuePollResult EventQueueService::Wait(KernelHandle handle,
   if (result.status != KernelStatus::kBusy) {
     return result;
   }
+  if (timeout_microseconds && *timeout_microseconds == 0) {
+    return {KernelStatus::kTimedOut, {}};
+  }
   if (!current_thread) {
     return result;
   }
-  waiters_.emplace(*current_thread,
-                   Waiter{handle, maximum_count, WaitCompletion::kWaiting, {}});
-  if (!scheduler_.BlockCurrent(MakeWaitKey(handle))) {
+
+  std::optional<std::uint64_t> deadline;
+  if (timeout_microseconds) {
+    constexpr auto kNanosecondsPerMicrosecond = std::uint64_t{1'000};
+    const auto maximum = std::numeric_limits<std::uint64_t>::max();
+    const auto duration =
+        *timeout_microseconds > maximum / kNanosecondsPerMicrosecond
+            ? maximum
+            : *timeout_microseconds * kNanosecondsPerMicrosecond;
+    const auto now = clock_.MonotonicNanoseconds();
+    deadline = duration > maximum - now ? maximum : now + duration;
+  }
+  waiters_.emplace(
+      *current_thread,
+      Waiter{handle, maximum_count, deadline, WaitCompletion::kWaiting, {}});
+  const auto wait_key = MakeWaitKey(handle);
+  const auto blocked = deadline
+                           ? scheduler_.BlockCurrentUntil(wait_key, *deadline)
+                           : scheduler_.BlockCurrent(wait_key);
+  if (!blocked) {
     waiters_.erase(*current_thread);
     return result;
   }
@@ -376,6 +411,10 @@ void EventQueueService::ReserveWaitingThreadsLocked(
   for (auto &[thread_handle, waiter] : waiters_) {
     if (waiter.queue_handle != handle ||
         waiter.completion != WaitCompletion::kWaiting) {
+      continue;
+    }
+    if (waiter.deadline_nanoseconds &&
+        *waiter.deadline_nanoseconds <= clock_.MonotonicNanoseconds()) {
       continue;
     }
     auto events = queue->Poll(waiter.maximum_count);

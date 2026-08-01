@@ -650,9 +650,19 @@ behavior. The SharpEmu reference states:
 `Copyright (C) 2026 SharpEmu Emulator Project`
 
 KytyPS5 identifies as GPL-2.0-only. SharpEmu identifies as
-GPL-2.0-or-later. No upstream event-queue source was copied verbatim. Blocking
-wait dispatch remains deferred until the runtime can resume a saved guest
-continuation.
+GPL-2.0-or-later. No upstream event-queue source was copied verbatim.
+
+The scheduler-backed `sceKernelWaitEqueue` handler, 32-byte event record,
+microsecond timeout behavior, and event-field accessors in
+`src/kernel/event_queue.*` and `src/hle/kernel_event_queue_exports.*` adapt
+the ABI and field rules from KytyPS5 `src/kernel/eventQueue.h`,
+`src/kernel/eventQueue.cpp`, and `src/libs/libKernel.cpp` at commit
+`a65d17a5d689257a35644e01e9d15539361f0bf0`. The checked record writes,
+continuation retry, and late-event timeout regression re-express SharpEmu
+`src/SharpEmu.Libs/Kernel/KernelEventQueueCompatExports.cs` at commit
+`5ee7cd1dfafdeb0ce0e458a365692df4b2e1c445`. KajPS5 uses its existing event
+queue, clock, scheduler, and HLE continuation. No upstream wait loop was
+copied.
 
 Graphics-filter registration and delivery in `src/kernel/event_queue.*` and
 `tests/kernel_event_queue_test.cpp` adapt KytyPS5
@@ -664,6 +674,14 @@ hardware event type differs from the guest identifier re-expresses SharpEmu
 `tests/SharpEmu.Libs.Tests/Agc/AgcEventQueueTests.cs` at commit
 `5ee7cd1dfafdeb0ce0e458a365692df4b2e1c445`. KajPS5's internal registration
 generation is original code that rejects stale reserved events.
+
+The `sceAgcDriverGetEqEventType` and `sceAgcDriverGetEqContextId` handlers in
+`src/hle/agc_exports.*` adapt KytyPS5 `src/libs/agc.cpp` and
+`src/libs/libGraphicsDriver.cpp` at commit
+`a65d17a5d689257a35644e01e9d15539361f0bf0`. The focused graphics-event case
+also uses SharpEmu's independent evidence that the registered event ID and
+hardware event type occupy separate event fields at commit
+`5ee7cd1dfafdeb0ce0e458a365692df4b2e1c445`.
 
 ## Contributor guidance
 

@@ -11,6 +11,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -21,6 +22,7 @@
 namespace kajps5::kernel {
 
 class GuestScheduler;
+class KernelClockService;
 
 inline constexpr std::size_t kMaximumEventQueueNameLength = 31;
 inline constexpr std::int16_t kEventFilterGraphics = -14;
@@ -112,7 +114,8 @@ struct EventQueuePollResult {
 
 class EventQueueService final {
 public:
-  EventQueueService(HandleTable &handles, GuestScheduler &scheduler) noexcept;
+  EventQueueService(HandleTable &handles, GuestScheduler &scheduler,
+                    KernelClockService &clock) noexcept;
 
   EventQueueService(const EventQueueService &) = delete;
   EventQueueService &operator=(const EventQueueService &) = delete;
@@ -135,7 +138,10 @@ public:
   [[nodiscard]] EventQueuePollResult Poll(KernelHandle handle,
                                           std::size_t maximum_count);
   [[nodiscard]] EventQueuePollResult Wait(KernelHandle handle,
-                                          std::size_t maximum_count);
+                                          std::size_t maximum_count,
+                                          std::optional<std::uint64_t>
+                                              timeout_microseconds =
+                                                  std::nullopt);
 
 private:
   enum class WaitCompletion {
@@ -147,6 +153,7 @@ private:
   struct Waiter {
     KernelHandle queue_handle = kInvalidKernelHandle;
     std::size_t maximum_count = 0;
+    std::optional<std::uint64_t> deadline_nanoseconds;
     WaitCompletion completion = WaitCompletion::kWaiting;
     std::vector<RegisteredKernelEvent> events;
   };
@@ -163,6 +170,7 @@ private:
 
   HandleTable &handles_;
   GuestScheduler &scheduler_;
+  KernelClockService &clock_;
   std::mutex wait_mutex_;
   std::map<KernelHandle, Waiter> waiters_;
   std::map<KernelHandle, std::shared_ptr<EventQueue>> queues_;

@@ -41,6 +41,8 @@
 - [x] Add typed user-event queues and scheduler wake integration.
 - [x] Add graphics event registrations, filter-based delivery, and generation
       checks for reserved events.
+- [x] Expose scheduler-backed event-queue waits, checked event records, timed
+      waits, and event-field accessors through `libkernel`.
 - [x] Add portable realtime, monotonic, and process-clock conversions.
 - [x] Add checked fixed and first-fit flexible-memory mappings.
 - [x] Add checked direct-memory range allocation and partial release.
@@ -146,6 +148,8 @@
       32-bit, 64-bit, and monotonic counter writes.
 - [x] Connect `EVENT_WRITE` packets to graphics event registrations without
       confusing hardware event types with guest event IDs.
+- [x] Expose AGC event type and context queries over the shared kernel event
+      record.
 - [x] Submit checked DCB and ACB batches atomically through the existing
       graphics and owner-scoped compute queues.
 - Create a Vulkan device and a validation test.
