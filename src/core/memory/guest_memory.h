@@ -52,6 +52,7 @@ class GuestMemory final {
       std::size_t size,
       GuestMemoryProtection initial_protection =
           GuestMemoryProtection::kNone) noexcept;
+  [[nodiscard]] static std::size_t HostMappingGranularity() noexcept;
 
   [[nodiscard]] std::uint64_t base_address() const noexcept;
   [[nodiscard]] std::uint64_t end_address() const noexcept;

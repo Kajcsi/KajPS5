@@ -328,6 +328,29 @@ int main() {
               host_mapped->Read(host_base, copy_output) &&
               copy_output == forward_overlap,
           "host-mapped checked copy lost overlapping bytes");
+    const auto second_host_page = host_base + host_page_size;
+    const auto read_execute = GuestMemoryProtection::kRead |
+                              GuestMemoryProtection::kExecute;
+    const std::array cross_region_input = {
+        std::byte{0x11}, std::byte{0x22}, std::byte{0x33}, std::byte{0x44}};
+    std::array<std::byte, cross_region_input.size()> cross_region_output{};
+    Check(host_mapped->Map(second_host_page, host_page_size, read_execute) &&
+              host_mapped->Initialize(second_host_page - 2,
+                                      cross_region_input) &&
+              host_mapped->Read(second_host_page - 2, cross_region_output) &&
+              cross_region_output == cross_region_input &&
+              host_mapped->InitializeFill(second_host_page - 2, 4,
+                                          std::byte{0x5a}) &&
+              host_mapped->Read(second_host_page - 2,
+                                cross_region_output) &&
+              cross_region_output ==
+                  std::array{std::byte{0x5a}, std::byte{0x5a},
+                             std::byte{0x5a}, std::byte{0x5a}} &&
+              host_mapped->QueryRegion(host_base)->protection ==
+                  host_read_write &&
+              host_mapped->QueryRegion(second_host_page)->protection ==
+                  read_execute,
+          "host initialization did not cross and restore mapped regions");
     const auto rejected_shared_backing =
         std::make_shared<kajps5::memory::SharedMemoryBacking>(0x4000);
     Check(!host_mapped->Map(host_base + 1, 0x1000,

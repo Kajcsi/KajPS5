@@ -201,6 +201,12 @@ memory::GuestMemoryProtection ProtectionFromFlags(
   return protection;
 }
 
+bool HasProtection(memory::GuestMemoryProtection value,
+                   memory::GuestMemoryProtection flag) noexcept {
+  return (static_cast<std::uint8_t>(value) &
+          static_cast<std::uint8_t>(flag)) != 0;
+}
+
 ElfParseResult ParseFailure(ElfError error) noexcept {
   ElfParseResult result;
   result.error = error;
@@ -1221,7 +1227,17 @@ ElfLoadResult LoadParsedElf64(std::span<const std::byte> image,
   struct PlannedLoadRange {
     std::size_t header_index = 0;
     std::uint64_t address = 0;
+    std::uint64_t mapping_address = 0;
+    std::uint64_t mapping_size = 0;
+    memory::GuestMemoryProtection protection =
+        memory::GuestMemoryProtection::kNone;
+  };
+
+  struct PlannedMappingRange {
+    std::uint64_t address = 0;
     std::uint64_t size = 0;
+    memory::GuestMemoryProtection protection =
+        memory::GuestMemoryProtection::kNone;
   };
 
   ElfLoadResult result;
@@ -1231,7 +1247,14 @@ ElfLoadResult LoadParsedElf64(std::span<const std::byte> image,
     return result;
   }
 
+  const auto granularity = memory.mapping_granularity();
+  if (granularity == 0 || (granularity & (granularity - 1)) != 0) {
+    result.error = ElfError::kGuestMappingConflict;
+    return result;
+  }
+
   std::vector<PlannedLoadRange> planned_ranges;
+  std::vector<std::uint64_t> mapping_boundaries;
   for (std::size_t header_index = 0;
        header_index < result.metadata.program_headers.size(); ++header_index) {
     const auto& header = result.metadata.program_headers[header_index];
@@ -1244,38 +1267,30 @@ ElfLoadResult LoadParsedElf64(std::span<const std::byte> image,
       return result;
     }
     const auto load_address = load_bias + header.virtual_address;
-    auto mapping_size = header.memory_size;
-    const auto granularity = memory.mapping_granularity();
-    if (granularity == 0 ||
-        (granularity & (granularity - 1)) != 0 ||
-        load_address % granularity != 0) {
-      result.error = ElfError::kGuestMappingConflict;
-      return result;
-    }
-    if (mapping_size > std::numeric_limits<std::uint64_t>::max() -
-                           (granularity - 1)) {
+    if (header.memory_size >
+        std::numeric_limits<std::uint64_t>::max() - load_address) {
       result.error = ElfError::kSegmentAddressRangeOverflow;
       return result;
     }
-    mapping_size =
-        (mapping_size + granularity - 1) & ~(granularity - 1);
-    if (!memory.Contains(load_address, mapping_size)) {
+    const auto load_end = load_address + header.memory_size;
+    const auto mapping_address = load_address & ~(granularity - 1);
+    if (load_end > std::numeric_limits<std::uint64_t>::max() -
+                       (granularity - 1)) {
+      result.error = ElfError::kSegmentAddressRangeOverflow;
+      return result;
+    }
+    const auto mapping_end =
+        (load_end + granularity - 1) & ~(granularity - 1);
+    const auto mapping_size = mapping_end - mapping_address;
+    if (!memory.Contains(mapping_address, mapping_size)) {
       result.error = ElfError::kGuestRangeOutOfRange;
       return result;
     }
-    if (!memory.CanMap(load_address, header.memory_size)) {
-      result.error = ElfError::kGuestMappingConflict;
-      return result;
-    }
-    const auto mapping_end = load_address + mapping_size;
-    for (const auto& range : planned_ranges) {
-      if (load_address < range.address + range.size &&
-          range.address < mapping_end) {
-        result.error = ElfError::kGuestMappingConflict;
-        return result;
-      }
-    }
-    planned_ranges.push_back({header_index, load_address, mapping_size});
+    const auto protection = ProtectionFromFlags(header.flags);
+    planned_ranges.push_back({header_index, load_address, mapping_address,
+                              mapping_size, protection});
+    mapping_boundaries.push_back(mapping_address);
+    mapping_boundaries.push_back(mapping_end);
     const auto zero_size = header.memory_size - header.file_size;
     if (result.loaded_file_bytes >
             std::numeric_limits<std::uint64_t>::max() - header.file_size ||
@@ -1289,14 +1304,61 @@ ElfLoadResult LoadParsedElf64(std::span<const std::byte> image,
     ++result.loaded_segment_count;
   }
 
+  std::sort(mapping_boundaries.begin(), mapping_boundaries.end());
+  mapping_boundaries.erase(
+      std::unique(mapping_boundaries.begin(), mapping_boundaries.end()),
+      mapping_boundaries.end());
+  std::vector<PlannedMappingRange> planned_mappings;
+  for (std::size_t boundary = 1; boundary < mapping_boundaries.size();
+       ++boundary) {
+    const auto address = mapping_boundaries[boundary - 1];
+    const auto end = mapping_boundaries[boundary];
+    auto protection = memory::GuestMemoryProtection::kNone;
+    bool covered = false;
+    bool declared_write_execute = false;
+    for (const auto& range : planned_ranges) {
+      if (range.mapping_address > address ||
+          range.mapping_address + range.mapping_size < end) {
+        continue;
+      }
+      covered = true;
+      protection = protection | range.protection;
+      declared_write_execute |=
+          HasProtection(range.protection,
+                        memory::GuestMemoryProtection::kWrite) &&
+          HasProtection(range.protection,
+                        memory::GuestMemoryProtection::kExecute);
+    }
+    if (!covered) {
+      continue;
+    }
+    if (HasProtection(protection, memory::GuestMemoryProtection::kWrite) &&
+        HasProtection(protection, memory::GuestMemoryProtection::kExecute) &&
+        !declared_write_execute) {
+      result.error = ElfError::kGuestMappingConflict;
+      return result;
+    }
+    const auto size = end - address;
+    if (!memory.CanMap(address, size)) {
+      result.error = ElfError::kGuestMappingConflict;
+      return result;
+    }
+    if (!planned_mappings.empty() &&
+        planned_mappings.back().address + planned_mappings.back().size ==
+            address &&
+        planned_mappings.back().protection == protection) {
+      planned_mappings.back().size += size;
+    } else {
+      planned_mappings.push_back({address, size, protection});
+    }
+  }
+
   std::size_t mapped_count = 0;
-  for (const auto& range : planned_ranges) {
-    const auto& header = result.metadata.program_headers[range.header_index];
-    if (!memory.Map(range.address, range.size,
-                    ProtectionFromFlags(header.flags))) {
+  for (const auto& range : planned_mappings) {
+    if (!memory.Map(range.address, range.size, range.protection)) {
       while (mapped_count != 0) {
         --mapped_count;
-        const auto& mapped = planned_ranges[mapped_count];
+        const auto& mapped = planned_mappings[mapped_count];
         (void)memory.Unmap(mapped.address, mapped.size);
       }
       result.error = ElfError::kGuestMappingConflict;
@@ -1321,8 +1383,8 @@ ElfLoadResult LoadParsedElf64(std::span<const std::byte> image,
           range.address + header.file_size, zero_size, std::byte{0});
     }
     if (!initialized) {
-      for (auto mapped = planned_ranges.rbegin();
-           mapped != planned_ranges.rend(); ++mapped) {
+      for (auto mapped = planned_mappings.rbegin();
+           mapped != planned_mappings.rend(); ++mapped) {
         (void)memory.Unmap(mapped->address, mapped->size);
       }
       result.error = ElfError::kGuestRangeOutOfRange;

@@ -219,6 +219,10 @@ std::unique_ptr<GuestMemory> GuestMemory::CreateHostMapped(
   return result;
 }
 
+std::size_t GuestMemory::HostMappingGranularity() noexcept {
+  return HostPageSize();
+}
+
 std::uint64_t GuestMemory::base_address() const noexcept {
   return base_address_;
 }
@@ -728,25 +732,34 @@ bool GuestMemory::Initialize(
   if (source.empty() || !host_mapped()) {
     return WriteBytes(address, source);
   }
-  const auto region_index = FindContainingRegion(address);
-  if (region_index == regions_.size()) {
-    return false;
-  }
-  const auto& region = regions_[region_index];
-  if (source.size() > region.address + region.size - address) {
-    return false;
-  }
   const auto writable = GuestMemoryProtection::kRead |
                         GuestMemoryProtection::kWrite;
-  auto* const region_mapping = host_mapping_ + OffsetOf(region.address);
-  if (!ProtectHostMapping(region_mapping,
-                          static_cast<std::size_t>(region.size), writable)) {
-    return false;
-  }
-  std::memcpy(host_mapping_ + OffsetOf(address), source.data(), source.size());
-  return ProtectHostMapping(region_mapping,
+  std::size_t copied = 0;
+  while (copied < source.size()) {
+    const auto current = address + copied;
+    const auto region_index = FindContainingRegion(current);
+    if (region_index == regions_.size()) {
+      return false;
+    }
+    const auto& region = regions_[region_index];
+    const auto chunk = std::min<std::size_t>(
+        source.size() - copied,
+        static_cast<std::size_t>(region.address + region.size - current));
+    auto* const region_mapping = host_mapping_ + OffsetOf(region.address);
+    if (!ProtectHostMapping(region_mapping,
+                            static_cast<std::size_t>(region.size), writable)) {
+      return false;
+    }
+    std::memcpy(host_mapping_ + OffsetOf(current), source.data() + copied,
+                chunk);
+    if (!ProtectHostMapping(region_mapping,
                             static_cast<std::size_t>(region.size),
-                            region.protection);
+                            region.protection)) {
+      return false;
+    }
+    copied += chunk;
+  }
+  return true;
 }
 
 bool GuestMemory::InitializeFill(std::uint64_t address,
@@ -758,27 +771,34 @@ bool GuestMemory::InitializeFill(std::uint64_t address,
   if (length == 0 || !host_mapped()) {
     return FillBytes(address, length, value);
   }
-  const auto region_index = FindContainingRegion(address);
-  if (region_index == regions_.size()) {
-    return false;
-  }
-  const auto& region = regions_[region_index];
-  if (length > region.address + region.size - address) {
-    return false;
-  }
   const auto writable = GuestMemoryProtection::kRead |
                         GuestMemoryProtection::kWrite;
-  auto* const region_mapping = host_mapping_ + OffsetOf(region.address);
-  if (!ProtectHostMapping(region_mapping,
-                          static_cast<std::size_t>(region.size), writable)) {
-    return false;
-  }
-  std::memset(host_mapping_ + OffsetOf(address),
-              std::to_integer<unsigned char>(value),
-              static_cast<std::size_t>(length));
-  return ProtectHostMapping(region_mapping,
+  std::uint64_t filled = 0;
+  while (filled < length) {
+    const auto current = address + filled;
+    const auto region_index = FindContainingRegion(current);
+    if (region_index == regions_.size()) {
+      return false;
+    }
+    const auto& region = regions_[region_index];
+    const auto chunk = std::min(length - filled,
+                                region.address + region.size - current);
+    auto* const region_mapping = host_mapping_ + OffsetOf(region.address);
+    if (!ProtectHostMapping(region_mapping,
+                            static_cast<std::size_t>(region.size), writable)) {
+      return false;
+    }
+    std::memset(host_mapping_ + OffsetOf(current),
+                std::to_integer<unsigned char>(value),
+                static_cast<std::size_t>(chunk));
+    if (!ProtectHostMapping(region_mapping,
                             static_cast<std::size_t>(region.size),
-                            region.protection);
+                            region.protection)) {
+      return false;
+    }
+    filled += chunk;
+  }
+  return true;
 }
 
 bool GuestMemory::ReadBytes(

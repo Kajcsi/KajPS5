@@ -249,6 +249,26 @@ int main() {
           "host page conflict changed memory before load failure");
   }
 
+  auto shared_page_image = multi_segment_image;
+  Write32(shared_page_image, kLoadHeaderOffset + 4, 6);
+  Write32(shared_page_image, second_header + 4, 0);
+  auto shared_page_memory = GuestMemory::CreateHostMapped(0x10000);
+  Check(shared_page_memory != nullptr,
+        "shared host page allocation failed");
+  if (shared_page_memory) {
+    const auto shared_page_bias =
+        shared_page_memory->base_address() - 0x1000;
+    const auto shared_page_loaded =
+        LoadElf64(shared_page_image, *shared_page_memory, shared_page_bias);
+    Check(shared_page_loaded && shared_page_memory->regions().size() == 1 &&
+              shared_page_memory->regions()[0].protection ==
+                  (GuestMemoryProtection::kRead |
+                   GuestMemoryProtection::kWrite) &&
+              !shared_page_memory->CanExecute(
+                  shared_page_bias + 0x1000, 1),
+          "compatible segment permissions did not share one host page");
+  }
+
   auto bad_magic = image;
   bad_magic[1] = std::byte{'X'};
   CheckError(std::move(bad_magic), ElfError::kInvalidMagic,

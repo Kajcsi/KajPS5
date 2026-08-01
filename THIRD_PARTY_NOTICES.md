@@ -121,8 +121,11 @@ boundary from KytyPS5 `src/common/virtualMemory.cpp`,
 `src/common/platform/sysLinuxVirtual.cpp`, and
 `src/loader/runtimeLinker.cpp`, and the refreshed guest-address-space tests in
 `tests/VirtualMemoryAllocationTests.cpp`. KajPS5 keeps its existing checked
-region model and uses the host mapping as that model's storage. No upstream
-virtual-memory, loader, or executor source was copied.
+region model and uses the host mapping as that model's storage. Unaligned ELF
+segments are expanded to host pages. Compatible shared-page permissions are
+combined, but a shared boundary cannot introduce a writable-executable page.
+Checked initialization can cross those regions and restores each declared
+protection. No upstream virtual-memory, loader, or executor source was copied.
 
 The library-scoped HLE import lookup and relocation connection in
 `src/hle/import_registry.cpp`, `tests/hle_import_registry_test.cpp`, and
