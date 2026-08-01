@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <locale>
 #include <map>
+#include <optional>
 #include <sstream>
 #include <span>
 #include <string_view>
@@ -20,6 +21,13 @@ namespace {
 
 constexpr std::uint8_t kSymbolBindingWeak = 2;
 constexpr std::uint16_t kUndefinedSectionIndex = 0;
+
+struct ImportCoverageGroup {
+  std::string library;
+  std::string module;
+  std::size_t unique_import_count = 0;
+  std::size_t relocation_count = 0;
+};
 
 constexpr bool IsImportRelocation(std::uint32_t type) noexcept {
   switch (type) {
@@ -60,10 +68,9 @@ void WriteEncodedField(std::ostringstream& trace, std::string_view prefix,
         << prefix << "_bytes_omitted=" << value.size() - byte_count << '\n';
 }
 
+template <typename Lookup>
 bool AnalyzeTable(const std::vector<loader::ElfRelaEntry>& relocations,
-                  const loader::ElfMetadata& metadata,
-                  const ExportRegistry& registry,
-                  const ImportRegistry* data_registry,
+                  const loader::ElfMetadata& metadata, Lookup& lookup,
                   std::map<std::string, std::size_t>& import_indices,
                   ImportCoverageResult& result) {
   for (const auto& relocation : relocations) {
@@ -102,49 +109,18 @@ bool AnalyzeTable(const std::vector<loader::ElfRelaEntry>& relocations,
       continue;
     }
 
-    HleLookupResult lookup{ExportRegistryStatus::kInvalidArgument, {}};
     std::string requested_library;
     std::string requested_module;
-    if (reference.valid) {
-      if (reference.library != nullptr && reference.module != nullptr) {
-        requested_library = reference.library->name;
-        requested_module = reference.module->name;
-        lookup = registry.Lookup(
-            reference.nid,
-            std::span<const std::string>(&requested_library, 1));
-      } else {
-        lookup = registry.Lookup(
-            reference.nid, metadata.dynamic_info.needed_libraries);
-        if (lookup) {
-          requested_library = lookup.library;
-        }
-      }
-      if (!lookup && data_registry != nullptr) {
-        ImportLookupResult data_lookup;
-        if (reference.library != nullptr && reference.module != nullptr) {
-          data_lookup = data_registry->Resolve(
-              reference.nid,
-              std::span<const std::string>(&requested_library, 1));
-        } else {
-          data_lookup = data_registry->Resolve(
-              reference.nid, metadata.dynamic_info.needed_libraries);
-        }
-        if (data_lookup) {
-          lookup = {ExportRegistryStatus::kOk, data_lookup.library};
-          if (requested_library.empty()) {
-            requested_library = data_lookup.library;
-          }
-        }
-      }
-    }
+    const auto lookup_result =
+        lookup(reference, requested_library, requested_module);
 
     const auto new_index = result.imports.size();
     import_indices.emplace(symbol.name, new_index);
     result.imports.push_back(
         {relocation.symbol(), 1, symbol.name, std::move(requested_library),
-         std::move(requested_module), lookup.status});
+         std::move(requested_module), lookup_result.status});
     ++result.unique_import_count;
-    if (lookup) {
+    if (lookup_result) {
       ++result.resolved_relocation_count;
       ++result.resolved_unique_import_count;
     } else {
@@ -155,32 +131,117 @@ bool AnalyzeTable(const std::vector<loader::ElfRelaEntry>& relocations,
   return true;
 }
 
+template <typename Lookup>
+ImportCoverageResult AnalyzeWithLookup(const loader::ElfMetadata& metadata,
+                                       std::size_t available_export_count,
+                                       std::size_t available_data_symbol_count,
+                                       Lookup lookup) {
+  ImportCoverageResult result;
+  result.available_export_count = available_export_count;
+  result.available_data_symbol_count = available_data_symbol_count;
+  result.imports.reserve(metadata.dynamic_info.symbols.size());
+  std::map<std::string, std::size_t> import_indices;
+  if (!AnalyzeTable(metadata.dynamic_info.relocations, metadata, lookup,
+                    import_indices, result)) {
+    return result;
+  }
+  (void)AnalyzeTable(metadata.dynamic_info.plt_relocations, metadata, lookup,
+                     import_indices, result);
+  return result;
+}
+
 }  // namespace
 
 ImportCoverageResult AnalyzeImportCoverage(
     const loader::ElfMetadata& metadata, const ExportRegistry& registry,
     const ImportRegistry* data_registry) {
-  ImportCoverageResult result;
-  result.available_export_count = registry.size();
-  result.available_data_symbol_count =
-      data_registry == nullptr ? 0 : data_registry->size();
-  result.imports.reserve(metadata.dynamic_info.symbols.size());
-  std::map<std::string, std::size_t> import_indices;
-  if (!AnalyzeTable(metadata.dynamic_info.relocations, metadata, registry,
-                    data_registry, import_indices, result)) {
+  const auto lookup = [&metadata, &registry, data_registry](
+                          const loader::ElfImportReference& reference,
+                          std::string& requested_library,
+                          std::string& requested_module) {
+    HleLookupResult result{ExportRegistryStatus::kInvalidArgument, {}};
+    if (!reference.valid) {
+      return result;
+    }
+    if (reference.library != nullptr && reference.module != nullptr) {
+      requested_library = reference.library->name;
+      requested_module = reference.module->name;
+      result = registry.Lookup(
+          reference.nid, std::span<const std::string>(&requested_library, 1));
+    } else {
+      result = registry.Lookup(reference.nid,
+                               metadata.dynamic_info.needed_libraries);
+      if (result) {
+        requested_library = result.library;
+      }
+    }
+    if (result || data_registry == nullptr) {
+      return result;
+    }
+    ImportLookupResult data_lookup;
+    if (reference.library != nullptr && reference.module != nullptr) {
+      data_lookup = data_registry->Resolve(
+          reference.nid, std::span<const std::string>(&requested_library, 1));
+    } else {
+      data_lookup = data_registry->Resolve(
+          reference.nid, metadata.dynamic_info.needed_libraries);
+    }
+    if (data_lookup) {
+      result = {ExportRegistryStatus::kOk, data_lookup.library};
+      if (requested_library.empty()) {
+        requested_library = data_lookup.library;
+      }
+    }
     return result;
-  }
-  (void)AnalyzeTable(metadata.dynamic_info.plt_relocations, metadata, registry,
-                     data_registry, import_indices, result);
-  return result;
+  };
+  return AnalyzeWithLookup(metadata, registry.size(),
+                           data_registry == nullptr ? 0 : data_registry->size(),
+                           lookup);
 }
 
-std::string FormatImportCoverageTrace(const ImportCoverageResult& result) {
+ImportCoverageResult AnalyzeImportCoverage(
+    const loader::ElfMetadata& metadata,
+    const loader::ImportResolver& resolver) {
+  const auto lookup = [&metadata, &resolver](
+                          const loader::ElfImportReference& reference,
+                          std::string& requested_library,
+                          std::string& requested_module) {
+    if (!reference.valid) {
+      return HleLookupResult{ExportRegistryStatus::kInvalidArgument, {}};
+    }
+    std::optional<std::uint64_t> resolved;
+    if (reference.library != nullptr && reference.module != nullptr) {
+      requested_library = reference.library->name;
+      requested_module = reference.module->name;
+      resolved = resolver.ResolveScopedImport(reference.nid, *reference.library,
+                                              *reference.module);
+    } else {
+      resolved = resolver.ResolveImport(reference.nid,
+                                        metadata.dynamic_info.needed_libraries);
+    }
+    return HleLookupResult{
+        resolved ? ExportRegistryStatus::kOk : ExportRegistryStatus::kNotFound,
+        {}};
+  };
+  return AnalyzeWithLookup(metadata, 0, 0, lookup);
+}
+
+std::string FormatImportCoverageTrace(const ImportCoverageResult& result,
+                                      std::string_view trace_prefix) {
   std::vector<const ImportCoverageEntry*> unresolved;
+  std::map<std::pair<std::string, std::string>, ImportCoverageGroup> groups;
   unresolved.reserve(result.unresolved_unique_import_count);
   for (const auto& entry : result.imports) {
     if (entry.lookup_status != ExportRegistryStatus::kOk) {
       unresolved.push_back(&entry);
+      const auto key =
+          std::pair(entry.requested_library, entry.requested_module);
+      auto [group, inserted] = groups.try_emplace(
+          key,
+          ImportCoverageGroup{entry.requested_library, entry.requested_module});
+      (void)inserted;
+      ++group->second.unique_import_count;
+      group->second.relocation_count += entry.relocation_count;
     }
   }
   std::stable_sort(
@@ -190,41 +251,81 @@ std::string FormatImportCoverageTrace(const ImportCoverageResult& result) {
       });
   const auto detail_count =
       std::min(unresolved.size(), kMaximumImportCoverageDetails);
+  std::vector<const ImportCoverageGroup*> ordered_groups;
+  ordered_groups.reserve(groups.size());
+  for (const auto& [key, group] : groups) {
+    (void)key;
+    ordered_groups.push_back(&group);
+  }
+  std::stable_sort(
+      ordered_groups.begin(), ordered_groups.end(),
+      [](const ImportCoverageGroup* left, const ImportCoverageGroup* right) {
+        if (left->unique_import_count != right->unique_import_count) {
+          return left->unique_import_count > right->unique_import_count;
+        }
+        if (left->relocation_count != right->relocation_count) {
+          return left->relocation_count > right->relocation_count;
+        }
+        if (left->library != right->library) {
+          return left->library < right->library;
+        }
+        return left->module < right->module;
+      });
+  const auto group_count =
+      std::min(ordered_groups.size(), kMaximumImportCoverageGroups);
 
   std::ostringstream trace;
   trace.imbue(std::locale::classic());
-  trace << "hle.coverage.status=" << ImportCoverageStatusName(result.status)
+  trace << trace_prefix << ".status=" << ImportCoverageStatusName(result.status)
         << '\n'
-        << "hle.coverage.available_exports="
-        << result.available_export_count << '\n'
-        << "hle.coverage.available_data_symbols="
-        << result.available_data_symbol_count << '\n'
-        << "hle.coverage.import_relocations="
-        << result.import_relocation_count << '\n'
-        << "hle.coverage.resolved_relocations="
-        << result.resolved_relocation_count << '\n'
-        << "hle.coverage.unresolved_relocations="
-        << result.unresolved_relocation_count << '\n'
-        << "hle.coverage.unique_imports=" << result.unique_import_count
+        << trace_prefix
+        << ".available_exports=" << result.available_export_count << '\n'
+        << trace_prefix
+        << ".available_data_symbols=" << result.available_data_symbol_count
         << '\n'
-        << "hle.coverage.resolved_unique_imports="
-        << result.resolved_unique_import_count << '\n'
-        << "hle.coverage.unresolved_unique_imports="
+        << trace_prefix
+        << ".import_relocations=" << result.import_relocation_count << '\n'
+        << trace_prefix
+        << ".resolved_relocations=" << result.resolved_relocation_count << '\n'
+        << trace_prefix
+        << ".unresolved_relocations=" << result.unresolved_relocation_count
+        << '\n'
+        << trace_prefix << ".unique_imports=" << result.unique_import_count
+        << '\n'
+        << trace_prefix
+        << ".resolved_unique_imports=" << result.resolved_unique_import_count
+        << '\n'
+        << trace_prefix << ".unresolved_unique_imports="
         << result.unresolved_unique_import_count << '\n'
-        << "hle.coverage.unresolved_details=" << detail_count << '\n'
-        << "hle.coverage.unresolved_omitted="
-        << unresolved.size() - detail_count << '\n';
+        << trace_prefix << ".unresolved_details=" << detail_count << '\n'
+        << trace_prefix
+        << ".unresolved_omitted=" << unresolved.size() - detail_count << '\n'
+        << trace_prefix << ".unresolved_groups=" << group_count << '\n'
+        << trace_prefix
+        << ".unresolved_groups_omitted=" << ordered_groups.size() - group_count
+        << '\n';
+
+  for (std::size_t index = 0; index < group_count; ++index) {
+    const auto& group = *ordered_groups[index];
+    const auto prefix = std::string(trace_prefix) + ".unresolved_group[" +
+                        std::to_string(index) + "]";
+    trace << prefix << ".unique_imports=" << group.unique_import_count << '\n'
+          << prefix << ".relocations=" << group.relocation_count << '\n';
+    WriteEncodedField(trace, prefix + ".library", group.library);
+    WriteEncodedField(trace, prefix + ".module", group.module);
+  }
 
   for (std::size_t index = 0; index < detail_count; ++index) {
     const auto& entry = *unresolved[index];
-    trace << "hle.coverage.unresolved[" << index
+    trace << trace_prefix << ".unresolved[" << index
           << "].symbol_index=" << entry.symbol_index << '\n'
-          << "hle.coverage.unresolved[" << index
+          << trace_prefix << ".unresolved[" << index
           << "].references=" << entry.relocation_count << '\n'
-          << "hle.coverage.unresolved[" << index << "].lookup="
-          << ExportRegistryStatusName(entry.lookup_status) << '\n';
-    const auto prefix =
-        "hle.coverage.unresolved[" + std::to_string(index) + "]";
+          << trace_prefix << ".unresolved[" << index
+          << "].lookup=" << ExportRegistryStatusName(entry.lookup_status)
+          << '\n';
+    const auto prefix = std::string(trace_prefix) + ".unresolved[" +
+                        std::to_string(index) + "]";
     WriteEncodedField(trace, prefix + ".symbol", entry.symbol);
     WriteEncodedField(trace, prefix + ".library", entry.requested_library);
     WriteEncodedField(trace, prefix + ".module", entry.requested_module);

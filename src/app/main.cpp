@@ -405,6 +405,12 @@ int RunExecutableFile(
     std::cout << kajps5::hle::FormatImportCoverageTrace(prepared.coverage);
   }
   if (!prepared) {
+    if (prepared.status ==
+            kajps5::runtime::TitleLoadStatus::kUnresolvedImports &&
+        prepared.modules.import_coverage) {
+      std::cout << kajps5::hle::FormatImportCoverageTrace(
+          prepared.modules.import_coverage, "title.module_coverage");
+    }
     std::cerr << "Title preparation failed: "
               << kajps5::runtime::TitleLoadStatusName(prepared.status);
     if (prepared.status ==

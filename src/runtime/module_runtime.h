@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "core/memory/guest_memory.h"
+#include "hle/import_coverage.h"
 #include "loader/lifecycle_plan.h"
 #include "loader/module_export_registry.h"
 #include "loader/module_loader.h"
@@ -65,6 +66,7 @@ struct ModuleRuntimeResult {
   loader::ModuleExportRegistryStatus export_status =
       loader::ModuleExportRegistryStatus::kOk;
   loader::RelocationStatus relocation_status = loader::RelocationStatus::kOk;
+  hle::ImportCoverageResult import_coverage;
   loader::LifecyclePlanStatus lifecycle_status =
       loader::LifecyclePlanStatus::kOk;
 

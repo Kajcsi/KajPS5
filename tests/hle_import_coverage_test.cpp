@@ -6,7 +6,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
+#include <optional>
+#include <span>
 #include <string>
+#include <string_view>
 
 #include "hle/export_registry.h"
 #include "hle/import_coverage.h"
@@ -15,6 +18,19 @@
 namespace {
 
 int failures = 0;
+
+class CoverageResolver final : public kajps5::loader::ImportResolver {
+ public:
+  [[nodiscard]] std::optional<std::uint64_t> ResolveImport(
+      std::string_view symbol,
+      std::span<const std::string> library_order) const override {
+    if (symbol == "known" && !library_order.empty() &&
+        library_order.front() == "libKernel") {
+      return 0x1234;
+    }
+    return std::nullopt;
+  }
+};
 
 void Check(bool condition, const char* message) {
   if (!condition) {
@@ -102,6 +118,14 @@ int main() {
             dispatch_count == 0,
         "data-symbol coverage was not combined without dispatch");
 
+  CoverageResolver resolver;
+  const auto resolved_by_layer =
+      AnalyzeImportCoverage(MakeCoverageMetadata(), resolver);
+  Check(resolved_by_layer && resolved_by_layer.available_export_count == 0 &&
+            resolved_by_layer.resolved_unique_import_count == 1 &&
+            resolved_by_layer.unresolved_unique_import_count == 1,
+        "layered resolver coverage counts are incorrect");
+
   const auto trace = kajps5::hle::FormatImportCoverageTrace(coverage);
   Check(trace.find("hle.coverage.status=ok\n") != std::string::npos &&
             trace.find("hle.coverage.available_data_symbols=0\n") !=
@@ -109,6 +133,13 @@ int main() {
             trace.find("hle.coverage.resolved_relocations=2\n") !=
                 std::string::npos &&
             trace.find("hle.coverage.unresolved_unique_imports=1\n") !=
+                std::string::npos &&
+            trace.find("hle.coverage.unresolved_groups=1\n") !=
+                std::string::npos &&
+            trace.find(
+                "hle.coverage.unresolved_group[0].unique_imports=1\n") !=
+                std::string::npos &&
+            trace.find("hle.coverage.unresolved_group[0].relocations=1\n") !=
                 std::string::npos &&
             trace.find("symbol_hex=6d697373696e6723424930234241\n") !=
                 std::string::npos &&
@@ -119,6 +150,12 @@ int main() {
             trace.find("known") == std::string::npos &&
             trace.find("missing#") == std::string::npos,
         "coverage trace is incomplete or contains raw guest text");
+  const auto prefixed_trace = kajps5::hle::FormatImportCoverageTrace(
+      resolved_by_layer, "title.module_coverage");
+  Check(prefixed_trace.find("title.module_coverage.status=ok\n") !=
+                std::string::npos &&
+            prefixed_trace.find("hle.coverage.status=") == std::string::npos,
+        "custom coverage trace prefix was ignored");
 
   auto malformed_scope = MakeCoverageMetadata();
   malformed_scope.dynamic_info.symbols[1].name = "known#A#BA";
@@ -150,7 +187,8 @@ int main() {
        index < bounded.unresolved_unique_import_count; ++index) {
     bounded.imports.push_back(
         {static_cast<std::uint32_t>(index), index + 1,
-         std::string(140, 'x'), {}, {},
+         std::string(140, 'x'), "library" + std::to_string(index),
+         "module" + std::to_string(index),
          ExportRegistryStatus::kNotFound});
   }
   const auto bounded_trace =
@@ -158,6 +196,10 @@ int main() {
   Check(bounded_trace.find("hle.coverage.unresolved_details=32\n") !=
             std::string::npos &&
             bounded_trace.find("hle.coverage.unresolved_omitted=2\n") !=
+                std::string::npos &&
+            bounded_trace.find("hle.coverage.unresolved_groups=32\n") !=
+                std::string::npos &&
+            bounded_trace.find("hle.coverage.unresolved_groups_omitted=2\n") !=
                 std::string::npos &&
             bounded_trace.find("hle.coverage.unresolved[0].references=34\n") !=
                 std::string::npos &&

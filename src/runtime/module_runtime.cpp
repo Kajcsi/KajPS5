@@ -256,6 +256,8 @@ ModuleRuntimeResult ModuleRuntime::RelocateAndPlan(
       result.relocation_status = program.relocation.status;
       result.unresolved_import_count =
           program.relocation.unresolved_import_count;
+      result.import_coverage =
+          hle::AnalyzeImportCoverage(program.metadata, imports);
       return result;
     }
     program.lifecycle = loader::BuildLifecycleCallPlan(program.launch, memory_,

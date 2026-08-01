@@ -224,3 +224,9 @@ record updates its checked guest target. Event delivery is deferred until the
 event queue has AMPR registration generations. APR file reads remain
 unresolved until guest paths and file IDs share one checked service; the
 runtime does not return a false success for them.
+
+When module relocation stops on unresolved imports, `--run-elf` now reports a
+bounded `title.module_coverage` trace. It groups the remaining imports by
+library and module after adjacent title modules and HLE exports are applied.
+Use this result to select complete service families instead of adding unrelated
+success stubs.

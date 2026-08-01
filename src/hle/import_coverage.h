@@ -14,10 +14,12 @@
 #include "hle/export_registry.h"
 #include "hle/import_registry.h"
 #include "loader/elf.h"
+#include "loader/relocator.h"
 
 namespace kajps5::hle {
 
 inline constexpr std::size_t kMaximumImportCoverageDetails = 32;
+inline constexpr std::size_t kMaximumImportCoverageGroups = 32;
 inline constexpr std::size_t kMaximumImportCoverageSymbolBytes = 128;
 
 enum class ImportCoverageStatus {
@@ -55,8 +57,12 @@ struct ImportCoverageResult {
 [[nodiscard]] ImportCoverageResult AnalyzeImportCoverage(
     const loader::ElfMetadata& metadata, const ExportRegistry& registry,
     const ImportRegistry* data_registry = nullptr);
+[[nodiscard]] ImportCoverageResult AnalyzeImportCoverage(
+    const loader::ElfMetadata& metadata,
+    const loader::ImportResolver& resolver);
 [[nodiscard]] std::string FormatImportCoverageTrace(
-    const ImportCoverageResult& result);
+    const ImportCoverageResult& result,
+    std::string_view prefix = "hle.coverage");
 [[nodiscard]] std::string_view ImportCoverageStatusName(
     ImportCoverageStatus status) noexcept;
 
