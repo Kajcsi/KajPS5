@@ -12,12 +12,18 @@ when the change cannot affect runtime behavior.
 Describe what you reviewed yourself and note any part that still needs a
 second review. Write `N/A` only when no extra review note is needed.
 
+## AI assistance
+
+If AI tools assisted the change, describe their scope and the human review and
+testing that followed. Otherwise, write `N/A`.
+
 ## Checklist
 
 - [ ] I understand and can maintain every submitted change.
-- [ ] I wrote this description and all repository communication in my own
-      words.
+- [ ] I wrote this pull request description myself and did not paste
+      AI-generated explanations.
 - [ ] I tested the change or explained why runtime validation is not
       applicable.
+- [ ] I disclosed any AI assistance and the human verification performed.
 - [ ] I did not add games, firmware, keys, proprietary modules, private crash
       data, or non-redistributable assets.

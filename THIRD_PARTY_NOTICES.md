@@ -569,17 +569,18 @@ continuation.
 
 ## Contributor guidance
 
-The contribution quality guidance in `CONTRIBUTING.md` and
-`.github/pull_request_template.md` adapts policy concepts from KytyPS5
-`README.md` at commit `f6e01e54031a3c615f089f061a4eab2f3c59acba`,
-and SharpEmu `CONTRIBUTING.md` and `.github/pull_request_template.md` at commit
-`d5108e854d609808f17093a6f5dbbc711d09ad2e`. The SharpEmu reference states:
+The AI-use guidance in `CONTRIBUTING.md` reproduces the contributor rules from
+KytyPS5 `README.md` at commit
+`a65d17a5d689257a35644e01e9d15539361f0bf0` and SharpEmu
+`CONTRIBUTING.md` at commit
+`d5108e854d609808f17093a6f5dbbc711d09ad2e`. The pull-request checklist also
+uses SharpEmu `.github/pull_request_template.md` at that commit. The SharpEmu
+reference states:
 
 `Copyright (C) 2026 SharpEmu Emulator Project`
 
 KytyPS5 identifies as GPL-2.0-only. SharpEmu identifies as
-GPL-2.0-or-later. The KajPS5 text is adapted for this project and does not copy
-the upstream wording verbatim.
+GPL-2.0-or-later. The combined guidance is distributed under GPL-2.0-only.
 
 ## New adaptations
 

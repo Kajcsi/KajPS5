@@ -25,21 +25,36 @@ Write documentation, comments, logs, and errors in plain, direct language.
 Prefer specific behavior and test evidence over broad claims. Remove filler,
 repetition, and slogans.
 
-## Contribution quality
+## AI Use
 
-You are responsible for everything you submit. You must understand the change
-well enough to explain, modify, debug, and maintain it yourself.
+AI tools may be used for research, reverse engineering, and development
+assistance. Contributors must fully understand, review, and test all code they
+submit and remain responsible for its correctness. Repository communication,
+including pull-request descriptions, code comments, and issue comments, must
+come from the human contributor rather than an autonomous AI agent.
 
-For every contribution:
+Pull requests that include AI-assisted or AI-generated work should disclose
+the scope of the AI involvement and describe the human review and testing
+performed before submission. Unverified or untested generated changes may be
+closed without review.
 
-- Explain the change, its purpose, and its evidence in your own words.
-- Describe the review and testing you completed yourself.
-- Keep comments focused on design decisions and non-obvious implementation
-  details. Do not add generic comments that only restate the code.
-- Use logging only when it adds useful diagnostic evidence.
-- Be ready to answer detailed questions about the implementation.
+When submitting an AI-assisted PR:
 
-Write and verify your own pull-request descriptions, review replies, code
-comments, and issue comments. Do not post raw tool output as repository
-communication. Maintainers may close a change when its contributor cannot
-explain it or has not tested it.
+- Clearly explain **what the change does**, **why it is needed**, and **what
+  problem it solves**, using your own words.
+- Describe **how you verified the change**, including the games, applications,
+  or test cases used.
+- Avoid excessive product-level logging. Use logging only when it provides
+  meaningful diagnostic value.
+- Comments should document design decisions or implementation details in your
+  own words. Avoid generic AI-generated comments that merely restate what the
+  code already does.
+- Be prepared to answer review questions about the implementation. "The AI
+  generated it" is not considered a sufficient explanation.
+- Large AI-generated changes without a clear understanding of the
+  implementation are unlikely to be accepted.
+- If the implementation cannot be reasonably explained during code review,
+  the pull request may be rejected regardless of whether it works.
+
+The quality, correctness, maintainability, and long-term ownership of the
+submitted code remain the responsibility of the contributor.
