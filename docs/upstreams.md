@@ -7,8 +7,9 @@ KajPS5 uses these independent projects as references:
 | [KytyPS5](https://github.com/KytyPS5/KytyPS5) | Primary native architecture reference | C++ | GPL-2.0-only, with original Kyty portions under MIT | `a65d17a5d689257a35644e01e9d15539361f0bf0` |
 | [SharpEmu](https://github.com/sharpemu/sharpemu) | Behavior and test reference | C# | GPL-2.0-or-later | `7c9740fee8a633e17b145c6bc6d794e41d46c73f` |
 
-The current code does not copy source from either project. Adapted behavior
-and provenance are recorded in `THIRD_PARTY_NOTICES.md`.
+The AGC command-buffer core closely adapts selected KytyPS5 algorithms. Other
+current integrations use upstream behavior as evidence. Exact provenance is
+recorded in `THIRD_PARTY_NOTICES.md`.
 
 The pinned KytyPS5 README explicitly identifies the project as
 `GPL-2.0-only`; its root `LICENSE` contains GPL version 2. KytyPS5 also keeps

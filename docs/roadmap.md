@@ -129,6 +129,10 @@
 
 ## Stage 3: Graphics and audio
 
+- [x] Add one GPU runtime owner with checked AGC command-buffer allocation.
+- [x] Encode tested AGC NOP and direct-dispatch PM4 packets.
+- [x] Decode packet sizes and apply packet predication through checked guest
+      memory.
 - Create a Vulkan device and a validation test.
 - Decode a small public command-stream fixture.
 - Add shader and resource tests before game tests.

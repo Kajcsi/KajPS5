@@ -7,6 +7,7 @@
 
 #include <utility>
 
+#include "hle/agc_exports.h"
 #include "hle/ampr_exports.h"
 #include "hle/json_exports.h"
 #include "hle/kernel_exports.h"
@@ -48,6 +49,7 @@ std::unique_ptr<TitleSession> TitleSession::Create(
 
 TitleSession::TitleSession(std::unique_ptr<memory::GuestMemory> memory)
     : memory_(std::move(memory)),
+      gpu_runtime_(*memory_),
       thread_runner_(*memory_, kernel_runtime_.scheduler(),
                      kernel_runtime_.pthreads(), execution_context_),
       process_launcher_(kernel_runtime_.pthreads(), thread_runner_) {}
@@ -132,6 +134,11 @@ TitleHleSetupResult TitleSession::PrepareHleBatch(
       hle_exports_, kernel_runtime_.ampr_command_buffers(), *memory_);
   if (result.export_status != hle::ExportRegistryStatus::kOk) {
     result.status = TitleHleSetupStatus::kAmprExportsFailed;
+    return result;
+  }
+  result.export_status = hle::RegisterAgcExports(hle_exports_, gpu_runtime_);
+  if (result.export_status != hle::ExportRegistryStatus::kOk) {
+    result.status = TitleHleSetupStatus::kAgcExportsFailed;
     return result;
   }
 
@@ -497,6 +504,8 @@ std::string_view TitleHleSetupStatusName(TitleHleSetupStatus status) noexcept {
       return "json-exports-failed";
     case TitleHleSetupStatus::kAmprExportsFailed:
       return "ampr-exports-failed";
+    case TitleHleSetupStatus::kAgcExportsFailed:
+      return "agc-exports-failed";
     case TitleHleSetupStatus::kImportTableBuildFailed:
       return "import-table-build-failed";
   }

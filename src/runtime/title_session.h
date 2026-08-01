@@ -17,6 +17,7 @@
 #include "cpu/native_guest_process_launcher.h"
 #include "cpu/native_guest_thread_runner.h"
 #include "cpu/native_hle_import_table.h"
+#include "gpu/runtime.h"
 #include "hle/data_symbols.h"
 #include "hle/export_registry.h"
 #include "hle/import_registry.h"
@@ -74,6 +75,7 @@ enum class TitleHleSetupStatus {
   kLibcThreadExportsFailed,
   kJsonExportsFailed,
   kAmprExportsFailed,
+  kAgcExportsFailed,
   kImportTableBuildFailed,
 };
 
@@ -156,6 +158,7 @@ class TitleSession final {
       cpu::NativeGuestThreadRunResult run = {}, std::size_t slices = 0);
 
   std::unique_ptr<memory::GuestMemory> memory_;
+  gpu::GpuRuntime gpu_runtime_;
   loader::ExecutableLaunchMetadata launch_metadata_;
   loader::ExecutableLifecyclePlan lifecycle_plan_;
   kernel::KernelRuntime kernel_runtime_;

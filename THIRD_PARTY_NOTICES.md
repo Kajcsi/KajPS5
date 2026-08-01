@@ -1,9 +1,10 @@
 # Third-party notices
 
-The current source does not copy code from KytyPS5 or SharpEmu. Both projects
-serve as research references. Each stage document records the exact commit
-used for its behavior, even after the current reference pin moves. Current
-pins and refresh reviews are in `docs/upstreams.md`.
+KytyPS5 and SharpEmu serve as research references. The graphics section below
+identifies the first close KytyPS5 adaptation. Other sections state when code
+uses behavior only. Each section records the exact commit used, even after the
+current reference pin moves. Current pins and refresh reviews are in
+`docs/upstreams.md`.
 
 ## Kernel behavior
 
@@ -408,6 +409,31 @@ source was copied. Clock NIDs are confirmed by both pinned references.
 The clock-gettime and gettimeofday handlers use KytyPS5's kernel-compatible
 `EFAULT` and `EINVAL` values. SharpEmu marks its differing Gen5 error values as
 synthetic.
+
+## Graphics
+
+The checked AGC command-buffer owner in `src/gpu/runtime.*` closely adapts the
+command-buffer allocation, type-3 PM4 header, NOP, direct-dispatch,
+packet-length, and predication algorithms from KytyPS5 `src/libs/agc.cpp` and
+`src/graphics/guest_gpu/pm4.h` at commit
+`a65d17a5d689257a35644e01e9d15539361f0bf0`. These destination files use
+`GPL-2.0-only`, matching KytyPS5. They replace raw guest pointers and the
+upstream callback call with KajPS5's checked guest-memory boundary and an
+explicit callback-required result. KytyPS5 does not place a separate
+copyright header in these source files.
+
+The HLE bridge in `src/hle/agc_exports.*` and
+`tests/hle_agc_exports_test.cpp` use the names and NIDs confirmed by the same
+KytyPS5 sources and by SharpEmu
+`src/SharpEmu.Libs/Agc/AgcExports.cs` at commit
+`7c9740fee8a633e17b145c6bc6d794e41d46c73f`. SharpEmu supplies independent
+bounds, reserved-space, packet-word, modifier, and invalid-pointer behavior.
+The SharpEmu reference file states:
+
+`Copyright (C) 2026 SharpEmu Emulator Project`
+
+No SharpEmu graphics source or runtime was copied. KajPS5 keeps one C++ GPU
+owner and does not load an external compatibility library.
 
 ## Files
 
