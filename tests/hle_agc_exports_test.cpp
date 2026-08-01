@@ -265,7 +265,30 @@ int main() {
             Read32(write_packet, 20) == 0x99aabbccU,
         "write-data packet words are incorrect");
 
-  constexpr auto kWaitPacket = kWritePacket + write_packet.size();
+  constexpr auto kReleasePacket = kWritePacket + write_packet.size();
+  const std::array release_arguments = {
+      kCommandBuffer, std::uint64_t{0x2f}, std::uint64_t{0x100},
+      std::uint64_t{0}, std::uint64_t{2}, std::uint64_t{0x456789a80ULL},
+      std::uint64_t{2}, std::uint64_t{0x1122334455667788ULL},
+      std::uint64_t{0}, std::uint64_t{0}, std::uint64_t{2},
+      std::uint64_t{0x89abcdef}};
+  SetArguments(context, release_arguments);
+  Check(registry.Dispatch(kajps5::hle::kAgcCbReleaseMemNid, context) &&
+            ReturnValue(context) == kReleasePacket,
+        "release-memory packet call failed");
+  std::array<std::byte, 32> release_packet{};
+  Check(memory.Read(kReleasePacket, release_packet) &&
+            Read32(release_packet, 0) == 0xc0061060U &&
+            Read32(release_packet, 4) == 0x0430062fU &&
+            Read32(release_packet, 8) == 0x42000000U &&
+            Read32(release_packet, 12) == 0x56789a80U &&
+            Read32(release_packet, 16) == 4U &&
+            Read32(release_packet, 20) == 0x55667788U &&
+            Read32(release_packet, 24) == 0x11223344U &&
+            Read32(release_packet, 28) == 0x01abcdefU,
+        "release-memory packet words are incorrect");
+
+  constexpr auto kWaitPacket = kReleasePacket + release_packet.size();
   const std::array wait_arguments = {
       kCommandBuffer, std::uint64_t{0}, std::uint64_t{3},
       std::uint64_t{2}, std::uint64_t{1}, std::uint64_t{0x456789a83ULL},
@@ -290,6 +313,10 @@ int main() {
   Check(registry.Dispatch(kajps5::hle::kAgcDcbWriteDataGetSizeNid, context) &&
             ReturnValue(context) == 36,
         "write-data size query is incorrect");
+  Check(registry.Dispatch(
+            kajps5::hle::kAgcCbQueueEndOfPipeActionGetSizeNid, context) &&
+            ReturnValue(context) == 32,
+        "release-memory size query is incorrect");
   const std::array wait_size_argument = {std::uint64_t{1}};
   SetArguments(context, wait_size_argument);
   Check(registry.Dispatch(kajps5::hle::kAgcDcbWaitOnAddressGetSizeNid,
@@ -346,6 +373,7 @@ int main() {
   constexpr std::uint64_t kDriverCommands = kBase + 0x1c00;
   constexpr std::uint64_t kDriverWaitCommands = kBase + 0x1d00;
   constexpr std::uint64_t kDriverWriteWaitCommands = kBase + 0x1e00;
+  constexpr std::uint64_t kDriverReleaseWaitCommands = kBase + 0x1a00;
   constexpr std::uint64_t kDriverLabel = kBase + 0x1f00;
   const std::array driver_commands = {
       Pm4(5, 0x15), 2U, 3U, 4U, 0x41U,
@@ -356,8 +384,19 @@ int main() {
       0x13U, 1U,
       Pm4(3, 0x2d), 7U, 2U,
   };
+  const std::array driver_release_wait_commands = {
+      Pm4(8, 0x10, 0x18), 0x62fU, 1U << 29U,
+      static_cast<std::uint32_t>(kDriverLabel),
+      static_cast<std::uint32_t>(kDriverLabel >> 32U), 0x99U, 0U, 0U,
+      Pm4(7, 0x10, 0x0a), static_cast<std::uint32_t>(kDriverLabel),
+      static_cast<std::uint32_t>(kDriverLabel >> 32U), 0xffU, 0x99U,
+      0x13U, 1U,
+      Pm4(3, 0x2d), 13U, 2U,
+  };
   WriteDwords(memory, kDriverCommands, driver_commands);
   WriteDwords(memory, kDriverWaitCommands, driver_wait_commands);
+  WriteDwords(memory, kDriverReleaseWaitCommands,
+              driver_release_wait_commands);
   Check(context.WriteUInt32(kDriverLabel, 0) == HleContextStatus::kOk,
         "driver wait label setup failed");
 
@@ -439,6 +478,30 @@ int main() {
             gpu_runtime.submission_history().At(6)->type ==
                 kajps5::gpu::GpuActionType::kDraw,
         "ordered write-data did not satisfy the following GPU wait");
+
+  Check(context.WriteUInt32(kDriverLabel, 0) == HleContextStatus::kOk,
+        "driver release label reset failed");
+  Write64(driver_packet, 0, kDriverReleaseWaitCommands);
+  Write32(driver_packet, 8,
+          static_cast<std::uint32_t>(driver_release_wait_commands.size()));
+  Check(memory.Write(kDriverPacket, driver_packet),
+        "release-wait driver packet setup failed");
+  SetArguments(context, submit_dcb_arguments);
+  written_label = 0;
+  Check(registry.Dispatch(kajps5::hle::kAgcDriverSubmitDcbNid, context) &&
+            ReturnValue(context) == 0 &&
+            context.ReadUInt32(kDriverLabel, written_label) ==
+                HleContextStatus::kOk &&
+            written_label == 0x99U &&
+            gpu_runtime.submissions().PendingSubmissionCount() == 0 &&
+            gpu_runtime.submission_history().size() == 10 &&
+            gpu_runtime.submission_history().At(7)->type ==
+                kajps5::gpu::GpuActionType::kReleaseMemory &&
+            gpu_runtime.submission_history().At(8)->type ==
+                kajps5::gpu::GpuActionType::kWaitMemory &&
+            gpu_runtime.submission_history().At(9)->type ==
+                kajps5::gpu::GpuActionType::kDraw,
+        "ordered release-memory did not satisfy the following GPU wait");
 
   const std::array invalid_submit_arguments = {std::uint64_t{0}};
   SetArguments(context, invalid_submit_arguments);

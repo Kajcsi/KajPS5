@@ -482,6 +482,17 @@ keeps its low reserved byte deliberately nonzero. The memory-target behavior
 also follows KytyPS5 `src/graphics/guest_gpu/graphicsRun.cpp` at commit
 `a65d17a5d689257a35644e01e9d15539361f0bf0`, but retains KajPS5 checked guest
 access instead of using raw pointers.
+
+The `sceAgcCbReleaseMem` packet writer, decoder, and ordered guest-memory
+effects in `src/gpu/runtime.*`, `src/gpu/command_processor.*`, and
+`src/hle/agc_exports.*` adapt KytyPS5 `src/libs/agc.cpp`,
+`src/libs/libGraphicsDriver.cpp`, and
+`src/graphics/guest_gpu/command_processor/pm4Handlers.cpp` at commit
+`a65d17a5d689257a35644e01e9d15539361f0bf0`. The standard-packet decoder and
+monotonic counter regression re-express SharpEmu
+`src/SharpEmu.Libs/Agc/AgcExports.cs` at commit
+`5ee7cd1dfafdeb0ce0e458a365692df4b2e1c445`. KajPS5 applies the effects through
+checked guest memory and does not import either upstream's GPU owner.
 The SharpEmu reference file states:
 
 `Copyright (C) 2026 SharpEmu Emulator Project`

@@ -50,9 +50,11 @@ The current core includes:
   persistent register state, and separate FIFO graphics and compute queues.
   Driver DCB and ACB submissions keep an exact nested cursor when a guest-memory
   wait blocks. Later submissions resume that work without repeating completed
-  draws. Ordered memory-target `WRITE_DATA` packets update checked guest memory,
-  so their labels can release later waits. A bounded action history is the
-  current test sink; Vulkan execution is not implemented yet.
+  draws. Ordered memory-target `WRITE_DATA` and `RELEASE_MEM` packets update
+  checked guest memory, so their labels can release later waits. Counter writes
+  use a stable, increasing GPU timeline until a renderer supplies native GPU
+  timestamps. A bounded action history is the current test sink; Vulkan
+  execution is not implemented yet.
 - Typed kernel handles and one cooperative scheduler for ready, running,
   blocked, and exited guest threads. Initial pthread support includes guest
   attributes, bounded thread-local keys, per-thread values, identity, equality,

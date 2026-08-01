@@ -8,6 +8,7 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -48,6 +49,7 @@ enum class GpuActionType : std::uint8_t {
   kDispatch,
   kPredication,
   kWriteData,
+  kReleaseMemory,
   kWaitMemory,
   kIndirectBuffer,
   kRewind,
@@ -116,6 +118,7 @@ class GpuMemorySubmissionSink final : public GpuSubmissionSink {
  private:
   memory::GuestMemory& memory_;
   GpuSubmissionSink& downstream_;
+  std::atomic<std::uint64_t> next_timestamp_{1};
 };
 
 struct GpuCommandLimits {

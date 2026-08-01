@@ -50,6 +50,12 @@ std::uint32_t Read32(std::span<const std::byte> bytes,
   return value;
 }
 
+std::uint64_t Read64(std::span<const std::byte> bytes,
+                     std::size_t offset = 0) {
+  return static_cast<std::uint64_t>(Read32(bytes, offset)) |
+         (static_cast<std::uint64_t>(Read32(bytes, offset + 4U)) << 32U);
+}
+
 void WriteDwords(kajps5::memory::GuestMemory& memory, std::uint64_t address,
                  std::span<const std::uint32_t> words) {
   std::vector<std::byte> bytes(words.size() * 4U);
@@ -175,6 +181,80 @@ int main() {
             runtime.ReadRegister(GpuRegisterSpace::kShader, 0xc8) ==
                 0x00448582U,
         "parsed register state is incorrect");
+
+  constexpr std::uint64_t kReleaseCommands = kBase + 0xa00;
+  constexpr std::uint64_t kReleaseDestination = kWriteDestination + 0x20;
+  constexpr std::uint64_t kTimestampOne = kReleaseDestination + 0x10;
+  constexpr std::uint64_t kTimestampTwo = kTimestampOne + 8;
+  const std::array release_commands = {
+      Pm4(8, 0x49), 0x28U,
+      0xa5U | (1U << 16U) | (2U << 29U),
+      static_cast<std::uint32_t>(kReleaseDestination),
+      static_cast<std::uint32_t>(kReleaseDestination >> 32U),
+      0x55667788U, 0x11223344U, 0U,
+      Pm4(8, 0x49), 0x28U, 3U << 29U,
+      static_cast<std::uint32_t>(kTimestampOne),
+      static_cast<std::uint32_t>(kTimestampOne >> 32U), 0U, 0U, 0U,
+      Pm4(8, 0x49), 0x28U, 3U << 29U,
+      static_cast<std::uint32_t>(kTimestampTwo),
+      static_cast<std::uint32_t>(kTimestampTwo >> 32U), 0U, 0U, 0U,
+  };
+  WriteDwords(memory, kReleaseCommands, release_commands);
+  GpuActionTrace release_trace(3);
+  GpuMemorySubmissionSink release_sink(memory, release_trace);
+  Check(runtime.ProcessCommandBuffer(
+            kReleaseCommands,
+            static_cast<std::uint32_t>(release_commands.size()),
+            release_sink) &&
+            release_trace.actions().size() == 3 &&
+            release_trace.actions()[0].type ==
+                GpuActionType::kReleaseMemory,
+        "standard release-memory packets did not decode");
+  std::array<std::byte, 8> released_data{};
+  std::array<std::byte, 8> first_timestamp{};
+  std::array<std::byte, 8> second_timestamp{};
+  Check(memory.Read(kReleaseDestination, released_data) &&
+            Read64(released_data) == 0x1122334455667788ULL &&
+            memory.Read(kTimestampOne, first_timestamp) &&
+            memory.Read(kTimestampTwo, second_timestamp) &&
+            Read64(first_timestamp) != 0 &&
+            Read64(second_timestamp) > Read64(first_timestamp),
+        "ordered release-memory values are incorrect");
+
+  constexpr std::uint64_t kUnsupportedRelease = kBase + 0xb00;
+  const std::array unsupported_release = {
+      Pm4(8, 0x49), 0x28U, 5U << 29U,
+      static_cast<std::uint32_t>(kReleaseDestination),
+      static_cast<std::uint32_t>(kReleaseDestination >> 32U),
+      0U, 0U, 0U,
+  };
+  WriteDwords(memory, kUnsupportedRelease, unsupported_release);
+  GpuActionTrace unsupported_trace(1);
+  GpuMemorySubmissionSink unsupported_sink(memory, unsupported_trace);
+  const auto unsupported_result = runtime.ProcessCommandBuffer(
+      kUnsupportedRelease,
+      static_cast<std::uint32_t>(unsupported_release.size()),
+      unsupported_sink);
+  Check(unsupported_result.status == GpuCommandStatus::kUnsupportedPacket,
+        "unsupported GDS release-memory source was accepted");
+
+  constexpr std::uint64_t kMalformedRelease = kBase + 0xc00;
+  const std::array malformed_release = {
+      Pm4(8, 0x10, 0x18), 0x62fU, 4U << 29U,
+      static_cast<std::uint32_t>(kReleaseDestination),
+      static_cast<std::uint32_t>(kReleaseDestination >> 32U),
+      0U, 0U, 0U,
+  };
+  WriteDwords(memory, kMalformedRelease, malformed_release);
+  GpuActionTrace malformed_release_trace(1);
+  GpuMemorySubmissionSink malformed_release_sink(memory,
+                                                 malformed_release_trace);
+  const auto malformed_release_result = runtime.ProcessCommandBuffer(
+      kMalformedRelease,
+      static_cast<std::uint32_t>(malformed_release.size()),
+      malformed_release_sink);
+  Check(malformed_release_result.status == GpuCommandStatus::kMalformedPacket,
+        "invalid AGC release-memory data selector was accepted");
 
   constexpr std::uint64_t kSecondSubmission = kBase + 0x700;
   const std::array second_submission = {Pm4(2, 0x10), 0U};

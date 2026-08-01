@@ -43,6 +43,7 @@ constexpr std::uint32_t kPm4GetLodStatsOpcode = 0x8eU;
 constexpr std::uint32_t kPm4WaitMemory32Register = 0x0aU;
 constexpr std::uint32_t kPm4WaitMemory64Register = 0x16U;
 constexpr std::uint32_t kPm4WriteDataRegister = 0x15U;
+constexpr std::uint32_t kPm4ReleaseMemoryRegister = 0x18U;
 constexpr std::uint32_t kVgtIndexTypeRegister = 0x243U;
 constexpr std::uint32_t kDirectDispatchModifierMask = 0xa038U;
 constexpr std::uint32_t kDirectDispatchRequiredBits = 0x41U;
@@ -423,6 +424,47 @@ GpuPacketResult GpuRuntime::WriteAgcPacket(
             std::span<const std::byte>(data).subspan(index * 4U, 4U));
       }
       return AppendPacket(command_buffer, packet);
+    }
+    if (type == AgcPacketType::kReleaseMemory) {
+      const auto action = static_cast<std::uint32_t>(argument(1));
+      auto gcr_control = static_cast<std::uint32_t>(argument(2));
+      const auto destination = static_cast<std::uint32_t>(argument(3));
+      const auto cache_policy = static_cast<std::uint32_t>(argument(4));
+      auto destination_address = argument(5);
+      const auto data_selection = static_cast<std::uint32_t>(argument(6));
+      auto data = argument(7);
+      const auto gds_offset = static_cast<std::uint32_t>(argument(8));
+      const auto gds_size = static_cast<std::uint32_t>(argument(9));
+      const auto interrupt = static_cast<std::uint32_t>(argument(10));
+      const auto interrupt_context =
+          static_cast<std::uint32_t>(argument(11));
+      if (destination > 1 ||
+          (data_selection > 3 && data_selection != 5) || interrupt > 4) {
+        return {GpuRuntimeStatus::kInvalidArgument};
+      }
+      if ((gcr_control & 0x300U) == 0x100U) {
+        gcr_control |= 0x200U;
+      }
+      if (interrupt == 4) {
+        destination_address = 0;
+        data = 0;
+      } else if (data_selection == 5) {
+        data = static_cast<std::uint64_t>(gds_offset & 0xffffU) |
+               (static_cast<std::uint64_t>(gds_size & 0xffffU) << 16U);
+      }
+      const auto event_index = action >= 0x2fU ? 6U : 5U;
+      return append(
+          {MakePm4Header(8, kPm4NopOpcode, kPm4ReleaseMemoryRegister),
+           (action & 0x3fU) | (event_index << 8U) |
+               ((gcr_control & 0xfffU) << 12U) |
+               ((cache_policy & 3U) << 25U),
+           ((destination & 3U) << 16U) | ((interrupt & 7U) << 24U) |
+               ((data_selection & 7U) << 29U),
+           static_cast<std::uint32_t>(destination_address) & ~3U,
+           static_cast<std::uint32_t>(destination_address >> 32U),
+           static_cast<std::uint32_t>(data),
+           static_cast<std::uint32_t>(data >> 32U),
+           interrupt_context & 0x07ffffffU});
     }
     if (type == AgcPacketType::kGetLodStats) {
       const auto address = argument(2);

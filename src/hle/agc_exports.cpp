@@ -162,6 +162,8 @@ constexpr std::array kPacketExports = {
                  gpu::AgcPacketType::kSetPredication, 6},
     PacketExport{"sceAgcDcbWriteData", kAgcDcbWriteDataNid,
                  gpu::AgcPacketType::kWriteData, 8},
+    PacketExport{"sceAgcCbReleaseMem", kAgcCbReleaseMemNid,
+                 gpu::AgcPacketType::kReleaseMemory, 12},
     PacketExport{"sceAgcDcbGetLodStats", kAgcDcbGetLodStatsNid,
                  gpu::AgcPacketType::kGetLodStats, 8},
     PacketExport{"sceAgcDcbWaitRegMem", kAgcDcbWaitRegMemNid,
@@ -257,7 +259,7 @@ ExportRegistryStatus RegisterAgcExports(ExportRegistry& registry,
   for (const auto& definition : kPacketExports) {
     Add(exports, definition.name, definition.nid,
         [runtime, definition](HleCallContext& context) {
-          std::array<std::uint64_t, 9> arguments{};
+          std::array<std::uint64_t, 12> arguments{};
           for (std::size_t index = 0; index < definition.argument_count;
                ++index) {
             arguments[index] = context.Argument(index).value_or(0);
@@ -282,6 +284,12 @@ ExportRegistryStatus RegisterAgcExports(ExportRegistry& registry,
         const auto dword_count = static_cast<std::uint32_t>(
             context.Argument(0).value_or(0));
         context.SetReturn(static_cast<std::uint32_t>(dword_count * 4U + 16U));
+        return HleContextStatus::kOk;
+      });
+  Add(exports, "sceAgcCbQueueEndOfPipeActionGetSize",
+      kAgcCbQueueEndOfPipeActionGetSizeNid,
+      [](HleCallContext& context) {
+        context.SetReturn(32);
         return HleContextStatus::kOk;
       });
   Add(exports, "sceAgcDcbWaitOnAddressGetSize",

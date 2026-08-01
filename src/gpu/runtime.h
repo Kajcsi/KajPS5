@@ -58,6 +58,7 @@ enum class AgcPacketType {
   kRewind,
   kSetPredication,
   kWriteData,
+  kReleaseMemory,
   kGetLodStats,
   kWaitRegMem,
 };

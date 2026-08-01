@@ -94,6 +94,10 @@ adapted paths change.
   are preserved. Memory destinations now apply ordered, checked writes. A
   focused regression proves that reserved low-byte noise in a standard packet
   does not change its destination selector.
+- KytyPS5 supplies the native Gen5 `sceAgcCbReleaseMem` packet layout and
+  validation. SharpEmu supplies the independent standard `RELEASE_MEM` control
+  decoder and counter-write behavior. Both packet forms use the same ordered,
+  checked memory path in KajPS5.
 
 When KajPS5 imports code, identify the upstream file and commit, keep its
 copyright and license notice, and update `THIRD_PARTY_NOTICES.md` in the same
