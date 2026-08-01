@@ -113,6 +113,7 @@
       creation, with explicit blocked and failure states.
 - [x] Compose initializers, main, exit callbacks, and finalizers in one checked
       title session and scheduler lane.
+- [x] Load, relocate, and execute a small public ELF through `--run-elf`.
 - [x] Build and own native HLE trampolines for all resolved executable imports.
 - Expand thread, event, file, and time coverage as their HLE bridges grow.
 - Compare small, repeatable traces with both upstream projects.

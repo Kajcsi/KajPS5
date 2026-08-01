@@ -34,11 +34,13 @@
 #include "loader/relocation_trace.h"
 #include "loader/relocator.h"
 #include "loader/static_tls_layout.h"
+#include "runtime/title_loader.h"
 
 namespace {
 
 constexpr std::uint64_t kMaximumExecutableFileSize = 512U * 1024U * 1024U;
 constexpr std::uint64_t kMaximumTraceMemorySize = 512U * 1024U * 1024U;
+constexpr std::size_t kMaximumTitleRunSlices = 1000000;
 
 std::optional<std::uint64_t> AlignUp(std::uint64_t value,
                                      std::uint64_t alignment) noexcept {
@@ -293,6 +295,74 @@ int TraceExecutableFile(const char* path) {
   return 0;
 }
 
+int RunExecutableFile(const char* path) {
+  std::string file_error;
+  auto image = ReadExecutableFile(path, file_error);
+  if (!image) {
+    std::cerr << "Title preparation failed: " << file_error << '\n';
+    return 2;
+  }
+
+  const auto process_image_name =
+      std::filesystem::path(path).filename().string();
+  auto prepared =
+      kajps5::runtime::PrepareTitleImage(*image, process_image_name);
+  std::cout << "title.load.status="
+            << kajps5::runtime::TitleLoadStatusName(prepared.status) << '\n';
+  if (prepared.hle) {
+    std::cout << kajps5::hle::FormatImportCoverageTrace(prepared.coverage);
+  }
+  if (!prepared) {
+    std::cerr << "Title preparation failed: "
+              << kajps5::runtime::TitleLoadStatusName(prepared.status);
+    if (prepared.status ==
+        kajps5::runtime::TitleLoadStatus::kUnresolvedImports) {
+      std::cerr << " (" << prepared.coverage.unresolved_unique_import_count
+                << " unresolved imports)";
+    } else if (prepared.elf_error != kajps5::loader::ElfError::kNone) {
+      std::cerr << " (" << kajps5::loader::ElfErrorName(prepared.elf_error)
+                << ')';
+    } else if (prepared.launch_status !=
+               kajps5::loader::LaunchMetadataStatus::kOk) {
+      std::cerr << " ("
+                << kajps5::loader::LaunchMetadataStatusName(
+                       prepared.launch_status)
+                << ')';
+    }
+    std::cerr << '\n';
+    return 3;
+  }
+
+  const auto started =
+      prepared.session->Start(process_image_name, prepared.stack_search_start);
+  std::cout << "title.start.status="
+            << kajps5::runtime::TitleSessionStatusName(started.status) << '\n'
+            << "title.start.phase="
+            << kajps5::runtime::TitleSessionPhaseName(started.phase) << '\n';
+  if (started.status != kajps5::runtime::TitleSessionStatus::kPending &&
+      started.status != kajps5::runtime::TitleSessionStatus::kBlocked) {
+    std::cerr << "Title startup failed: "
+              << kajps5::runtime::TitleSessionStatusName(started.status)
+              << '\n';
+    return 4;
+  }
+
+  const auto completed = prepared.session->Run(kMaximumTitleRunSlices);
+  std::cout << "title.run.status="
+            << kajps5::runtime::TitleSessionStatusName(completed.status) << '\n'
+            << "title.run.phase="
+            << kajps5::runtime::TitleSessionPhaseName(completed.phase) << '\n'
+            << "title.run.slices=" << completed.slices << '\n'
+            << "title.run.exit_value=" << completed.exit_value << '\n';
+  if (!completed) {
+    std::cerr << "Title execution stopped: "
+              << kajps5::runtime::TitleSessionStatusName(completed.status)
+              << '\n';
+    return 5;
+  }
+  return 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -304,9 +374,13 @@ int main(int argc, char** argv) {
   if (argc == 3 && std::string_view(argv[1]) == "--trace-elf") {
     return TraceExecutableFile(argv[2]);
   }
+  if (argc == 3 && std::string_view(argv[1]) == "--run-elf") {
+    return RunExecutableFile(argv[2]);
+  }
 
   if (argc > 1) {
-    std::cerr << "Usage: kajps5 [--version | --trace-elf <path>]\n";
+    std::cerr << "Usage: kajps5 [--version | --trace-elf <path> | --run-elf "
+                 "<path>]\n";
     return 1;
   }
 

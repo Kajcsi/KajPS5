@@ -82,6 +82,43 @@ int main() {
                               {}),
         "title session accepted memory without a native host mapping");
 
+  auto hle_memory = GuestMemory::CreateHostMapped(0x10000);
+  Check(hle_memory != nullptr, "title HLE memory allocation failed");
+  if (!hle_memory) {
+    return 1;
+  }
+  const auto hle_base = hle_memory->base_address();
+  auto hle_session = TitleSession::Create(std::move(hle_memory));
+  Check(hle_session != nullptr, "staged title session creation failed");
+  if (!hle_session) {
+    return 1;
+  }
+  Check(hle_session->Start("unconfigured.elf", hle_base).status ==
+            TitleSessionStatus::kInvalidState,
+        "unconfigured title session started");
+  const auto hle_setup = hle_session->PrepareHle({}, hle_base, "public.elf");
+  Check(hle_setup && hle_setup.data.page_address == hle_base &&
+            hle_setup.imports.import_count == 0 &&
+            hle_session->hle_data().size() == 4 &&
+            hle_session->hle_exports().size() != 0 &&
+            hle_session->hle_functions() != nullptr &&
+            hle_session->hle_functions()->size() == 0,
+        "title session did not own its default HLE runtime");
+  Check(hle_session->PrepareHle({}, hle_base, "public.elf").status ==
+                kajps5::runtime::TitleHleSetupStatus::kAlreadyAttempted &&
+            kajps5::runtime::TitleHleSetupStatusName(
+                kajps5::runtime::TitleHleSetupStatus::kDataSetupFailed) ==
+                "data-setup-failed",
+        "title HLE setup accepted a second attempt");
+  Check(hle_session->Configure({}, {}) && !hle_session->Configure({}, {}),
+        "title session configuration state changed");
+  Check(hle_session->Start("invalid.elf", hle_base).status ==
+            TitleSessionStatus::kStartupFailed,
+        "invalid staged launch was not rejected");
+  Check(hle_session->PrepareHle({}, hle_base, "public.elf").status ==
+            kajps5::runtime::TitleHleSetupStatus::kInvalidState,
+        "failed title session accepted HLE setup");
+
   auto memory = GuestMemory::CreateHostMapped(0x600000);
   Check(memory != nullptr, "host-mapped title memory allocation failed");
   if (!memory) {

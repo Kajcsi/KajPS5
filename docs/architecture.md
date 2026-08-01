@@ -39,7 +39,8 @@ one owner for graphics state.
 - `trace`: Record stable events for comparison with upstream behavior.
 - `app`: Select a title, configure a run, and show diagnostic results.
 
-The loader, memory, CPU test path, HLE, and first kernel services now follow
-these boundaries. The checked memory owner can use a buffered backing for
-inspection or a host-mapped backing for controlled direct execution. Graphics,
-audio, input, and the user interface are still future work.
+The loader, memory, native CPU path, title session, HLE, and first kernel
+services now follow these boundaries. The checked memory owner can use a
+buffered backing for inspection or a host-mapped backing for controlled direct
+execution. Graphics, audio, input, and the user interface are still future
+work.

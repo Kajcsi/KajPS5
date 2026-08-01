@@ -1,8 +1,9 @@
 # KajPS5
 
 KajPS5 is an early PlayStation 5 emulator research project. It builds, runs a
-growing test suite, and can inspect ELF64 and recognized SELF/FSELF files. It
-does not run PlayStation 5 games yet.
+growing test suite, inspects ELF64 and recognized SELF/FSELF files, and runs a
+small public ELF through its checked title lifecycle. It does not run
+PlayStation 5 games yet.
 
 The goal is to combine the strengths of KytyPS5 and SharpEmu where that makes
 sense. KytyPS5 is the main reference for the native C++ architecture and
@@ -76,14 +77,20 @@ The current core includes:
   lane. It runs registered guest stacks, parks blocked or yielded threads, and
   records normal thread returns through the pthread service. It can allocate a
   zeroed stack with a no-access guard page from the pthread attributes.
+- A title session owns the kernel runtime, HLE imports, native execution
+  context, scheduler lane, and guarded stacks for one executable. The public
+  run path loads and relocates an ELF, checks all required imports, runs its
+  initializers and main entry, then runs exit callbacks and finalizers. It
+  stops before execution when required imports or runtime TLS support are
+  missing.
 - Small public and generated test fixtures, including an ELF that loads
-  without running guest code and controlled x86-64 leaf programs used only by
-  tests.
+  without running guest code, a complete title-lifecycle ELF, and controlled
+  x86-64 programs used only by tests.
 
-KajPS5 still lacks general guest CPU execution, SELF decryption, a multi-thread
-execution loop, graphics, audio, and title compatibility. The repository
-contains no games, firmware, keys, proprietary modules, or encrypted
-executables.
+KajPS5 still lacks complete guest instruction compatibility, SELF decryption,
+a multi-module title runtime, graphics, audio, and game compatibility. The
+repository contains no games, firmware, keys, proprietary modules, or
+encrypted executables.
 
 ## Build
 
@@ -112,6 +119,16 @@ is read-only: it does not call HLE handlers or write fake target addresses. A
 separate guest-owned data page supplies four known runtime values during the
 load check. KajPS5 does not decrypt retail SELF payloads. It accepts only
 payload bytes that are already available in the input file.
+
+Run a small public, already-decrypted ELF through the checked title session:
+
+```powershell
+_Build\src\Release\kajps5.exe --run-elf R:\path\public-sample.elf
+```
+
+This path rejects unresolved required imports and TLS executables that the
+runtime cannot start correctly. It is a controlled research path, not a claim
+of game compatibility.
 
 ## Legal use
 

@@ -46,6 +46,14 @@ kajps5_deploy_msvc_asan_runtime(kajps5_title_session_test)
 
 add_test(NAME kajps5_title_session COMMAND kajps5_title_session_test)
 
+add_executable(kajps5_title_loader_test title_loader_test.cpp)
+target_link_libraries(kajps5_title_loader_test PRIVATE kajps5_core)
+add_dependencies(kajps5_title_loader_test kajps5)
+kajps5_deploy_msvc_asan_runtime(kajps5_title_loader_test)
+
+add_test(NAME kajps5_title_loader
+  COMMAND kajps5_title_loader_test $<TARGET_FILE:kajps5>)
+
 add_executable(kajps5_module_plan_test module_plan_test.cpp)
 target_link_libraries(kajps5_module_plan_test PRIVATE kajps5_core)
 kajps5_deploy_msvc_asan_runtime(kajps5_module_plan_test)

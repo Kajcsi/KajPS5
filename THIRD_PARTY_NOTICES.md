@@ -346,9 +346,10 @@ The checked process startup sequence adapts KytyPS5's module initializer call
 order and SharpEmu's stop-on-failure behavior. It keeps initializer work in the
 same scheduler lane and creates the main thread only after startup succeeds.
 
-The title session in `src/runtime/title_session.*` and its focused test adapt
-KytyPS5's executable lifecycle order from `src/emulator.cpp` and
-`src/loader/runtimeLinker.{h,cpp}` at commit
+The title session and loader in `src/runtime/title_session.*`,
+`src/runtime/title_loader.*`, `src/app/main.cpp`, and their focused tests adapt
+KytyPS5's executable lifecycle order and boot composition from
+`src/emulator.cpp` and `src/loader/runtimeLinker.{h,cpp}` at commit
 `a65d17a5d689257a35644e01e9d15539361f0bf0`. The explicit startup, blocked,
 running, finalizing, exited, and failed states adapt SharpEmu
 `src/SharpEmu.Core/Runtime/SharpEmuRuntime.cs` and
@@ -356,8 +357,9 @@ running, finalizing, exited, and failed states adapt SharpEmu
 `7c9740fee8a633e17b145c6bc6d794e41d46c73f`. KajPS5 composes its existing
 loader metadata, kernel runtime, scheduler, native executor, guarded stacks,
 and process lifecycle service. Initializers, main, exit callbacks, and
-finalizers all use the same C++ runtime and native execution lane. No upstream
-runtime source was copied.
+finalizers all use the same C++ runtime and native execution lane. The checked
+run path also keeps SharpEmu's explicit pre-execution import coverage boundary.
+No upstream runtime source was copied.
 
 The process-time handlers in `src/hle/kernel_clock_exports.cpp` and
 `tests/hle_kernel_clock_exports_test.cpp` adapt the matching process-time,

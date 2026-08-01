@@ -16,7 +16,12 @@
 #include "core/memory/guest_memory.h"
 #include "cpu/native_guest_process_launcher.h"
 #include "cpu/native_guest_thread_runner.h"
+#include "cpu/native_hle_import_table.h"
+#include "hle/data_symbols.h"
+#include "hle/export_registry.h"
+#include "hle/import_registry.h"
 #include "kernel/runtime.h"
+#include "loader/elf.h"
 #include "loader/launch_metadata.h"
 #include "loader/lifecycle_plan.h"
 
@@ -58,8 +63,33 @@ struct TitleSessionResult {
   }
 };
 
+enum class TitleHleSetupStatus {
+  kOk,
+  kInvalidState,
+  kAlreadyAttempted,
+  kDataSetupFailed,
+  kKernelExportsFailed,
+  kLibcExportsFailed,
+  kLibcThreadExportsFailed,
+  kJsonExportsFailed,
+  kImportTableBuildFailed,
+};
+
+struct TitleHleSetupResult {
+  TitleHleSetupStatus status = TitleHleSetupStatus::kOk;
+  hle::HleDataResult data;
+  hle::ExportRegistryStatus export_status = hle::ExportRegistryStatus::kOk;
+  cpu::NativeHleImportTableResult imports;
+
+  [[nodiscard]] explicit operator bool() const noexcept {
+    return status == TitleHleSetupStatus::kOk;
+  }
+};
+
 class TitleSession final {
  public:
+  [[nodiscard]] static std::unique_ptr<TitleSession> Create(
+      std::unique_ptr<memory::GuestMemory> memory);
   [[nodiscard]] static std::unique_ptr<TitleSession> Create(
       std::unique_ptr<memory::GuestMemory> memory,
       loader::ExecutableLaunchMetadata launch_metadata,
@@ -68,6 +98,13 @@ class TitleSession final {
   TitleSession(const TitleSession&) = delete;
   TitleSession& operator=(const TitleSession&) = delete;
 
+  [[nodiscard]] bool Configure(loader::ExecutableLaunchMetadata launch_metadata,
+                               loader::ExecutableLifecyclePlan lifecycle_plan);
+  [[nodiscard]] TitleHleSetupResult PrepareHle(
+      const loader::ElfMetadata& metadata, std::uint64_t data_page_address,
+      std::string_view process_image_name,
+      std::size_t stack_argument_count =
+          hle::kMaximumCapturedHleStackArguments);
   [[nodiscard]] TitleSessionResult Start(
       std::string_view process_image_name, std::uint64_t stack_search_start,
       std::span<const std::string_view> extra_arguments = {},
@@ -82,6 +119,9 @@ class TitleSession final {
   [[nodiscard]] kernel::KernelRuntime& kernel_runtime() noexcept;
   [[nodiscard]] cpu::NativeGuestExecutionContext& execution_context() noexcept;
   [[nodiscard]] cpu::NativeGuestThreadRunner& thread_runner() noexcept;
+  [[nodiscard]] const hle::ExportRegistry& hle_exports() const noexcept;
+  [[nodiscard]] const hle::ImportRegistry& hle_data() const noexcept;
+  [[nodiscard]] const cpu::NativeHleImportTable* hle_functions() const noexcept;
 
  private:
   enum class FinalizationKind {
@@ -97,9 +137,7 @@ class TitleSession final {
     FinalizationKind kind = FinalizationKind::kFinalizer;
   };
 
-  TitleSession(std::unique_ptr<memory::GuestMemory> memory,
-               loader::ExecutableLaunchMetadata launch_metadata,
-               loader::ExecutableLifecyclePlan lifecycle_plan);
+  explicit TitleSession(std::unique_ptr<memory::GuestMemory> memory);
 
   [[nodiscard]] TitleSessionResult PrepareFinalization();
   [[nodiscard]] TitleSessionResult StartNextFinalizer();
@@ -112,8 +150,13 @@ class TitleSession final {
   loader::ExecutableLifecyclePlan lifecycle_plan_;
   kernel::KernelRuntime kernel_runtime_;
   cpu::NativeGuestExecutionContext execution_context_;
+  hle::ExportRegistry hle_exports_;
+  hle::ImportRegistry hle_data_;
+  std::unique_ptr<cpu::NativeHleImportTable> hle_functions_;
   cpu::NativeGuestThreadRunner thread_runner_;
   cpu::NativeGuestProcessLauncher process_launcher_;
+  bool configured_ = false;
+  bool hle_preparation_attempted_ = false;
   TitleSessionPhase phase_ = TitleSessionPhase::kCreated;
   kernel::KernelHandle main_thread_ = kernel::kInvalidKernelHandle;
   std::uint64_t exit_value_ = 0;
@@ -126,5 +169,7 @@ class TitleSession final {
     TitleSessionPhase phase) noexcept;
 [[nodiscard]] std::string_view TitleSessionStatusName(
     TitleSessionStatus status) noexcept;
+[[nodiscard]] std::string_view TitleHleSetupStatusName(
+    TitleHleSetupStatus status) noexcept;
 
 }  // namespace kajps5::runtime

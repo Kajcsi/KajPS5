@@ -7,6 +7,11 @@
 
 #include <utility>
 
+#include "hle/json_exports.h"
+#include "hle/kernel_exports.h"
+#include "hle/libc_exports.h"
+#include "hle/libc_thread_exports.h"
+
 namespace kajps5::runtime {
 namespace {
 
@@ -21,32 +26,102 @@ bool IsGuestRunFailure(cpu::NativeGuestThreadRunStatus status) noexcept {
 }  // namespace
 
 std::unique_ptr<TitleSession> TitleSession::Create(
-    std::unique_ptr<memory::GuestMemory> memory,
-    loader::ExecutableLaunchMetadata launch_metadata,
-    loader::ExecutableLifecyclePlan lifecycle_plan) {
+    std::unique_ptr<memory::GuestMemory> memory) {
   if (!memory || !memory->host_mapped()) {
     return nullptr;
   }
-  return std::unique_ptr<TitleSession>(
-      new TitleSession(std::move(memory), std::move(launch_metadata),
-                       std::move(lifecycle_plan)));
+  return std::unique_ptr<TitleSession>(new TitleSession(std::move(memory)));
 }
 
-TitleSession::TitleSession(std::unique_ptr<memory::GuestMemory> memory,
-                           loader::ExecutableLaunchMetadata launch_metadata,
-                           loader::ExecutableLifecyclePlan lifecycle_plan)
+std::unique_ptr<TitleSession> TitleSession::Create(
+    std::unique_ptr<memory::GuestMemory> memory,
+    loader::ExecutableLaunchMetadata launch_metadata,
+    loader::ExecutableLifecyclePlan lifecycle_plan) {
+  auto session = Create(std::move(memory));
+  if (!session || !session->Configure(std::move(launch_metadata),
+                                      std::move(lifecycle_plan))) {
+    return nullptr;
+  }
+  return session;
+}
+
+TitleSession::TitleSession(std::unique_ptr<memory::GuestMemory> memory)
     : memory_(std::move(memory)),
-      launch_metadata_(std::move(launch_metadata)),
-      lifecycle_plan_(std::move(lifecycle_plan)),
       thread_runner_(*memory_, kernel_runtime_.scheduler(),
                      kernel_runtime_.pthreads(), execution_context_),
       process_launcher_(kernel_runtime_.pthreads(), thread_runner_) {}
+
+bool TitleSession::Configure(loader::ExecutableLaunchMetadata launch_metadata,
+                             loader::ExecutableLifecyclePlan lifecycle_plan) {
+  if (phase_ != TitleSessionPhase::kCreated || configured_) {
+    return false;
+  }
+  launch_metadata_ = std::move(launch_metadata);
+  lifecycle_plan_ = std::move(lifecycle_plan);
+  configured_ = true;
+  return true;
+}
+
+TitleHleSetupResult TitleSession::PrepareHle(
+    const loader::ElfMetadata& metadata, std::uint64_t data_page_address,
+    std::string_view process_image_name, std::size_t stack_argument_count) {
+  if (phase_ != TitleSessionPhase::kCreated) {
+    return {TitleHleSetupStatus::kInvalidState};
+  }
+  if (hle_preparation_attempted_) {
+    return {TitleHleSetupStatus::kAlreadyAttempted};
+  }
+  hle_preparation_attempted_ = true;
+
+  TitleHleSetupResult result;
+  result.data = hle::InstallHleDataSymbols(
+      hle_data_, *memory_, data_page_address, process_image_name);
+  if (!result.data) {
+    result.status = TitleHleSetupStatus::kDataSetupFailed;
+    return result;
+  }
+
+  result.export_status =
+      hle::RegisterKernelExports(hle_exports_, kernel_runtime_);
+  if (result.export_status != hle::ExportRegistryStatus::kOk) {
+    result.status = TitleHleSetupStatus::kKernelExportsFailed;
+    return result;
+  }
+  result.export_status =
+      hle::RegisterLibcExports(hle_exports_, kernel_runtime_.cxa_guards(),
+                               kernel_runtime_.process_lifecycle(),
+                               kernel_runtime_.libc_heap(), *memory_);
+  if (result.export_status != hle::ExportRegistryStatus::kOk) {
+    result.status = TitleHleSetupStatus::kLibcExportsFailed;
+    return result;
+  }
+  result.export_status =
+      hle::RegisterLibcThreadExports(hle_exports_, kernel_runtime_.pthreads());
+  if (result.export_status != hle::ExportRegistryStatus::kOk) {
+    result.status = TitleHleSetupStatus::kLibcThreadExportsFailed;
+    return result;
+  }
+  result.export_status =
+      hle::RegisterJsonExports(hle_exports_, kernel_runtime_.json_values());
+  if (result.export_status != hle::ExportRegistryStatus::kOk) {
+    result.status = TitleHleSetupStatus::kJsonExportsFailed;
+    return result;
+  }
+
+  hle_functions_ = std::make_unique<cpu::NativeHleImportTable>(
+      *memory_, hle_exports_, &execution_context_);
+  result.imports = hle_functions_->Build(metadata, stack_argument_count);
+  if (!result.imports) {
+    result.status = TitleHleSetupStatus::kImportTableBuildFailed;
+  }
+  return result;
+}
 
 TitleSessionResult TitleSession::Start(
     std::string_view process_image_name, std::uint64_t stack_search_start,
     std::span<const std::string_view> extra_arguments,
     std::uint64_t exit_handler_address, std::uint64_t stack_size) {
-  if (phase_ != TitleSessionPhase::kCreated) {
+  if (phase_ != TitleSessionPhase::kCreated || !configured_) {
     return {TitleSessionStatus::kInvalidState, phase_};
   }
   const auto startup = process_launcher_.BeginStartup(
@@ -315,6 +390,18 @@ cpu::NativeGuestThreadRunner& TitleSession::thread_runner() noexcept {
   return thread_runner_;
 }
 
+const hle::ExportRegistry& TitleSession::hle_exports() const noexcept {
+  return hle_exports_;
+}
+
+const hle::ImportRegistry& TitleSession::hle_data() const noexcept {
+  return hle_data_;
+}
+
+const cpu::NativeHleImportTable* TitleSession::hle_functions() const noexcept {
+  return hle_functions_.get();
+}
+
 std::string_view TitleSessionPhaseName(TitleSessionPhase phase) noexcept {
   switch (phase) {
     case TitleSessionPhase::kCreated:
@@ -355,6 +442,30 @@ std::string_view TitleSessionStatusName(TitleSessionStatus status) noexcept {
       return "finalizer-thread-rollback-failed";
     case TitleSessionStatus::kSliceLimitReached:
       return "slice-limit-reached";
+  }
+  return "unknown";
+}
+
+std::string_view TitleHleSetupStatusName(TitleHleSetupStatus status) noexcept {
+  switch (status) {
+    case TitleHleSetupStatus::kOk:
+      return "ok";
+    case TitleHleSetupStatus::kInvalidState:
+      return "invalid-state";
+    case TitleHleSetupStatus::kAlreadyAttempted:
+      return "already-attempted";
+    case TitleHleSetupStatus::kDataSetupFailed:
+      return "data-setup-failed";
+    case TitleHleSetupStatus::kKernelExportsFailed:
+      return "kernel-exports-failed";
+    case TitleHleSetupStatus::kLibcExportsFailed:
+      return "libc-exports-failed";
+    case TitleHleSetupStatus::kLibcThreadExportsFailed:
+      return "libc-thread-exports-failed";
+    case TitleHleSetupStatus::kJsonExportsFailed:
+      return "json-exports-failed";
+    case TitleHleSetupStatus::kImportTableBuildFailed:
+      return "import-table-build-failed";
   }
   return "unknown";
 }
