@@ -21,9 +21,14 @@
 
 namespace kajps5::cpu {
 
+inline constexpr std::size_t kMaximumNativeHleImages = 4'096;
+inline constexpr std::size_t kMaximumNativeHleImports = 262'144;
+
 enum class NativeHleImportTableStatus {
   kOk,
   kAlreadyBuilt,
+  kInvalidMetadata,
+  kCapacityExceeded,
   kInvalidSymbolIndex,
   kEmptyImportSymbol,
   kTrampolineBuildFailed,
@@ -46,13 +51,15 @@ struct NativeHleImportTableResult {
 
 class NativeHleImportTable final : public loader::ImportResolver {
  public:
-  NativeHleImportTable(memory::GuestMemory& memory,
-                       const hle::ExportRegistry& registry,
-                       NativeGuestExecutionContext* execution_context =
-                           nullptr) noexcept;
+  NativeHleImportTable(
+      memory::GuestMemory& memory, const hle::ExportRegistry& registry,
+      NativeGuestExecutionContext* execution_context = nullptr) noexcept;
 
   [[nodiscard]] NativeHleImportTableResult Build(
       const loader::ElfMetadata& metadata,
+      std::size_t stack_argument_count = 0);
+  [[nodiscard]] NativeHleImportTableResult BuildBatch(
+      std::span<const loader::ElfMetadata* const> metadata,
       std::size_t stack_argument_count = 0);
   [[nodiscard]] std::optional<std::uint64_t> ResolveImport(
       std::string_view symbol,

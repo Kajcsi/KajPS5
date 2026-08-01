@@ -21,65 +21,97 @@ NativeHleImportTable::NativeHleImportTable(
 
 NativeHleImportTableResult NativeHleImportTable::Build(
     const loader::ElfMetadata& metadata, std::size_t stack_argument_count) {
+  const loader::ElfMetadata* metadata_pointer = &metadata;
+  return BuildBatch(
+      std::span<const loader::ElfMetadata* const>(&metadata_pointer, 1),
+      stack_argument_count);
+}
+
+NativeHleImportTableResult NativeHleImportTable::BuildBatch(
+    std::span<const loader::ElfMetadata* const> metadata,
+    std::size_t stack_argument_count) {
   NativeHleImportTableResult result;
   if (built_) {
     result.status = NativeHleImportTableStatus::kAlreadyBuilt;
     return result;
   }
-
-  const auto coverage = hle::AnalyzeImportCoverage(metadata, registry_);
-  result.import_count = coverage.unique_import_count;
-  if (!coverage) {
-    result.status =
-        coverage.status == hle::ImportCoverageStatus::kInvalidSymbolIndex
-            ? NativeHleImportTableStatus::kInvalidSymbolIndex
-            : NativeHleImportTableStatus::kEmptyImportSymbol;
+  if (metadata.size() > kMaximumNativeHleImages) {
+    result.status = NativeHleImportTableStatus::kCapacityExceeded;
     return result;
   }
 
   std::map<Key, std::unique_ptr<NativeHleTrampoline>> pending;
   std::vector<hle::ImportDefinition> definitions;
-  definitions.reserve(coverage.resolved_unique_import_count);
-  for (const auto& entry : coverage.imports) {
-    const auto& symbol = metadata.dynamic_info.symbols[entry.symbol_index];
-    const auto reference =
-        loader::ResolveElfImportReference(metadata, symbol.name);
-    if (!reference.valid) {
-      ++result.unresolved_import_count;
-      continue;
-    }
-
-    std::vector<std::string> requested_libraries;
-    if (reference.library != nullptr && reference.module != nullptr) {
-      requested_libraries.push_back(reference.library->name);
-    }
-    const std::span<const std::string> library_order =
-        requested_libraries.empty()
-            ? std::span<const std::string>(
-                  metadata.dynamic_info.needed_libraries)
-            : std::span<const std::string>(requested_libraries);
-    const auto lookup = registry_.Lookup(reference.nid, library_order);
-    if (!lookup) {
-      ++result.unresolved_import_count;
-      continue;
-    }
-
-    ++result.resolved_import_count;
-    Key key{lookup.library, std::string(reference.nid)};
-    if (pending.contains(key)) {
-      continue;
-    }
-
-    auto trampoline = std::make_unique<NativeHleTrampoline>(
-        memory_, registry_, key.second, std::vector<std::string>{key.first},
-        stack_argument_count, execution_context_);
-    if (trampoline->status() != NativeHleTrampolineStatus::kOk) {
-      result.status = NativeHleImportTableStatus::kTrampolineBuildFailed;
-      result.trampoline_status = trampoline->status();
+  for (const auto* image_metadata : metadata) {
+    if (image_metadata == nullptr) {
+      result.status = NativeHleImportTableStatus::kInvalidMetadata;
       return result;
     }
-    definitions.push_back({key.first, key.second, trampoline->address()});
-    pending.emplace(std::move(key), std::move(trampoline));
+    const auto coverage =
+        hle::AnalyzeImportCoverage(*image_metadata, registry_);
+    if (coverage.unique_import_count >
+        kMaximumNativeHleImports - result.import_count) {
+      result.status = NativeHleImportTableStatus::kCapacityExceeded;
+      return result;
+    }
+    result.import_count += coverage.unique_import_count;
+    if (!coverage) {
+      result.status =
+          coverage.status == hle::ImportCoverageStatus::kInvalidSymbolIndex
+              ? NativeHleImportTableStatus::kInvalidSymbolIndex
+              : NativeHleImportTableStatus::kEmptyImportSymbol;
+      return result;
+    }
+
+    if (coverage.resolved_unique_import_count >
+        kMaximumNativeHleImports - definitions.size()) {
+      result.status = NativeHleImportTableStatus::kCapacityExceeded;
+      return result;
+    }
+    definitions.reserve(definitions.size() +
+                        coverage.resolved_unique_import_count);
+    for (const auto& entry : coverage.imports) {
+      const auto& symbol =
+          image_metadata->dynamic_info.symbols[entry.symbol_index];
+      const auto reference =
+          loader::ResolveElfImportReference(*image_metadata, symbol.name);
+      if (!reference.valid) {
+        ++result.unresolved_import_count;
+        continue;
+      }
+
+      std::vector<std::string> requested_libraries;
+      if (reference.library != nullptr && reference.module != nullptr) {
+        requested_libraries.push_back(reference.library->name);
+      }
+      const std::span<const std::string> library_order =
+          requested_libraries.empty()
+              ? std::span<const std::string>(
+                    image_metadata->dynamic_info.needed_libraries)
+              : std::span<const std::string>(requested_libraries);
+      const auto lookup = registry_.Lookup(reference.nid, library_order);
+      if (!lookup) {
+        ++result.unresolved_import_count;
+        continue;
+      }
+
+      ++result.resolved_import_count;
+      Key key{lookup.library, std::string(reference.nid)};
+      if (pending.contains(key)) {
+        continue;
+      }
+
+      auto trampoline = std::make_unique<NativeHleTrampoline>(
+          memory_, registry_, key.second, std::vector<std::string>{key.first},
+          stack_argument_count, execution_context_);
+      if (trampoline->status() != NativeHleTrampolineStatus::kOk) {
+        result.status = NativeHleImportTableStatus::kTrampolineBuildFailed;
+        result.trampoline_status = trampoline->status();
+        return result;
+      }
+      definitions.push_back({key.first, key.second, trampoline->address()});
+      pending.emplace(std::move(key), std::move(trampoline));
+    }
   }
 
   if (!definitions.empty()) {
@@ -122,6 +154,10 @@ std::string_view NativeHleImportTableStatusName(
       return "ok";
     case NativeHleImportTableStatus::kAlreadyBuilt:
       return "already-built";
+    case NativeHleImportTableStatus::kInvalidMetadata:
+      return "invalid-metadata";
+    case NativeHleImportTableStatus::kCapacityExceeded:
+      return "capacity-exceeded";
     case NativeHleImportTableStatus::kInvalidSymbolIndex:
       return "invalid-symbol-index";
     case NativeHleImportTableStatus::kEmptyImportSymbol:

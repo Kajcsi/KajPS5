@@ -168,6 +168,16 @@ bounded and transactional, so a duplicate or overflowing address adds no
 partial module. This lets legally supplied modules link to each other without
 changing the HLE registry or guest-memory model.
 
+The title loader now composes the main executable and the complete adjacent
+module batch in one host-mapped guest address space. It gives each image a
+stable module ID and a separate aligned load bias. All TLS descriptions and
+exports are registered before one layered relocation pass checks module
+exports first and the HLE table second. It builds lifecycle plans only after
+relocation, starts adjacent modules in dependency order, and stops them in
+reverse order. A failed batch does not expose a title session. Static TLS
+layout is preserved, but title execution still stops until the native thread
+path can install that layout.
+
 The separate controlled native tests are documented in `stage2-cpu.md` and
 `stage2-hle.md`.
 

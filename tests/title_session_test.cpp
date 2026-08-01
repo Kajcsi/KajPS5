@@ -98,7 +98,11 @@ int main() {
   Check(hle_session->Start("unconfigured.elf", hle_base).status ==
             TitleSessionStatus::kInvalidState,
         "unconfigured title session started");
-  const auto hle_setup = hle_session->PrepareHle({}, hle_base, "public.elf");
+  const std::array<kajps5::loader::ElfMetadata, 2> hle_metadata{};
+  const std::array<const kajps5::loader::ElfMetadata*, 2>
+      hle_metadata_pointers = {&hle_metadata[0], &hle_metadata[1]};
+  const auto hle_setup = hle_session->PrepareHleBatch(hle_metadata_pointers,
+                                                      hle_base, "public.elf");
   Check(hle_setup && hle_setup.data.page_address == hle_base &&
             hle_setup.imports.import_count == 0 &&
             hle_session->hle_data().size() == 4 &&

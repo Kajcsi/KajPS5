@@ -24,6 +24,7 @@
 #include "loader/elf.h"
 #include "loader/launch_metadata.h"
 #include "loader/lifecycle_plan.h"
+#include "runtime/module_runtime.h"
 
 namespace kajps5::runtime {
 
@@ -100,9 +101,16 @@ class TitleSession final {
 
   [[nodiscard]] bool Configure(loader::ExecutableLaunchMetadata launch_metadata,
                                loader::ExecutableLifecyclePlan lifecycle_plan);
+  [[nodiscard]] bool AttachModuleRuntime(
+      std::unique_ptr<ModuleRuntime> module_runtime);
   [[nodiscard]] TitleHleSetupResult PrepareHle(
       const loader::ElfMetadata& metadata, std::uint64_t data_page_address,
       std::string_view process_image_name,
+      std::size_t stack_argument_count =
+          hle::kMaximumCapturedHleStackArguments);
+  [[nodiscard]] TitleHleSetupResult PrepareHleBatch(
+      std::span<const loader::ElfMetadata* const> metadata,
+      std::uint64_t data_page_address, std::string_view process_image_name,
       std::size_t stack_argument_count =
           hle::kMaximumCapturedHleStackArguments);
   [[nodiscard]] TitleSessionResult Start(
@@ -122,6 +130,7 @@ class TitleSession final {
   [[nodiscard]] const hle::ExportRegistry& hle_exports() const noexcept;
   [[nodiscard]] const hle::ImportRegistry& hle_data() const noexcept;
   [[nodiscard]] const cpu::NativeHleImportTable* hle_functions() const noexcept;
+  [[nodiscard]] const ModuleRuntime* module_runtime() const noexcept;
 
  private:
   enum class FinalizationKind {
@@ -153,6 +162,7 @@ class TitleSession final {
   hle::ExportRegistry hle_exports_;
   hle::ImportRegistry hle_data_;
   std::unique_ptr<cpu::NativeHleImportTable> hle_functions_;
+  std::unique_ptr<ModuleRuntime> module_runtime_;
   cpu::NativeGuestThreadRunner thread_runner_;
   cpu::NativeGuestProcessLauncher process_launcher_;
   bool configured_ = false;

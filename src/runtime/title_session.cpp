@@ -62,9 +62,29 @@ bool TitleSession::Configure(loader::ExecutableLaunchMetadata launch_metadata,
   return true;
 }
 
+bool TitleSession::AttachModuleRuntime(
+    std::unique_ptr<ModuleRuntime> module_runtime) {
+  if (phase_ != TitleSessionPhase::kCreated || configured_ || module_runtime_ ||
+      !module_runtime) {
+    return false;
+  }
+  module_runtime_ = std::move(module_runtime);
+  return true;
+}
+
 TitleHleSetupResult TitleSession::PrepareHle(
     const loader::ElfMetadata& metadata, std::uint64_t data_page_address,
     std::string_view process_image_name, std::size_t stack_argument_count) {
+  const loader::ElfMetadata* metadata_pointer = &metadata;
+  return PrepareHleBatch(
+      std::span<const loader::ElfMetadata* const>(&metadata_pointer, 1),
+      data_page_address, process_image_name, stack_argument_count);
+}
+
+TitleHleSetupResult TitleSession::PrepareHleBatch(
+    std::span<const loader::ElfMetadata* const> metadata,
+    std::uint64_t data_page_address, std::string_view process_image_name,
+    std::size_t stack_argument_count) {
   if (phase_ != TitleSessionPhase::kCreated) {
     return {TitleHleSetupStatus::kInvalidState};
   }
@@ -110,7 +130,7 @@ TitleHleSetupResult TitleSession::PrepareHle(
 
   hle_functions_ = std::make_unique<cpu::NativeHleImportTable>(
       *memory_, hle_exports_, &execution_context_);
-  result.imports = hle_functions_->Build(metadata, stack_argument_count);
+  result.imports = hle_functions_->BuildBatch(metadata, stack_argument_count);
   if (!result.imports) {
     result.status = TitleHleSetupStatus::kImportTableBuildFailed;
   }
@@ -400,6 +420,10 @@ const hle::ImportRegistry& TitleSession::hle_data() const noexcept {
 
 const cpu::NativeHleImportTable* TitleSession::hle_functions() const noexcept {
   return hle_functions_.get();
+}
+
+const ModuleRuntime* TitleSession::module_runtime() const noexcept {
+  return module_runtime_.get();
 }
 
 std::string_view TitleSessionPhaseName(TitleSessionPhase phase) noexcept {

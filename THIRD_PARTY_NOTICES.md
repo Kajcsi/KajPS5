@@ -361,6 +361,25 @@ finalizers all use the same C++ runtime and native execution lane. The checked
 run path also keeps SharpEmu's explicit pre-execution import coverage boundary.
 No upstream runtime source was copied.
 
+The multi-module title runtime in `src/runtime/module_runtime.*`, its
+connection through `src/runtime/title_loader.*`, `src/runtime/title_session.*`,
+and `src/app/main.cpp`, and the focused module and title tests adapt KytyPS5's
+loaded-program placement, export registration, TLS registration, relocation,
+and module start and stop ordering from `src/loader/runtimeLinker.{h,cpp}` at
+commit `a65d17a5d689257a35644e01e9d15539361f0bf0`. Batched module intake,
+parse-before-use behavior, initialization before process entry, and
+all-or-nothing session exposure adapt SharpEmu
+`src/SharpEmu.Core/Runtime/SharpEmuRuntime.cs`,
+`src/SharpEmu.Core/Loader/SelfLoader.cs`, and
+`src/SharpEmu.HLE/ModuleManager.cs` at commit
+`7c9740fee8a633e17b145c6bc6d794e41d46c73f`. KajPS5 keeps one C++ guest-memory
+owner, HLE table, scheduler, and native execution lane. No upstream runtime or
+module-manager source was copied.
+
+The SharpEmu reference files state:
+
+`Copyright (C) 2026 SharpEmu Emulator Project`
+
 The process-time handlers in `src/hle/kernel_clock_exports.cpp` and
 `tests/hle_kernel_clock_exports_test.cpp` adapt the matching process-time,
 counter, and frequency behavior from the pinned KytyPS5

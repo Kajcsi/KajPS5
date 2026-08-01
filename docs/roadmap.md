@@ -119,6 +119,9 @@
       adjacent module files in stable order.
 - [x] Discover and parse bounded adjacent `.prx` and `.sprx` files as one
       all-or-nothing module batch.
+- [x] Load the main image and adjacent modules into one guest address space,
+      register their exports and TLS layouts, relocate them together, and
+      combine their lifecycle order.
 - Expand thread, event, file, and time coverage as their HLE bridges grow.
 - Compare small, repeatable traces with both upstream projects.
 

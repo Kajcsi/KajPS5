@@ -282,8 +282,27 @@ int main() {
   auto duplicate_metadata = loaded.metadata;
   duplicate_metadata.dynamic_info.relocations.push_back(
       loaded.metadata.dynamic_info.plt_relocations.front());
+
+  NativeHleImportTable invalid_metadata_imports(memory, exports);
+  const std::array<const kajps5::loader::ElfMetadata*, 1> null_metadata = {
+      nullptr};
+  Check(invalid_metadata_imports.BuildBatch(null_metadata).status ==
+                NativeHleImportTableStatus::kInvalidMetadata &&
+            invalid_metadata_imports.size() == 0,
+        "null batch metadata changed the HLE table");
+
+  NativeHleImportTable capacity_imports(memory, exports);
+  const std::vector<const kajps5::loader::ElfMetadata*> too_many_images(
+      kajps5::cpu::kMaximumNativeHleImages + 1, &loaded.metadata);
+  Check(capacity_imports.BuildBatch(too_many_images).status ==
+                NativeHleImportTableStatus::kCapacityExceeded &&
+            capacity_imports.size() == 0,
+        "oversized HLE image batch changed the table");
+
   NativeHleImportTable imports(memory, exports);
-  const auto import_status = imports.Build(duplicate_metadata, 2);
+  const std::array<const kajps5::loader::ElfMetadata*, 2> import_metadata = {
+      &duplicate_metadata, &loaded.metadata};
+  const auto import_status = imports.BuildBatch(import_metadata, 2);
   if (import_status.status ==
           NativeHleImportTableStatus::kTrampolineBuildFailed &&
       import_status.trampoline_status ==
@@ -291,10 +310,10 @@ int main() {
     std::cout << "native HLE guest execution is unsupported on this host\n";
     return failures == 0 ? 0 : 1;
   }
-  const auto* trampoline = imports.Find(
-      "answer", loaded.metadata.dynamic_info.needed_libraries);
-  Check(import_status && import_status.import_count == 1 &&
-            import_status.resolved_import_count == 1 &&
+  const auto* trampoline =
+      imports.Find("answer", loaded.metadata.dynamic_info.needed_libraries);
+  Check(import_status && import_status.import_count == 2 &&
+            import_status.resolved_import_count == 2 &&
             import_status.unresolved_import_count == 0 &&
             import_status.trampoline_count == 1 && imports.size() == 1 &&
             trampoline != nullptr && trampoline->address() != 0,

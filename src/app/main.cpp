@@ -31,6 +31,7 @@
 #include "loader/launch_metadata.h"
 #include "loader/layered_import_resolver.h"
 #include "loader/lifecycle_plan.h"
+#include "loader/module_loader.h"
 #include "loader/relocation_trace.h"
 #include "loader/relocator.h"
 #include "loader/static_tls_layout.h"
@@ -305,8 +306,41 @@ int RunExecutableFile(const char* path) {
 
   const auto process_image_name =
       std::filesystem::path(path).filename().string();
-  auto prepared =
-      kajps5::runtime::PrepareTitleImage(*image, process_image_name);
+  std::error_code path_error;
+  const auto title_path = std::filesystem::absolute(path, path_error);
+  if (path_error || title_path.parent_path().empty()) {
+    std::cerr
+        << "Title preparation failed: cannot resolve the title directory\n";
+    return 2;
+  }
+  const auto title_root = title_path.parent_path();
+
+  kajps5::kernel::KernelRuntime intake_runtime;
+  const auto mount_status =
+      intake_runtime.files().MountReadOnly("/app0", title_root);
+  if (mount_status != kajps5::kernel::KernelStatus::kOk) {
+    std::cerr << "Title preparation failed: cannot mount the title directory"
+              << " (kernel status " << static_cast<int>(mount_status) << ")\n";
+    return 2;
+  }
+  auto adjacent =
+      kajps5::loader::DiscoverAdjacentModules(intake_runtime.files());
+  std::cout << "title.modules.status="
+            << kajps5::loader::AdjacentModuleLoadStatusName(adjacent.status)
+            << '\n'
+            << "title.modules.count=" << adjacent.modules.size() << '\n';
+  if (!adjacent) {
+    std::cerr << "Title module intake failed: "
+              << kajps5::loader::AdjacentModuleLoadStatusName(adjacent.status);
+    if (!adjacent.failure_path.empty()) {
+      std::cerr << " (" << adjacent.failure_path << ')';
+    }
+    std::cerr << '\n';
+    return 3;
+  }
+
+  auto prepared = kajps5::runtime::PrepareTitleImageWithModules(
+      *image, process_image_name, std::move(adjacent));
   std::cout << "title.load.status="
             << kajps5::runtime::TitleLoadStatusName(prepared.status) << '\n';
   if (prepared.hle) {
@@ -317,8 +351,24 @@ int RunExecutableFile(const char* path) {
               << kajps5::runtime::TitleLoadStatusName(prepared.status);
     if (prepared.status ==
         kajps5::runtime::TitleLoadStatus::kUnresolvedImports) {
-      std::cerr << " (" << prepared.coverage.unresolved_unique_import_count
-                << " unresolved imports)";
+      std::cerr << " (" << prepared.modules.unresolved_import_count
+                << " unresolved imports in " << prepared.modules.failure_path
+                << ')';
+    } else if (prepared.status == kajps5::runtime::TitleLoadStatus::
+                                      kAdjacentModuleInputFailed) {
+      std::cerr << " ("
+                << kajps5::loader::AdjacentModuleLoadStatusName(
+                       prepared.adjacent_status)
+                << ')';
+    } else if (prepared.status ==
+               kajps5::runtime::TitleLoadStatus::kModuleRuntimeFailed) {
+      std::cerr << " ("
+                << kajps5::runtime::ModuleRuntimeStatusName(
+                       prepared.modules.status);
+      if (!prepared.modules.failure_path.empty()) {
+        std::cerr << " in " << prepared.modules.failure_path;
+      }
+      std::cerr << ')';
     } else if (prepared.elf_error != kajps5::loader::ElfError::kNone) {
       std::cerr << " (" << kajps5::loader::ElfErrorName(prepared.elf_error)
                 << ')';
@@ -330,6 +380,16 @@ int RunExecutableFile(const char* path) {
                 << ')';
     }
     std::cerr << '\n';
+    return 3;
+  }
+
+  const auto runtime_mount_status =
+      prepared.session->kernel_runtime().files().MountReadOnly("/app0",
+                                                               title_root);
+  if (runtime_mount_status != kajps5::kernel::KernelStatus::kOk) {
+    std::cerr << "Title preparation failed: cannot mount runtime title files"
+              << " (kernel status " << static_cast<int>(runtime_mount_status)
+              << ")\n";
     return 3;
   }
 

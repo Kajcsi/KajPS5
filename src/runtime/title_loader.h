@@ -15,8 +15,10 @@
 #include "loader/elf.h"
 #include "loader/launch_metadata.h"
 #include "loader/lifecycle_plan.h"
+#include "loader/module_loader.h"
 #include "loader/relocator.h"
 #include "loader/static_tls_layout.h"
+#include "runtime/module_runtime.h"
 #include "runtime/title_session.h"
 
 namespace kajps5::runtime {
@@ -39,6 +41,8 @@ enum class TitleLoadStatus {
   kSessionCreationFailed,
   kHleSetupFailed,
   kImportCoverageFailed,
+  kAdjacentModuleInputFailed,
+  kModuleRuntimeFailed,
   kUnresolvedImports,
   kStaticTlsLayoutFailed,
   kStaticTlsExecutionUnsupported,
@@ -57,6 +61,10 @@ struct TitleLoadResult {
       loader::LaunchMetadataStatus::kOk;
   TitleHleSetupResult hle;
   hle::ImportCoverageResult coverage;
+  loader::AdjacentModuleLoadStatus adjacent_status =
+      loader::AdjacentModuleLoadStatus::kOk;
+  std::size_t adjacent_module_count = 0;
+  ModuleRuntimeResult modules;
   loader::StaticTlsRegistrationResult tls;
   loader::RelocationResult relocation;
   loader::LifecyclePlanResult lifecycle;
@@ -68,6 +76,10 @@ struct TitleLoadResult {
 
 [[nodiscard]] TitleLoadResult PrepareTitleImage(
     std::span<const std::byte> image, std::string_view process_image_name,
+    std::uint64_t maximum_memory_size = kMaximumTitleMemorySize);
+[[nodiscard]] TitleLoadResult PrepareTitleImageWithModules(
+    std::span<const std::byte> image, std::string_view process_image_name,
+    loader::AdjacentModuleLoadResult adjacent_modules,
     std::uint64_t maximum_memory_size = kMaximumTitleMemorySize);
 [[nodiscard]] std::string_view TitleLoadStatusName(
     TitleLoadStatus status) noexcept;

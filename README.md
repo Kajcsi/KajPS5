@@ -42,7 +42,10 @@ The current core includes:
   dispatch, with bounded diagnostics for unresolved symbols, deterministic
   dependency order, and checked guest register and memory access. Adjacent
   `.prx` and `.sprx` files are read and parsed as one bounded batch before any
-  module is mapped.
+  module is mapped. One module runtime gives the main image and adjacent
+  modules separate checked placements and stable module IDs. It registers all
+  exports and TLS layouts before relocation, then combines module startup and
+  shutdown calls with the main title lifecycle.
 - Typed kernel handles and one cooperative scheduler for ready, running,
   blocked, and exited guest threads. Initial pthread support includes guest
   attributes, bounded thread-local keys, per-thread values, identity, equality,
@@ -80,18 +83,19 @@ The current core includes:
   lane. It runs registered guest stacks, parks blocked or yielded threads, and
   records normal thread returns through the pthread service. It can allocate a
   zeroed stack with a no-access guard page from the pthread attributes.
-- A title session owns the kernel runtime, HLE imports, native execution
-  context, scheduler lane, and guarded stacks for one executable. The public
-  run path loads and relocates an ELF, checks all required imports, runs its
-  initializers and main entry, then runs exit callbacks and finalizers. It
-  stops before execution when required imports or runtime TLS support are
-  missing.
+- A title session owns the kernel runtime, module runtime, HLE imports, native
+  execution context, scheduler lane, and guarded stacks for one title. The
+  public run path mounts the title folder as `/app0`, discovers adjacent
+  modules, loads the complete title into one guest address space, checks all
+  required imports, runs initializers and the main entry, then runs exit
+  callbacks and finalizers. It stops before execution when required imports or
+  runtime TLS support are missing.
 - Small public and generated test fixtures, including an ELF that loads
   without running guest code, a complete title-lifecycle ELF, and controlled
   x86-64 programs used only by tests.
 
-KajPS5 still lacks complete guest instruction compatibility, SELF decryption,
-a multi-module title runtime, graphics, audio, and game compatibility. The
+KajPS5 still lacks complete guest instruction compatibility, executable static
+TLS setup, SELF decryption, graphics, audio, and game compatibility. The
 repository contains no games, firmware, keys, proprietary modules, or
 encrypted executables.
 
@@ -129,7 +133,9 @@ Run a small public, already-decrypted ELF through the checked title session:
 _Build\src\Release\kajps5.exe --run-elf R:\path\public-sample.elf
 ```
 
-This path rejects unresolved required imports and TLS executables that the
+This path mounts the input file's folder as `/app0` and includes adjacent
+`.prx` and `.sprx` files from `sce_module` and `sce_modules`. It rejects a
+partial module batch, unresolved required imports, and TLS titles that the
 runtime cannot start correctly. It is a controlled research path, not a claim
 of game compatibility.
 

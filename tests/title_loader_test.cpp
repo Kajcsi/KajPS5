@@ -95,6 +95,7 @@ int main(int argc, char** argv) {
   return 0;
 #else
   using kajps5::runtime::PrepareTitleImage;
+  using kajps5::runtime::PrepareTitleImageWithModules;
   using kajps5::runtime::TitleLoadStatus;
   using kajps5::runtime::TitleSessionPhase;
   using kajps5::runtime::TitleSessionStatus;
@@ -130,6 +131,55 @@ int main(int argc, char** argv) {
   Check(completed && completed.exit_value == 42 && completed.slices == 1,
         "public title did not execute through the title session");
 
+  const auto parsed_module = kajps5::loader::ParseExecutable64(image);
+  Check(static_cast<bool>(parsed_module),
+        "adjacent module fixture did not parse");
+  kajps5::loader::AdjacentModuleLoadResult adjacent;
+  adjacent.modules.push_back(
+      {"/app0/sce_module/public-module.prx", image, parsed_module.metadata});
+  adjacent.start_plan = kajps5::loader::BuildModuleStartPlan(
+      {kajps5::loader::MakeModuleDependencyInput(
+          adjacent.modules.front().guest_path,
+          adjacent.modules.front().metadata)});
+  auto prepared_with_module = PrepareTitleImageWithModules(
+      image, "public-run.elf", std::move(adjacent));
+  Check(prepared_with_module &&
+            prepared_with_module.adjacent_module_count == 1 &&
+            prepared_with_module.session->module_runtime() != nullptr &&
+            prepared_with_module.session->module_runtime()->programs().size() ==
+                2 &&
+            prepared_with_module.session->module_runtime()
+                    ->programs()[0]
+                    .module_id == 1 &&
+            prepared_with_module.session->module_runtime()
+                    ->programs()[1]
+                    .module_id == 2 &&
+            prepared_with_module.session->module_runtime()
+                    ->programs()[0]
+                    .load_bias != prepared_with_module.session->module_runtime()
+                                      ->programs()[1]
+                                      .load_bias,
+        "adjacent module was not retained in the title session");
+  const auto module_started = prepared_with_module.session->Start(
+      "public-run.elf", prepared_with_module.stack_search_start);
+  Check(module_started.status == TitleSessionStatus::kPending,
+        "multi-module title did not create its main thread");
+  const auto module_completed = prepared_with_module.session->Run(8);
+  Check(module_completed && module_completed.exit_value == 42,
+        "multi-module title did not execute its main program");
+
+  kajps5::loader::AdjacentModuleLoadResult malformed_adjacent;
+  malformed_adjacent.modules.push_back(
+      {"/app0/sce_module/malformed.prx", {std::byte{0}}, {}});
+  const auto malformed_module = PrepareTitleImageWithModules(
+      image, "public-run.elf", std::move(malformed_adjacent));
+  Check(malformed_module.status ==
+                TitleLoadStatus::kAdjacentModuleInputFailed &&
+            malformed_module.adjacent_status ==
+                kajps5::loader::AdjacentModuleLoadStatus::kParseFailed &&
+            malformed_module.session == nullptr,
+        "malformed adjacent input exposed a partial title session");
+
   auto invalid = image;
   invalid[0] = std::byte{0};
   Check(PrepareTitleImage(invalid, "invalid.elf").status ==
@@ -148,6 +198,9 @@ int main(int argc, char** argv) {
         "title without load segments reached runtime setup");
   Check(kajps5::runtime::TitleLoadStatusName(
             TitleLoadStatus::kUnresolvedImports) == "unresolved-imports" &&
+            kajps5::runtime::TitleLoadStatusName(
+                TitleLoadStatus::kModuleRuntimeFailed) ==
+                "module-runtime-failed" &&
             kajps5::runtime::TitleLoadStatusName(
                 TitleLoadStatus::kStaticTlsExecutionUnsupported) ==
                 "static-tls-execution-unsupported",

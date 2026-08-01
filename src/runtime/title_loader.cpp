@@ -5,7 +5,11 @@
 
 #include "runtime/title_loader.h"
 
+#include <algorithm>
 #include <limits>
+#include <string>
+#include <utility>
+#include <vector>
 
 #include "hle/data_symbols.h"
 #include "loader/layered_import_resolver.h"
@@ -35,16 +39,105 @@ bool AlignUp(std::uint64_t value, std::uint64_t alignment,
   return true;
 }
 
+std::uint64_t RequiredAlignment(const loader::ElfMetadata& metadata) noexcept {
+  auto alignment = hle::kHleDataPageSize;
+  for (const auto& header : metadata.program_headers) {
+    if (header.type == 1 && header.memory_size != 0) {
+      alignment = std::max(alignment, header.alignment);
+    }
+  }
+  return alignment;
+}
+
+bool AddProgramMemory(const loader::ElfMetadata& metadata,
+                      std::uint64_t& memory_size,
+                      loader::ElfLoadRangeResult& range) noexcept {
+  range = loader::CalculateElfLoadRange(metadata);
+  if (!range || range.load_segment_count == 0) {
+    return false;
+  }
+  const auto alignment = RequiredAlignment(metadata);
+  return alignment != 0 && (alignment & (alignment - 1)) == 0 &&
+         Add(memory_size, alignment - 1, memory_size) &&
+         Add(memory_size, range.size, memory_size);
+}
+
 }  // namespace
 
 TitleLoadResult PrepareTitleImage(std::span<const std::byte> image,
                                   std::string_view process_image_name,
                                   std::uint64_t maximum_memory_size) {
+  return PrepareTitleImageWithModules(image, process_image_name, {},
+                                      maximum_memory_size);
+}
+
+TitleLoadResult PrepareTitleImageWithModules(
+    std::span<const std::byte> image, std::string_view process_image_name,
+    loader::AdjacentModuleLoadResult adjacent_modules,
+    std::uint64_t maximum_memory_size) {
   TitleLoadResult result;
   if (image.empty() || process_image_name.empty() ||
       process_image_name.find('\0') != std::string_view::npos ||
       maximum_memory_size == 0) {
     result.status = TitleLoadStatus::kInvalidArgument;
+    return result;
+  }
+  result.adjacent_status = adjacent_modules.status;
+  if (!adjacent_modules) {
+    result.status = TitleLoadStatus::kAdjacentModuleInputFailed;
+    return result;
+  }
+  if (adjacent_modules.modules.size() > loader::kMaximumAdjacentModules) {
+    result.status = TitleLoadStatus::kAdjacentModuleInputFailed;
+    result.adjacent_status =
+        loader::AdjacentModuleLoadStatus::kModuleLimitExceeded;
+    return result;
+  }
+  result.adjacent_module_count = adjacent_modules.modules.size();
+
+  std::uint64_t total_module_bytes = 0;
+  std::vector<loader::ModuleDependencyInput> dependency_inputs;
+  dependency_inputs.reserve(adjacent_modules.modules.size());
+  for (auto& module : adjacent_modules.modules) {
+    if (module.guest_path.empty() ||
+        module.guest_path.find('\0') != std::string::npos) {
+      result.status = TitleLoadStatus::kAdjacentModuleInputFailed;
+      result.adjacent_status =
+          loader::AdjacentModuleLoadStatus::kInvalidArgument;
+      return result;
+    }
+    if (module.image.empty()) {
+      result.status = TitleLoadStatus::kAdjacentModuleInputFailed;
+      result.adjacent_status = loader::AdjacentModuleLoadStatus::kEmptyImage;
+      return result;
+    }
+    if (module.image.size() > loader::kMaximumAdjacentModuleSize) {
+      result.status = TitleLoadStatus::kAdjacentModuleInputFailed;
+      result.adjacent_status = loader::AdjacentModuleLoadStatus::kImageTooLarge;
+      return result;
+    }
+    if (!Add(total_module_bytes, module.image.size(), total_module_bytes) ||
+        total_module_bytes > loader::kMaximumAdjacentModuleBytes) {
+      result.status = TitleLoadStatus::kAdjacentModuleInputFailed;
+      result.adjacent_status =
+          loader::AdjacentModuleLoadStatus::kTotalSizeExceeded;
+      return result;
+    }
+    auto module_parsed = loader::ParseExecutable64(module.image);
+    if (!module_parsed) {
+      result.status = TitleLoadStatus::kAdjacentModuleInputFailed;
+      result.adjacent_status = loader::AdjacentModuleLoadStatus::kParseFailed;
+      result.elf_error = module_parsed.error;
+      return result;
+    }
+    module.metadata = std::move(module_parsed.metadata);
+    dependency_inputs.push_back(
+        loader::MakeModuleDependencyInput(module.guest_path, module.metadata));
+  }
+  adjacent_modules.start_plan = loader::BuildModuleStartPlan(dependency_inputs);
+  if (!adjacent_modules.start_plan) {
+    result.status = TitleLoadStatus::kAdjacentModuleInputFailed;
+    result.adjacent_status = loader::AdjacentModuleLoadStatus::kPlanFailed;
     return result;
   }
 
@@ -65,8 +158,19 @@ TitleLoadResult PrepareTitleImage(std::span<const std::byte> image,
     return result;
   }
 
-  std::uint64_t memory_size = 0;
-  if (!Add(range.size, hle::kHleDataPageSize - 1, memory_size) ||
+  std::uint64_t memory_size = range.size;
+  for (const auto& module : adjacent_modules.modules) {
+    loader::ElfLoadRangeResult module_range;
+    if (!AddProgramMemory(module.metadata, memory_size, module_range)) {
+      result.status = TitleLoadStatus::kModuleRuntimeFailed;
+      result.modules.status = module_range
+                                  ? ModuleRuntimeStatus::kLayoutOverflow
+                                  : ModuleRuntimeStatus::kLoadRangeFailed;
+      result.modules.elf_error = module_range.error;
+      return result;
+    }
+  }
+  if (!Add(memory_size, hle::kHleDataPageSize - 1, memory_size) ||
       !Add(memory_size, hle::kHleDataPageSize, memory_size) ||
       !Add(memory_size, kTitleRuntimeReserveSize, memory_size) ||
       memory_size > std::numeric_limits<std::size_t>::max()) {
@@ -111,85 +215,102 @@ TitleLoadResult PrepareTitleImage(std::span<const std::byte> image,
     return result;
   }
 
+  auto session = TitleSession::Create(std::move(guest_memory));
+  if (!session) {
+    result.status = TitleLoadStatus::kSessionCreationFailed;
+    return result;
+  }
+
+  auto module_runtime = std::make_unique<ModuleRuntime>(session->memory());
+  result.modules = module_runtime->RegisterMain(
+      std::string(process_image_name), loaded.metadata, range, result.load_bias,
+      launch.metadata);
+  if (!result.modules) {
+    result.status = TitleLoadStatus::kModuleRuntimeFailed;
+    return result;
+  }
+
   std::uint64_t load_end = 0;
+  if (!Add(session->memory().base_address(), range.size, load_end)) {
+    result.status = TitleLoadStatus::kMemorySizeOverflow;
+    return result;
+  }
+  result.modules = module_runtime->LoadAdjacent(
+      std::move(adjacent_modules.modules),
+      std::move(adjacent_modules.start_plan), load_end);
+  if (!result.modules) {
+    result.status = TitleLoadStatus::kModuleRuntimeFailed;
+    return result;
+  }
+  const auto next_load_address = result.modules.next_load_address;
+
   std::uint64_t data_page_address = 0;
-  if (!Add(guest_memory->base_address(), range.size, load_end) ||
-      !AlignUp(load_end, hle::kHleDataPageSize, data_page_address) ||
+  if (!AlignUp(next_load_address, hle::kHleDataPageSize, data_page_address) ||
       !Add(data_page_address, hle::kHleDataPageSize,
            result.stack_search_start) ||
-      !guest_memory->Contains(data_page_address, hle::kHleDataPageSize) ||
-      !guest_memory->Contains(result.stack_search_start,
-                              kTitleRuntimeReserveSize)) {
+      !session->memory().Contains(data_page_address, hle::kHleDataPageSize) ||
+      !session->memory().Contains(result.stack_search_start,
+                                  kTitleRuntimeReserveSize)) {
     result.status = TitleLoadStatus::kMemorySizeOverflow;
     return result;
   }
 
-  result.session = TitleSession::Create(std::move(guest_memory));
-  if (!result.session) {
-    result.status = TitleLoadStatus::kSessionCreationFailed;
-    return result;
-  }
-  result.hle = result.session->PrepareHle(loaded.metadata, data_page_address,
-                                          process_image_name);
+  const auto metadata = module_runtime->MetadataPointers();
+  result.hle =
+      session->PrepareHleBatch(metadata, data_page_address, process_image_name);
   if (!result.hle) {
     result.status = TitleLoadStatus::kHleSetupFailed;
     return result;
   }
-  result.coverage =
-      hle::AnalyzeImportCoverage(loaded.metadata, result.session->hle_exports(),
-                                 &result.session->hle_data());
+  result.coverage = hle::AnalyzeImportCoverage(
+      loaded.metadata, session->hle_exports(), &session->hle_data());
   if (!result.coverage) {
     result.status = TitleLoadStatus::kImportCoverageFailed;
     return result;
   }
-  if (result.coverage.unresolved_unique_import_count != 0) {
-    result.status = TitleLoadStatus::kUnresolvedImports;
-    return result;
-  }
-
-  std::uint64_t tls_module_id = 0;
-  std::uint64_t tls_static_offset = 0;
-  if (launch.metadata.tls) {
-    loader::StaticTlsLayout tls_layout;
-    const auto& tls = *launch.metadata.tls;
-    result.tls = tls_layout.RegisterModule(1, tls.memory_size, tls.alignment,
-                                           tls.image_address);
-    if (!result.tls) {
-      result.status = TitleLoadStatus::kStaticTlsLayoutFailed;
-      return result;
-    }
-    tls_module_id = result.tls.module.module_id;
-    tls_static_offset = result.tls.module.static_offset;
-  }
-
-  const auto* functions = result.session->hle_functions();
+  const auto* functions = session->hle_functions();
   if (functions == nullptr) {
     result.status = TitleLoadStatus::kHleSetupFailed;
     return result;
   }
-  const loader::LayeredImportResolver imports(*functions,
-                                              result.session->hle_data());
-  result.relocation = loader::ApplyRelocations(
-      loaded.metadata, result.session->memory(), imports, result.load_bias,
-      tls_module_id, tls_static_offset);
-  if (!result.relocation) {
-    result.status = TitleLoadStatus::kRelocationFailed;
+  const loader::LayeredImportResolver imports(*functions, session->hle_data());
+  result.modules = module_runtime->RelocateAndPlan(imports);
+  result.modules.next_load_address = next_load_address;
+  if (!result.modules) {
+    result.status =
+        result.modules.status == ModuleRuntimeStatus::kUnresolvedImports
+            ? TitleLoadStatus::kUnresolvedImports
+            : TitleLoadStatus::kModuleRuntimeFailed;
     return result;
   }
-  result.lifecycle = loader::BuildLifecycleCallPlan(
-      launch.metadata, result.session->memory(), result.load_bias);
-  if (!result.lifecycle) {
-    result.status = TitleLoadStatus::kLifecyclePlanFailed;
+  const auto combined_lifecycle = module_runtime->BuildCombinedLifecycle();
+  if (!combined_lifecycle) {
+    result.status = TitleLoadStatus::kModuleRuntimeFailed;
+    result.modules.status = combined_lifecycle.status;
     return result;
   }
-  if (launch.metadata.tls) {
+
+  const auto programs = module_runtime->programs();
+  if (programs.empty()) {
+    result.status = TitleLoadStatus::kModuleRuntimeFailed;
+    result.modules.status = ModuleRuntimeStatus::kInvalidState;
+    return result;
+  }
+  result.tls = programs.front().tls;
+  result.relocation = programs.front().relocation;
+  result.lifecycle = programs.front().lifecycle;
+  if (module_runtime->tls_layout().module_count() != 0) {
     result.status = TitleLoadStatus::kStaticTlsExecutionUnsupported;
     return result;
   }
-  if (!result.session->Configure(launch.metadata, result.lifecycle.plan)) {
+
+  const auto main_launch = programs.front().launch;
+  if (!session->AttachModuleRuntime(std::move(module_runtime)) ||
+      !session->Configure(main_launch, combined_lifecycle.plan)) {
     result.status = TitleLoadStatus::kSessionConfigurationFailed;
     return result;
   }
+  result.session = std::move(session);
   return result;
 }
 
@@ -223,6 +344,10 @@ std::string_view TitleLoadStatusName(TitleLoadStatus status) noexcept {
       return "hle-setup-failed";
     case TitleLoadStatus::kImportCoverageFailed:
       return "import-coverage-failed";
+    case TitleLoadStatus::kAdjacentModuleInputFailed:
+      return "adjacent-module-input-failed";
+    case TitleLoadStatus::kModuleRuntimeFailed:
+      return "module-runtime-failed";
     case TitleLoadStatus::kUnresolvedImports:
       return "unresolved-imports";
     case TitleLoadStatus::kStaticTlsLayoutFailed:
