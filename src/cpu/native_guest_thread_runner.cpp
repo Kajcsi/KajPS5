@@ -5,6 +5,7 @@
 
 #include "cpu/native_guest_thread_runner.h"
 
+#include <algorithm>
 #include <limits>
 #include <optional>
 #include <span>
@@ -69,6 +70,24 @@ NativeGuestThreadRunner::RegisterProcessThread(
   return RegisterThreadEntry(handle, stack_address, stack_size,
                              EntryKind::kProcess, parameters_address,
                              exit_handler_address);
+}
+
+NativeGuestThreadRegistrationStatus
+NativeGuestThreadRunner::RegisterFunctionThread(
+    kernel::KernelHandle handle, std::uint64_t stack_address,
+    std::uint64_t stack_size, std::span<const std::uint64_t> arguments) {
+  if (arguments.size() > kMaximumFunctionArguments) {
+    return NativeGuestThreadRegistrationStatus::kInvalidArgument;
+  }
+  const auto status = RegisterThreadEntry(handle, stack_address, stack_size,
+                                          EntryKind::kFunction, 0, 0);
+  if (status != NativeGuestThreadRegistrationStatus::kOk) {
+    return status;
+  }
+  auto& state = threads_.at(handle);
+  std::copy(arguments.begin(), arguments.end(), state.arguments.begin());
+  state.argument_count = arguments.size();
+  return status;
 }
 
 NativeGuestThreadRegistrationStatus
@@ -282,6 +301,24 @@ NativeGuestThreadRunner::AllocateAndRegisterProcessThread(
           *allocation, granularity,   parameters_address};
 }
 
+NativeGuestThreadAllocationResult
+NativeGuestThreadRunner::AllocateAndRegisterFunctionThread(
+    kernel::KernelHandle handle, std::uint64_t search_start,
+    std::span<const std::uint64_t> arguments) {
+  if (arguments.size() > kMaximumFunctionArguments) {
+    return {NativeGuestThreadRegistrationStatus::kInvalidArgument};
+  }
+  auto allocation = AllocateAndRegisterThread(handle, search_start);
+  if (!allocation) {
+    return allocation;
+  }
+  auto& state = threads_.at(handle);
+  state.entry_kind = EntryKind::kFunction;
+  std::copy(arguments.begin(), arguments.end(), state.arguments.begin());
+  state.argument_count = arguments.size();
+  return allocation;
+}
+
 NativeGuestThreadRunResult NativeGuestThreadRunner::RunNext() {
   if (execution_context_.active() || execution_context_.suspended()) {
     return {NativeGuestThreadRunStatus::kExecutionLaneBusy};
@@ -319,6 +356,12 @@ NativeGuestThreadRunResult NativeGuestThreadRunner::RunNext() {
           executor_.Execute(memory_, thread->entry_address, state.stack_address,
                             state.stack_size, state.parameters_address,
                             state.exit_handler_address, &execution_context_);
+    } else if (state.entry_kind == EntryKind::kFunction) {
+      execution = executor_.ExecuteFunction(
+          memory_, thread->entry_address, state.stack_address, state.stack_size,
+          std::span<const std::uint64_t>(state.arguments.data(),
+                                         state.argument_count),
+          &execution_context_);
     } else {
       execution = executor_.ExecuteThread(
           memory_, thread->entry_address, state.stack_address, state.stack_size,

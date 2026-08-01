@@ -105,6 +105,8 @@
       metadata.
 - [x] Pass up to six System V integer arguments through the shared native guest
       entry bridge.
+- [x] Run general guest functions through the shared scheduler and continuation
+      lane.
 - [x] Build and own native HLE trampolines for all resolved executable imports.
 - Expand thread, event, file, and time coverage as their HLE bridges grow.
 - Compare small, repeatable traces with both upstream projects.

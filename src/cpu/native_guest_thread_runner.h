@@ -5,6 +5,7 @@
 
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <map>
@@ -97,6 +98,9 @@ class NativeGuestThreadRunner final {
       kernel::KernelHandle handle, std::uint64_t stack_address,
       std::uint64_t stack_size, std::uint64_t parameters_address,
       std::uint64_t exit_handler_address);
+  [[nodiscard]] NativeGuestThreadRegistrationStatus RegisterFunctionThread(
+      kernel::KernelHandle handle, std::uint64_t stack_address,
+      std::uint64_t stack_size, std::span<const std::uint64_t> arguments);
   [[nodiscard]] NativeGuestThreadAllocationResult AllocateAndRegisterThread(
       kernel::KernelHandle handle, std::uint64_t search_start);
   [[nodiscard]] NativeGuestThreadAllocationResult
@@ -105,15 +109,22 @@ class NativeGuestThreadRunner final {
       std::span<const std::string_view> arguments,
       std::uint64_t exit_handler_address,
       std::uint64_t stack_size = kDefaultNativeGuestProcessStackSize);
+  [[nodiscard]] NativeGuestThreadAllocationResult
+  AllocateAndRegisterFunctionThread(kernel::KernelHandle handle,
+                                    std::uint64_t search_start,
+                                    std::span<const std::uint64_t> arguments);
   [[nodiscard]] NativeGuestThreadRunResult RunNext();
   [[nodiscard]] NativeGuestThreadRunResult RunUntilIdle(
       std::size_t maximum_slices);
   [[nodiscard]] std::size_t registered_thread_count() const noexcept;
 
  private:
+  static constexpr std::size_t kMaximumFunctionArguments = 6;
+
   enum class EntryKind {
     kPthread,
     kProcess,
+    kFunction,
   };
 
   struct ThreadState {
@@ -121,6 +132,8 @@ class NativeGuestThreadRunner final {
     std::uint64_t stack_size = 0;
     std::uint64_t parameters_address = 0;
     std::uint64_t exit_handler_address = 0;
+    std::array<std::uint64_t, kMaximumFunctionArguments> arguments{};
+    std::size_t argument_count = 0;
     EntryKind entry_kind = EntryKind::kPthread;
     bool started = false;
     bool owns_stack = false;

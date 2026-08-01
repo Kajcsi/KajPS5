@@ -92,6 +92,7 @@ int main() {
   const auto block_code = base + 0x200;
   const auto exit_code = base + 0x300;
   const auto process_code = base + 0x400;
+  const auto function_code = base + 0x500;
   const auto stack_one = base + 0x4000;
   const auto stack_two = base + 0x8000;
   const auto stack_three = base + 0xc000;
@@ -170,11 +171,16 @@ int main() {
   const std::vector<std::byte> process_entry = {
       std::byte{0x48}, std::byte{0x89}, std::byte{0xf8}, std::byte{0x48},
       std::byte{0x01}, std::byte{0xf0}, std::byte{0xc3}};
+  const std::array<std::byte, 10> function_entry = {
+      std::byte{0x48}, std::byte{0x89}, std::byte{0xf8}, std::byte{0x48},
+      std::byte{0x01}, std::byte{0xf0}, std::byte{0x48}, std::byte{0x01},
+      std::byte{0xd0}, std::byte{0xc3}};
   Check(memory->Initialize(yield_code, yield_entry) &&
             memory->Initialize(peer_code, peer_entry) &&
             memory->Initialize(block_code, block_entry) &&
             memory->Initialize(exit_code, exit_entry) &&
             memory->Initialize(process_code, process_entry) &&
+            memory->Initialize(function_code, function_entry) &&
             memory->Protect(
                 base, 0x1000,
                 GuestMemoryProtection::kRead | GuestMemoryProtection::kExecute),
@@ -353,6 +359,21 @@ int main() {
             process_snapshot->exit_value == stack_one + 0x22 &&
             runner.registered_thread_count() == 0,
         "process entry did not use its parameter and exit-handler arguments");
+
+  const auto function =
+      scheduler.CreateThread("module-initializer", 700, function_code, 0);
+  const std::array<std::uint64_t, 3> function_arguments = {1, 2, 3};
+  Check(function &&
+            runner.RegisterFunctionThread(function.handle, stack_one,
+                                          stack_size, function_arguments) ==
+                NativeGuestThreadRegistrationStatus::kOk,
+        "guest function registration failed");
+  const auto function_exit = runner.RunNext();
+  const auto function_snapshot = scheduler.Snapshot(function.handle);
+  Check(function_exit.status == NativeGuestThreadRunStatus::kThreadExited &&
+            function_snapshot && function_snapshot->exit_value == 6 &&
+            runner.registered_thread_count() == 0,
+        "guest function did not run through the scheduler");
 
   const auto invalid_process =
       scheduler.CreateThread("invalid-process", 700, process_code, 0);
