@@ -56,6 +56,25 @@ NativeGuestThreadRunner::~NativeGuestThreadRunner() {
 NativeGuestThreadRegistrationStatus NativeGuestThreadRunner::RegisterThread(
     kernel::KernelHandle handle, std::uint64_t stack_address,
     std::uint64_t stack_size) {
+  return RegisterThreadEntry(handle, stack_address, stack_size,
+                             EntryKind::kPthread, 0, 0);
+}
+
+NativeGuestThreadRegistrationStatus
+NativeGuestThreadRunner::RegisterProcessThread(
+    kernel::KernelHandle handle, std::uint64_t stack_address,
+    std::uint64_t stack_size, std::uint64_t parameters_address,
+    std::uint64_t exit_handler_address) {
+  return RegisterThreadEntry(handle, stack_address, stack_size,
+                             EntryKind::kProcess, parameters_address,
+                             exit_handler_address);
+}
+
+NativeGuestThreadRegistrationStatus
+NativeGuestThreadRunner::RegisterThreadEntry(
+    kernel::KernelHandle handle, std::uint64_t stack_address,
+    std::uint64_t stack_size, EntryKind entry_kind,
+    std::uint64_t parameters_address, std::uint64_t exit_handler_address) {
   if (handle == kernel::kInvalidKernelHandle ||
       stack_size < kMinimumNativeGuestStackSize ||
       stack_size > memory_.size() || stack_address > memory_.end_address() ||
@@ -84,6 +103,11 @@ NativeGuestThreadRegistrationStatus NativeGuestThreadRunner::RegisterThread(
   if (!memory_.CanAccess(stack_address, stack_size, stack_access)) {
     return NativeGuestThreadRegistrationStatus::kGuestStackNotAccessible;
   }
+  if (entry_kind == EntryKind::kProcess &&
+      !memory_.CanAccess(parameters_address, sizeof(NativeGuestEntryParameters),
+                         memory::GuestMemoryProtection::kRead)) {
+    return NativeGuestThreadRegistrationStatus::kGuestParametersNotReadable;
+  }
   const auto stack_end = stack_address + stack_size;
   for (const auto& [registered_handle, state] : threads_) {
     (void)registered_handle;
@@ -96,6 +120,9 @@ NativeGuestThreadRegistrationStatus NativeGuestThreadRunner::RegisterThread(
   ThreadState state;
   state.stack_address = stack_address;
   state.stack_size = stack_size;
+  state.parameters_address = parameters_address;
+  state.exit_handler_address = exit_handler_address;
+  state.entry_kind = entry_kind;
   state.continuation = std::make_unique<NativeGuestContinuation>();
   threads_.emplace(handle, std::move(state));
   return NativeGuestThreadRegistrationStatus::kOk;
@@ -190,9 +217,16 @@ NativeGuestThreadRunResult NativeGuestThreadRunner::RunNext() {
         executor_.Resume(memory_, *state.continuation, execution_context_);
   } else if (!state.started) {
     state.started = true;
-    execution = executor_.ExecuteThread(memory_, thread->entry_address,
-                                        state.stack_address, state.stack_size,
-                                        thread->argument, &execution_context_);
+    if (state.entry_kind == EntryKind::kProcess) {
+      execution =
+          executor_.Execute(memory_, thread->entry_address, state.stack_address,
+                            state.stack_size, state.parameters_address,
+                            state.exit_handler_address, &execution_context_);
+    } else {
+      execution = executor_.ExecuteThread(
+          memory_, thread->entry_address, state.stack_address, state.stack_size,
+          thread->argument, &execution_context_);
+    }
   } else {
     return {NativeGuestThreadRunStatus::kThreadStateInvalid, *selected};
   }
@@ -328,6 +362,8 @@ std::string_view NativeGuestThreadRegistrationStatusName(
       return "guest-stack-not-accessible";
     case NativeGuestThreadRegistrationStatus::kGuestStackAlreadyRegistered:
       return "guest-stack-already-registered";
+    case NativeGuestThreadRegistrationStatus::kGuestParametersNotReadable:
+      return "guest-parameters-not-readable";
     case NativeGuestThreadRegistrationStatus::kGuestStackAllocationFailed:
       return "guest-stack-allocation-failed";
   }

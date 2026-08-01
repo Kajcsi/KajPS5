@@ -33,6 +33,7 @@ enum class NativeGuestThreadRegistrationStatus {
   kGuestCodeNotExecutable,
   kGuestStackNotAccessible,
   kGuestStackAlreadyRegistered,
+  kGuestParametersNotReadable,
   kGuestStackAllocationFailed,
 };
 
@@ -88,6 +89,10 @@ class NativeGuestThreadRunner final {
   [[nodiscard]] NativeGuestThreadRegistrationStatus RegisterThread(
       kernel::KernelHandle handle, std::uint64_t stack_address,
       std::uint64_t stack_size);
+  [[nodiscard]] NativeGuestThreadRegistrationStatus RegisterProcessThread(
+      kernel::KernelHandle handle, std::uint64_t stack_address,
+      std::uint64_t stack_size, std::uint64_t parameters_address,
+      std::uint64_t exit_handler_address);
   [[nodiscard]] NativeGuestThreadAllocationResult AllocateAndRegisterThread(
       kernel::KernelHandle handle, std::uint64_t search_start);
   [[nodiscard]] NativeGuestThreadRunResult RunNext();
@@ -96,9 +101,17 @@ class NativeGuestThreadRunner final {
   [[nodiscard]] std::size_t registered_thread_count() const noexcept;
 
  private:
+  enum class EntryKind {
+    kPthread,
+    kProcess,
+  };
+
   struct ThreadState {
     std::uint64_t stack_address = 0;
     std::uint64_t stack_size = 0;
+    std::uint64_t parameters_address = 0;
+    std::uint64_t exit_handler_address = 0;
+    EntryKind entry_kind = EntryKind::kPthread;
     bool started = false;
     bool owns_stack = false;
     std::uint64_t allocation_address = 0;
@@ -108,6 +121,10 @@ class NativeGuestThreadRunner final {
 
   [[nodiscard]] bool ReleaseThread(
       std::map<kernel::KernelHandle, ThreadState>::iterator thread) noexcept;
+  [[nodiscard]] NativeGuestThreadRegistrationStatus RegisterThreadEntry(
+      kernel::KernelHandle handle, std::uint64_t stack_address,
+      std::uint64_t stack_size, EntryKind entry_kind,
+      std::uint64_t parameters_address, std::uint64_t exit_handler_address);
   [[nodiscard]] std::optional<NativeGuestThreadRunResult>
   PrepareReadyPthreads();
 

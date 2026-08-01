@@ -97,6 +97,8 @@
       per-thread continuations and registered guest stacks.
 - [x] Allocate checked pthread stacks with a guard page and release owned
       mappings after each thread exits.
+- [x] Prepare ready pthread stacks automatically before native execution.
+- [x] Run process and pthread entry ABIs through the same scheduler lane.
 - [x] Build and own native HLE trampolines for all resolved executable imports.
 - Expand thread, event, file, and time coverage as their HLE bridges grow.
 - Compare small, repeatable traces with both upstream projects.

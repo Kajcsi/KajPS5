@@ -75,6 +75,7 @@ int main() {
   const auto peer_code = base + 0x100;
   const auto block_code = base + 0x200;
   const auto exit_code = base + 0x300;
+  const auto process_code = base + 0x400;
   const auto stack_one = base + 0x4000;
   const auto stack_two = base + 0x8000;
   const auto stack_three = base + 0xc000;
@@ -150,10 +151,14 @@ int main() {
   const auto exit_entry = BuildImportEntry(exit_trampoline.address());
   const std::vector<std::byte> peer_entry = {std::byte{0x48}, std::byte{0x89},
                                              std::byte{0xf8}, std::byte{0xc3}};
+  const std::vector<std::byte> process_entry = {
+      std::byte{0x48}, std::byte{0x89}, std::byte{0xf8}, std::byte{0x48},
+      std::byte{0x01}, std::byte{0xf0}, std::byte{0xc3}};
   Check(memory->Initialize(yield_code, yield_entry) &&
             memory->Initialize(peer_code, peer_entry) &&
             memory->Initialize(block_code, block_entry) &&
             memory->Initialize(exit_code, exit_entry) &&
+            memory->Initialize(process_code, process_entry) &&
             memory->Protect(
                 base, 0x1000,
                 GuestMemoryProtection::kRead | GuestMemoryProtection::kExecute),
@@ -316,6 +321,32 @@ int main() {
           pthreads.DestroyAttribute(stack_attribute.handle) ==
               kajps5::kernel::KernelStatus::kOk,
       "automatic pthread stack was not released after resumed exit");
+
+  const auto process =
+      scheduler.CreateThread("process-entry", 700, process_code, 0);
+  Check(process && runner.RegisterProcessThread(process.handle, stack_one,
+                                                stack_size, stack_one, 0x22) ==
+                       NativeGuestThreadRegistrationStatus::kOk,
+        "process entry registration failed");
+  const auto process_exit = runner.RunNext();
+  const auto process_snapshot = scheduler.Snapshot(process.handle);
+  Check(process_exit.status == NativeGuestThreadRunStatus::kThreadExited &&
+            process_snapshot &&
+            process_snapshot->state ==
+                kajps5::kernel::GuestThreadState::kExited &&
+            process_snapshot->exit_value == stack_one + 0x22 &&
+            runner.registered_thread_count() == 0,
+        "process entry did not use its parameter and exit-handler arguments");
+
+  const auto invalid_process =
+      scheduler.CreateThread("invalid-process", 700, process_code, 0);
+  Check(invalid_process &&
+            runner.RegisterProcessThread(invalid_process.handle, stack_one,
+                                         stack_size, base + 0x1000, 0) ==
+                NativeGuestThreadRegistrationStatus::
+                    kGuestParametersNotReadable &&
+            scheduler.DiscardReadyThread(invalid_process.handle),
+        "process entry accepted an unreadable parameter block");
 
   const auto oversized = pthreads.CreateThread("oversized", 0, peer_code, 0);
   const auto oversized_allocation = runner.RunNext();
