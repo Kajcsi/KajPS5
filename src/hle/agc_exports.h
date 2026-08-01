@@ -13,6 +13,10 @@ namespace kajps5::gpu {
 class GpuRuntime;
 }
 
+namespace kajps5::kernel {
+class EventQueueService;
+}
+
 namespace kajps5::hle {
 
 inline constexpr auto kAgcLibraryName = "libSceAgc";
@@ -53,14 +57,19 @@ inline constexpr auto kAgcDcbWriteDataNid = "i1jyy49AjXU";
 inline constexpr auto kAgcDcbWriteDataGetSizeNid = "p9tI+yTvx68";
 inline constexpr auto kAgcCbReleaseMemNid = "wr23dPKyWc0";
 inline constexpr auto kAgcCbQueueEndOfPipeActionGetSizeNid = "hL7C0IRpWZI";
+inline constexpr auto kAgcDcbEventWriteNid = "aJf+j5yntiU";
+inline constexpr auto kAgcAcbEventWriteNid = "cFazmnXpJOE";
 inline constexpr auto kAgcDcbGetLodStatsNid = "vuSXe69VILM";
 inline constexpr auto kAgcDcbWaitRegMemNid = "VmW0Tdpy420";
 inline constexpr auto kAgcDcbWaitOnAddressGetSizeNid = "43WJ08sSugE";
 inline constexpr auto kAgcDriverSubmitDcbNid = "UglJIZjGssM";
 inline constexpr auto kAgcDriverSubmitAcbNid = "gSRnr79F8tQ";
-inline constexpr std::size_t kRegisteredAgcFunctionCount = 40;
+inline constexpr auto kAgcDriverAddEqEventNid = "w2rJhmD+dsE";
+inline constexpr auto kAgcDriverDeleteEqEventNid = "DL2RXaXOy88";
+inline constexpr std::size_t kRegisteredAgcFunctionCount = 44;
 
 [[nodiscard]] ExportRegistryStatus RegisterAgcExports(
-    ExportRegistry& registry, gpu::GpuRuntime& gpu_runtime);
+    ExportRegistry& registry, gpu::GpuRuntime& gpu_runtime,
+    kernel::EventQueueService& event_queues);
 
 }  // namespace kajps5::hle

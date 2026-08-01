@@ -19,6 +19,7 @@
 
 #include "core/memory/guest_memory.h"
 #include "gpu/runtime.h"
+#include "kernel/event_queue.h"
 
 namespace kajps5::gpu {
 namespace {
@@ -46,6 +47,7 @@ constexpr std::uint32_t kPm4DrawIndexIndirectMulti = 0x38U;
 constexpr std::uint32_t kPm4WaitRegMem = 0x3cU;
 constexpr std::uint32_t kPm4DrawIndexMultiInstanced = 0x3aU;
 constexpr std::uint32_t kPm4IndirectBuffer = 0x3fU;
+constexpr std::uint32_t kPm4EventWrite = 0x46U;
 constexpr std::uint32_t kPm4ReleaseMemory = 0x49U;
 constexpr std::uint32_t kPm4Rewind = 0x59U;
 constexpr std::uint32_t kPm4SetShRegisterIndirect = 0x63U;
@@ -358,6 +360,25 @@ GpuCommandStatus ProcessReleaseMemory(
       GpuActionType::kReleaseMemory, packet_address, packet_dwords, opcode,
       packet_register,
       {destination, data, packet[1], packet[2], packet[7]}));
+}
+
+GpuCommandStatus ProcessEventWrite(
+    DecodeContext& context, std::uint64_t packet_address,
+    std::uint32_t packet_dwords, std::uint32_t opcode,
+    std::uint32_t packet_register,
+    std::span<const std::uint32_t> packet) {
+  if (packet_dwords != 2 && packet_dwords != 4) {
+    return Stop(context, GpuCommandStatus::kMalformedPacket,
+                packet_address, opcode);
+  }
+  const auto event_type = packet[1] & 0x3fU;
+  const auto address = packet_dwords == 4
+                           ? static_cast<std::uint64_t>(packet[2] & ~7U) |
+                                 (static_cast<std::uint64_t>(packet[3]) << 32U)
+                           : 0;
+  return Emit(context, MakeAction(
+      GpuActionType::kEventWrite, packet_address, packet_dwords, opcode,
+      packet_register, {event_type, address, packet[1]}));
 }
 
 GpuCommandStatus ProcessWait(DecodeContext& context,
@@ -729,6 +750,9 @@ GpuCommandStatus ProcessFrames(DecodeContext& context) {
     } else if (opcode == kPm4ReleaseMemory) {
       status = ProcessReleaseMemory(context, packet_address, packet_dwords,
                                     opcode, packet_register, packet);
+    } else if (opcode == kPm4EventWrite) {
+      status = ProcessEventWrite(context, packet_address, packet_dwords,
+                                 opcode, packet_register, packet);
     } else if (opcode == kPm4IndirectBuffer) {
       if (packet_dwords == 4) {
         const auto target = static_cast<std::uint64_t>(packet[1] & ~3U) |
@@ -885,6 +909,30 @@ void GpuActionRing::Clear() noexcept {
   actions_.clear();
   next_ = 0;
   dropped_count_ = 0;
+}
+
+GpuEventSubmissionSink::GpuEventSubmissionSink(
+    kernel::EventQueueService* event_queues,
+    GpuSubmissionSink& downstream) noexcept
+    : event_queues_(event_queues), downstream_(downstream) {}
+
+GpuCommandStatus GpuEventSubmissionSink::Submit(
+    const GpuAction& action) noexcept {
+  if (action.type != GpuActionType::kEventWrite) {
+    return downstream_.Submit(action);
+  }
+  if (action.value_count < 1 || action.values[0] > 0x3fU) {
+    return GpuCommandStatus::kMalformedPacket;
+  }
+  if (event_queues_ == nullptr) {
+    return GpuCommandStatus::kUnsupportedPacket;
+  }
+  const auto downstream_status = downstream_.Submit(action);
+  if (downstream_status != GpuCommandStatus::kComplete) {
+    return downstream_status;
+  }
+  (void)event_queues_->TriggerGraphicsEvents(action.values[0]);
+  return GpuCommandStatus::kComplete;
 }
 
 GpuMemorySubmissionSink::GpuMemorySubmissionSink(

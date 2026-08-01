@@ -49,7 +49,7 @@ std::unique_ptr<TitleSession> TitleSession::Create(
 
 TitleSession::TitleSession(std::unique_ptr<memory::GuestMemory> memory)
     : memory_(std::move(memory)),
-      gpu_runtime_(*memory_),
+      gpu_runtime_(*memory_, nullptr, &kernel_runtime_.event_queues()),
       thread_runner_(*memory_, kernel_runtime_.scheduler(),
                      kernel_runtime_.pthreads(), execution_context_),
       process_launcher_(kernel_runtime_.pthreads(), thread_runner_) {}
@@ -136,7 +136,8 @@ TitleHleSetupResult TitleSession::PrepareHleBatch(
     result.status = TitleHleSetupStatus::kAmprExportsFailed;
     return result;
   }
-  result.export_status = hle::RegisterAgcExports(hle_exports_, gpu_runtime_);
+  result.export_status = hle::RegisterAgcExports(
+      hle_exports_, gpu_runtime_, kernel_runtime_.event_queues());
   if (result.export_status != hle::ExportRegistryStatus::kOk) {
     result.status = TitleHleSetupStatus::kAgcExportsFailed;
     return result;

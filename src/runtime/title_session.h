@@ -158,10 +158,10 @@ class TitleSession final {
       cpu::NativeGuestThreadRunResult run = {}, std::size_t slices = 0);
 
   std::unique_ptr<memory::GuestMemory> memory_;
+  kernel::KernelRuntime kernel_runtime_;
   gpu::GpuRuntime gpu_runtime_;
   loader::ExecutableLaunchMetadata launch_metadata_;
   loader::ExecutableLifecyclePlan lifecycle_plan_;
-  kernel::KernelRuntime kernel_runtime_;
   cpu::NativeGuestExecutionContext execution_context_;
   hle::ExportRegistry hle_exports_;
   hle::ImportRegistry hle_data_;

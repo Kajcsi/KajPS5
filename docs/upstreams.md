@@ -102,6 +102,11 @@ adapted paths change.
   SharpEmu supplies independent filter-based wake behavior when a hardware
   event type differs from the guest event identifier. KajPS5 also gives each
   registration a private generation to reject already-reserved stale events.
+- KytyPS5 supplies the Gen5 DCB and ACB `EVENT_WRITE` packet layouts, export
+  identities, and driver event registration ABI. SharpEmu supplies independent
+  evidence that delivery must match the graphics filter, retain the guest
+  event ID and user data, and report the hardware event type separately.
+  KajPS5 applies that behavior through its existing GPU runtime and event queue.
 
 When KajPS5 imports code, identify the upstream file and commit, keep its
 copyright and license notice, and update `THIRD_PARTY_NOTICES.md` in the same

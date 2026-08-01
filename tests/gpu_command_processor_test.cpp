@@ -256,6 +256,27 @@ int main() {
   Check(malformed_release_result.status == GpuCommandStatus::kMalformedPacket,
         "invalid AGC release-memory data selector was accepted");
 
+  constexpr std::uint64_t kEventCommands = kBase + 0xd00;
+  constexpr std::uint64_t kEventAddress = kBase + 0x6500;
+  const std::array event_commands = {
+      Pm4(2, 0x46), 0x407U,
+      Pm4(4, 0x46), 0x138U,
+      static_cast<std::uint32_t>(kEventAddress),
+      static_cast<std::uint32_t>(kEventAddress >> 32U),
+  };
+  WriteDwords(memory, kEventCommands, event_commands);
+  GpuActionTrace event_trace(2);
+  const auto event_result = runtime.ProcessCommandBuffer(
+      kEventCommands, static_cast<std::uint32_t>(event_commands.size()),
+      event_trace);
+  Check(event_result && event_trace.actions().size() == 2 &&
+            event_trace.actions()[0].type == GpuActionType::kEventWrite &&
+            event_trace.actions()[0].values[0] == 7 &&
+            event_trace.actions()[1].type == GpuActionType::kEventWrite &&
+            event_trace.actions()[1].values[0] == 0x38 &&
+            event_trace.actions()[1].values[1] == kEventAddress,
+        "event-write packets did not preserve their type and address");
+
   constexpr std::uint64_t kSecondSubmission = kBase + 0x700;
   const std::array second_submission = {Pm4(2, 0x10), 0U};
   WriteDwords(memory, kSecondSubmission, second_submission);

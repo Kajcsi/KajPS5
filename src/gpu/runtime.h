@@ -21,6 +21,10 @@ namespace kajps5::memory {
 class GuestMemory;
 }
 
+namespace kajps5::kernel {
+class EventQueueService;
+}
+
 namespace kajps5::gpu {
 
 inline constexpr std::size_t kAgcCommandBufferSize = 0x38;
@@ -59,6 +63,7 @@ enum class AgcPacketType {
   kSetPredication,
   kWriteData,
   kReleaseMemory,
+  kEventWrite,
   kGetLodStats,
   kWaitRegMem,
 };
@@ -86,7 +91,8 @@ class GpuRuntime final {
   // A non-null sink must outlive this runtime and must not call it recursively.
   explicit GpuRuntime(
       memory::GuestMemory& memory,
-      GpuSubmissionSink* submission_sink = nullptr) noexcept;
+      GpuSubmissionSink* submission_sink = nullptr,
+      kernel::EventQueueService* event_queues = nullptr) noexcept;
 
   [[nodiscard]] GpuPacketResult WriteNop(std::uint64_t command_buffer,
                                          std::uint32_t dword_count);
@@ -135,6 +141,7 @@ class GpuRuntime final {
   std::unordered_map<std::uint32_t, std::uint32_t> user_config_registers_;
   GpuSubmissionQueue submission_queue_;
   GpuActionRing submission_history_;
+  GpuEventSubmissionSink event_effects_;
   GpuMemorySubmissionSink submission_effects_;
   GpuSubmissionSink* submission_sink_ = nullptr;
 };

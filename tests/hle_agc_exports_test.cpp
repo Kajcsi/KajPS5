@@ -18,6 +18,7 @@
 #include "hle/agc_exports.h"
 #include "hle/call_context.h"
 #include "hle/export_registry.h"
+#include "kernel/runtime.h"
 
 namespace {
 
@@ -119,9 +120,12 @@ int main() {
   GuestMemory memory(
       kBase, 0x3000,
       GuestMemoryProtection::kRead | GuestMemoryProtection::kWrite);
-  kajps5::gpu::GpuRuntime gpu_runtime(memory);
+  kajps5::kernel::KernelRuntime kernel_runtime;
+  kajps5::gpu::GpuRuntime gpu_runtime(
+      memory, nullptr, &kernel_runtime.event_queues());
   ExportRegistry registry;
-  Check(kajps5::hle::RegisterAgcExports(registry, gpu_runtime) ==
+  Check(kajps5::hle::RegisterAgcExports(
+            registry, gpu_runtime, kernel_runtime.event_queues()) ==
                 ExportRegistryStatus::kOk &&
             registry.size() == kajps5::hle::kRegisteredAgcFunctionCount * 2,
         "AGC export registration failed");
@@ -288,7 +292,20 @@ int main() {
             Read32(release_packet, 28) == 0x01abcdefU,
         "release-memory packet words are incorrect");
 
-  constexpr auto kWaitPacket = kReleasePacket + release_packet.size();
+  constexpr auto kEventPacket = kReleasePacket + release_packet.size();
+  const std::array event_arguments = {
+      kCommandBuffer, std::uint64_t{7}, std::uint64_t{0}};
+  SetArguments(context, event_arguments);
+  Check(registry.Dispatch(kajps5::hle::kAgcDcbEventWriteNid, context) &&
+            ReturnValue(context) == kEventPacket,
+        "event-write packet call failed");
+  std::array<std::byte, 8> event_packet{};
+  Check(memory.Read(kEventPacket, event_packet) &&
+            Read32(event_packet, 0) == 0xc0004600U &&
+            Read32(event_packet, 4) == 0x407U,
+        "event-write packet words are incorrect");
+
+  constexpr auto kWaitPacket = kEventPacket + event_packet.size();
   const std::array wait_arguments = {
       kCommandBuffer, std::uint64_t{0}, std::uint64_t{3},
       std::uint64_t{2}, std::uint64_t{1}, std::uint64_t{0x456789a83ULL},
@@ -374,6 +391,7 @@ int main() {
   constexpr std::uint64_t kDriverWaitCommands = kBase + 0x1d00;
   constexpr std::uint64_t kDriverWriteWaitCommands = kBase + 0x1e00;
   constexpr std::uint64_t kDriverReleaseWaitCommands = kBase + 0x1a00;
+  constexpr std::uint64_t kDriverEventCommands = kBase + 0x1900;
   constexpr std::uint64_t kDriverLabel = kBase + 0x1f00;
   const std::array driver_commands = {
       Pm4(5, 0x15), 2U, 3U, 4U, 0x41U,
@@ -393,10 +411,15 @@ int main() {
       0x13U, 1U,
       Pm4(3, 0x2d), 13U, 2U,
   };
+  const std::array driver_event_commands = {
+      Pm4(2, 0x46), 0x407U,
+      Pm4(3, 0x2d), 17U, 2U,
+  };
   WriteDwords(memory, kDriverCommands, driver_commands);
   WriteDwords(memory, kDriverWaitCommands, driver_wait_commands);
   WriteDwords(memory, kDriverReleaseWaitCommands,
               driver_release_wait_commands);
+  WriteDwords(memory, kDriverEventCommands, driver_event_commands);
   Check(context.WriteUInt32(kDriverLabel, 0) == HleContextStatus::kOk,
         "driver wait label setup failed");
 
@@ -502,6 +525,50 @@ int main() {
             gpu_runtime.submission_history().At(9)->type ==
                 kajps5::gpu::GpuActionType::kDraw,
         "ordered release-memory did not satisfy the following GPU wait");
+
+  const auto graphics_queue =
+      kernel_runtime.event_queues().Create("graphics");
+  const std::array add_event_arguments = {
+      graphics_queue.handle, std::uint64_t{0x20},
+      std::uint64_t{0xdeadbeef}};
+  SetArguments(context, add_event_arguments);
+  Check(graphics_queue &&
+            registry.Dispatch(kajps5::hle::kAgcDriverAddEqEventNid,
+                              context) &&
+            ReturnValue(context) == 0,
+        "graphics event registration failed");
+  Write64(driver_packet, 0, kDriverEventCommands);
+  Write32(driver_packet, 8,
+          static_cast<std::uint32_t>(driver_event_commands.size()));
+  Check(memory.Write(kDriverPacket, driver_packet),
+        "event driver packet setup failed");
+  SetArguments(context, submit_dcb_arguments);
+  Check(registry.Dispatch(kajps5::hle::kAgcDriverSubmitDcbNid, context) &&
+            ReturnValue(context) == 0,
+        "event command-buffer submission failed");
+  auto graphics_event =
+      kernel_runtime.event_queues().Poll(graphics_queue.handle, 1);
+  Check(graphics_event && graphics_event.events.size() == 1 &&
+            graphics_event.events[0].ident == 0x20 &&
+            graphics_event.events[0].filter ==
+                kajps5::kernel::kEventFilterGraphics &&
+            graphics_event.events[0].fflags == 1 &&
+            graphics_event.events[0].data == 7 &&
+            graphics_event.events[0].user_data == 0xdeadbeef,
+        "event-write did not publish the registered graphics event");
+  const std::array delete_event_arguments = {
+      graphics_queue.handle, std::uint64_t{0x20}};
+  SetArguments(context, delete_event_arguments);
+  Check(registry.Dispatch(kajps5::hle::kAgcDriverDeleteEqEventNid,
+                          context) &&
+            ReturnValue(context) == 0,
+        "graphics event deletion failed");
+  SetArguments(context, submit_dcb_arguments);
+  Check(registry.Dispatch(kajps5::hle::kAgcDriverSubmitDcbNid, context) &&
+            ReturnValue(context) == 0 &&
+            kernel_runtime.event_queues().Poll(graphics_queue.handle, 1)
+                    .status == kajps5::kernel::KernelStatus::kBusy,
+        "deleted graphics registration still received events");
 
   const std::array invalid_submit_arguments = {std::uint64_t{0}};
   SetArguments(context, invalid_submit_arguments);

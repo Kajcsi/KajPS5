@@ -19,6 +19,10 @@ namespace kajps5::memory {
 class GuestMemory;
 }
 
+namespace kajps5::kernel {
+class EventQueueService;
+}
+
 namespace kajps5::gpu {
 
 enum class GpuCommandStatus {
@@ -50,6 +54,7 @@ enum class GpuActionType : std::uint8_t {
   kPredication,
   kWriteData,
   kReleaseMemory,
+  kEventWrite,
   kWaitMemory,
   kIndirectBuffer,
   kRewind,
@@ -119,6 +124,19 @@ class GpuMemorySubmissionSink final : public GpuSubmissionSink {
   memory::GuestMemory& memory_;
   GpuSubmissionSink& downstream_;
   std::atomic<std::uint64_t> next_timestamp_{1};
+};
+
+class GpuEventSubmissionSink final : public GpuSubmissionSink {
+ public:
+  GpuEventSubmissionSink(kernel::EventQueueService* event_queues,
+                         GpuSubmissionSink& downstream) noexcept;
+
+  [[nodiscard]] GpuCommandStatus Submit(
+      const GpuAction& action) noexcept override;
+
+ private:
+  kernel::EventQueueService* event_queues_ = nullptr;
+  GpuSubmissionSink& downstream_;
 };
 
 struct GpuCommandLimits {

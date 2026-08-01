@@ -144,6 +144,8 @@
       memory so they can release GPU waits.
 - [x] Decode standard and AGC-wrapper `RELEASE_MEM` packets, including ordered
       32-bit, 64-bit, and monotonic counter writes.
+- [x] Connect `EVENT_WRITE` packets to graphics event registrations without
+      confusing hardware event types with guest event IDs.
 - Create a Vulkan device and a validation test.
 - Add shader and resource tests before game tests.
 - Add an audio queue test with stable timing.

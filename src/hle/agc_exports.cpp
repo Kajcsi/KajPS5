@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "gpu/runtime.h"
+#include "kernel/event_queue.h"
 
 namespace kajps5::hle {
 namespace {
@@ -21,6 +22,8 @@ constexpr std::int32_t kGen5ErrorInvalidArgument =
     std::bit_cast<std::int32_t>(0x80020003U);
 constexpr std::int32_t kGen5ErrorMemoryFault =
     std::bit_cast<std::int32_t>(0x80020101U);
+constexpr std::int32_t kGen5ErrorNotFound =
+    std::bit_cast<std::int32_t>(0x80020002U);
 
 void SetSignedResult(HleCallContext& context, std::int32_t value) noexcept {
   context.SetReturn(
@@ -164,6 +167,10 @@ constexpr std::array kPacketExports = {
                  gpu::AgcPacketType::kWriteData, 8},
     PacketExport{"sceAgcCbReleaseMem", kAgcCbReleaseMemNid,
                  gpu::AgcPacketType::kReleaseMemory, 12},
+    PacketExport{"sceAgcDcbEventWrite", kAgcDcbEventWriteNid,
+                 gpu::AgcPacketType::kEventWrite, 3},
+    PacketExport{"sceAgcAcbEventWrite", kAgcAcbEventWriteNid,
+                 gpu::AgcPacketType::kEventWrite, 3},
     PacketExport{"sceAgcDcbGetLodStats", kAgcDcbGetLodStatsNid,
                  gpu::AgcPacketType::kGetLodStats, 8},
     PacketExport{"sceAgcDcbWaitRegMem", kAgcDcbWaitRegMemNid,
@@ -198,8 +205,10 @@ constexpr std::array kFixedSizeExports = {
 }  // namespace
 
 ExportRegistryStatus RegisterAgcExports(ExportRegistry& registry,
-                                        gpu::GpuRuntime& gpu_runtime) {
+                                        gpu::GpuRuntime& gpu_runtime,
+                                        kernel::EventQueueService& event_queues) {
   auto* const runtime = &gpu_runtime;
+  auto* const queues = &event_queues;
   std::vector<HleExportDefinition> exports;
   exports.reserve(kRegisteredAgcFunctionCount * 2);
 
@@ -306,6 +315,28 @@ ExportRegistryStatus RegisterAgcExports(ExportRegistry& registry,
   AddDriver(exports, "sceAgcDriverSubmitAcb", kAgcDriverSubmitAcbNid,
             [runtime](HleCallContext& context) {
               return SubmitDriverCommandBuffer(context, *runtime, true);
+            });
+  AddDriver(exports, "sceAgcDriverAddEqEvent", kAgcDriverAddEqEventNid,
+            [queues](HleCallContext& context) {
+              const auto status = queues->AddGraphicsEvent(
+                  context.Argument(0).value_or(0),
+                  context.Argument(1).value_or(0),
+                  context.Argument(2).value_or(0));
+              SetSignedResult(context, status == kernel::KernelStatus::kOk
+                                           ? 0
+                                           : kGen5ErrorNotFound);
+              return HleContextStatus::kOk;
+            });
+  AddDriver(exports, "sceAgcDriverDeleteEqEvent",
+            kAgcDriverDeleteEqEventNid,
+            [queues](HleCallContext& context) {
+              const auto status = queues->DeleteGraphicsEvent(
+                  context.Argument(0).value_or(0),
+                  context.Argument(1).value_or(0));
+              SetSignedResult(context, status == kernel::KernelStatus::kOk
+                                           ? 0
+                                           : kGen5ErrorNotFound);
+              return HleContextStatus::kOk;
             });
 
   return registry.RegisterBatch(std::move(exports));

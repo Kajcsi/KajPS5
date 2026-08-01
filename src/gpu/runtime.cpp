@@ -34,6 +34,7 @@ constexpr std::uint32_t kPm4DrawIndexAutoOpcode = 0x2dU;
 constexpr std::uint32_t kPm4NumInstancesOpcode = 0x2fU;
 constexpr std::uint32_t kPm4DrawIndexOffsetOpcode = 0x35U;
 constexpr std::uint32_t kPm4IndirectBufferOpcode = 0x3fU;
+constexpr std::uint32_t kPm4EventWriteOpcode = 0x46U;
 constexpr std::uint32_t kPm4RewindOpcode = 0x59U;
 constexpr std::uint32_t kPm4SetContextRegisterOpcode = 0x69U;
 constexpr std::uint32_t kPm4SetShRegisterOpcode = 0x76U;
@@ -130,13 +131,15 @@ void Write64(std::span<std::byte> bytes, std::uint64_t value) noexcept {
 }  // namespace
 
 GpuRuntime::GpuRuntime(memory::GuestMemory& memory,
-                       GpuSubmissionSink* submission_sink) noexcept
+                       GpuSubmissionSink* submission_sink,
+                       kernel::EventQueueService* event_queues) noexcept
     : memory_(memory),
       submission_queue_(*this),
       submission_history_(4096),
-      submission_effects_(memory,
-                          submission_sink != nullptr ? *submission_sink
-                                                     : submission_history_),
+      event_effects_(event_queues,
+                     submission_sink != nullptr ? *submission_sink
+                                                : submission_history_),
+      submission_effects_(memory, event_effects_),
       submission_sink_(&submission_effects_) {}
 
 GpuPacketResult GpuRuntime::AppendPacket(
@@ -464,7 +467,26 @@ GpuPacketResult GpuRuntime::WriteAgcPacket(
            static_cast<std::uint32_t>(destination_address >> 32U),
            static_cast<std::uint32_t>(data),
            static_cast<std::uint32_t>(data >> 32U),
-           interrupt_context & 0x07ffffffU});
+          interrupt_context & 0x07ffffffU});
+    }
+    if (type == AgcPacketType::kEventWrite) {
+      const auto event_type = static_cast<std::uint32_t>(argument(1));
+      const auto address = argument(2);
+      if (event_type > 0x3fU) {
+        return {GpuRuntimeStatus::kInvalidArgument};
+      }
+      if ((event_type & 0xfeU) == 0x38U) {
+        return append(
+            {MakePm4Header(4, kPm4EventWriteOpcode, 0),
+             0x100U | event_type,
+             static_cast<std::uint32_t>(address) & ~7U,
+             static_cast<std::uint32_t>(address >> 32U)});
+      }
+      const auto control = event_type == 7 || event_type == 15 ||
+                                   event_type == 16
+                               ? 0x400U | event_type
+                               : event_type;
+      return append({MakePm4Header(2, kPm4EventWriteOpcode, 0), control});
     }
     if (type == AgcPacketType::kGetLodStats) {
       const auto address = argument(2);
