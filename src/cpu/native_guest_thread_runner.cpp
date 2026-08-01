@@ -5,6 +5,8 @@
 
 #include "cpu/native_guest_thread_runner.h"
 
+#include <limits>
+#include <optional>
 #include <utility>
 
 #include "kernel/guest_scheduler.h"
@@ -19,6 +21,18 @@ bool IsCompletedSlice(NativeGuestThreadRunStatus status) noexcept {
          status == NativeGuestThreadRunStatus::kThreadYielded;
 }
 
+std::optional<std::uint64_t> AlignUp(std::uint64_t value,
+                                     std::uint64_t alignment) noexcept {
+  if (alignment == 0 || (alignment & (alignment - 1)) != 0) {
+    return std::nullopt;
+  }
+  const auto mask = alignment - 1;
+  if (value > std::numeric_limits<std::uint64_t>::max() - mask) {
+    return std::nullopt;
+  }
+  return (value + mask) & ~mask;
+}
+
 }  // namespace
 
 NativeGuestThreadRunner::NativeGuestThreadRunner(
@@ -29,6 +43,15 @@ NativeGuestThreadRunner::NativeGuestThreadRunner(
       scheduler_(scheduler),
       pthreads_(pthreads),
       execution_context_(execution_context) {}
+
+NativeGuestThreadRunner::~NativeGuestThreadRunner() {
+  for (const auto& [handle, state] : threads_) {
+    (void)handle;
+    if (state.owns_stack) {
+      (void)memory_.Unmap(state.allocation_address, state.allocation_size);
+    }
+  }
+}
 
 NativeGuestThreadRegistrationStatus NativeGuestThreadRunner::RegisterThread(
     kernel::KernelHandle handle, std::uint64_t stack_address,
@@ -76,6 +99,63 @@ NativeGuestThreadRegistrationStatus NativeGuestThreadRunner::RegisterThread(
   state.continuation = std::make_unique<NativeGuestContinuation>();
   threads_.emplace(handle, std::move(state));
   return NativeGuestThreadRegistrationStatus::kOk;
+}
+
+NativeGuestThreadAllocationResult
+NativeGuestThreadRunner::AllocateAndRegisterThread(kernel::KernelHandle handle,
+                                                   std::uint64_t search_start) {
+  if (!memory_.host_mapped()) {
+    return {NativeGuestThreadRegistrationStatus::kHostMappingRequired};
+  }
+  const auto thread = pthreads_.GetThread(handle);
+  if (!thread) {
+    return {NativeGuestThreadRegistrationStatus::kThreadAttributesNotFound};
+  }
+  if (thread->attributes.stack_address != 0) {
+    const auto status = RegisterThread(handle, thread->attributes.stack_address,
+                                       thread->attributes.stack_size);
+    return {status, thread->attributes.stack_address,
+            thread->attributes.stack_size};
+  }
+
+  const auto granularity = memory_.mapping_granularity();
+  const auto stack_size = AlignUp(thread->attributes.stack_size, granularity);
+  const auto guard_size = AlignUp(thread->attributes.guard_size, granularity);
+  if (!stack_size || !guard_size ||
+      *stack_size > std::numeric_limits<std::uint64_t>::max() - *guard_size) {
+    return {NativeGuestThreadRegistrationStatus::kInvalidArgument};
+  }
+  const auto allocation_size = *guard_size + *stack_size;
+  const auto allocation =
+      memory_.FindUnmappedRange(search_start, allocation_size, granularity);
+  if (!allocation) {
+    return {NativeGuestThreadRegistrationStatus::kGuestStackAllocationFailed};
+  }
+
+  constexpr auto read_write = memory::GuestMemoryProtection::kRead |
+                              memory::GuestMemoryProtection::kWrite;
+  if (!memory_.Map(*allocation, allocation_size, read_write) ||
+      (*guard_size != 0 &&
+       !memory_.Protect(*allocation, *guard_size,
+                        memory::GuestMemoryProtection::kNone)) ||
+      !memory_.Fill(*allocation + *guard_size, *stack_size, std::byte{0})) {
+    if (memory_.IsMapped(*allocation, allocation_size)) {
+      (void)memory_.Unmap(*allocation, allocation_size);
+    }
+    return {NativeGuestThreadRegistrationStatus::kGuestStackAllocationFailed};
+  }
+
+  const auto stack_address = *allocation + *guard_size;
+  const auto status = RegisterThread(handle, stack_address, *stack_size);
+  if (status != NativeGuestThreadRegistrationStatus::kOk) {
+    (void)memory_.Unmap(*allocation, allocation_size);
+    return {status};
+  }
+  auto& state = threads_.at(handle);
+  state.owns_stack = true;
+  state.allocation_address = *allocation;
+  state.allocation_size = allocation_size;
+  return {status, stack_address, *stack_size, *allocation, *guard_size};
 }
 
 NativeGuestThreadRunResult NativeGuestThreadRunner::RunNext() {
@@ -140,8 +220,10 @@ NativeGuestThreadRunResult NativeGuestThreadRunner::RunNext() {
       return {NativeGuestThreadRunStatus::kSchedulerUpdateFailed, *selected,
               execution};
     }
-    threads_.erase(registered);
-    return {NativeGuestThreadRunStatus::kThreadExited, *selected, execution, 1};
+    const auto released = ReleaseThread(registered);
+    return {released ? NativeGuestThreadRunStatus::kThreadExited
+                     : NativeGuestThreadRunStatus::kGuestStackReleaseFailed,
+            *selected, execution, 1};
   }
 
   if (execution.status == NativeGuestExecutionStatus::kGuestExit) {
@@ -150,15 +232,27 @@ NativeGuestThreadRunResult NativeGuestThreadRunner::RunNext() {
       return {NativeGuestThreadRunStatus::kSchedulerUpdateFailed, *selected,
               execution};
     }
-    threads_.erase(registered);
-    return {NativeGuestThreadRunStatus::kThreadExited, *selected, execution, 1};
+    const auto released = ReleaseThread(registered);
+    return {released ? NativeGuestThreadRunStatus::kThreadExited
+                     : NativeGuestThreadRunStatus::kGuestStackReleaseFailed,
+            *selected, execution, 1};
   }
 
   const auto cleaned = pthreads_.ExitCurrent(0);
-  threads_.erase(registered);
-  return {cleaned ? NativeGuestThreadRunStatus::kGuestExecutionFailed
-                  : NativeGuestThreadRunStatus::kSchedulerUpdateFailed,
+  const auto released = ReleaseThread(registered);
+  return {!cleaned    ? NativeGuestThreadRunStatus::kSchedulerUpdateFailed
+          : !released ? NativeGuestThreadRunStatus::kGuestStackReleaseFailed
+                      : NativeGuestThreadRunStatus::kGuestExecutionFailed,
           *selected, execution};
+}
+
+bool NativeGuestThreadRunner::ReleaseThread(
+    std::map<kernel::KernelHandle, ThreadState>::iterator thread) noexcept {
+  const auto released = !thread->second.owns_stack ||
+                        memory_.Unmap(thread->second.allocation_address,
+                                      thread->second.allocation_size);
+  threads_.erase(thread);
+  return released;
 }
 
 NativeGuestThreadRunResult NativeGuestThreadRunner::RunUntilIdle(
@@ -195,6 +289,8 @@ std::string_view NativeGuestThreadRegistrationStatusName(
       return "host-mapping-required";
     case NativeGuestThreadRegistrationStatus::kThreadNotFound:
       return "thread-not-found";
+    case NativeGuestThreadRegistrationStatus::kThreadAttributesNotFound:
+      return "thread-attributes-not-found";
     case NativeGuestThreadRegistrationStatus::kThreadNotReady:
       return "thread-not-ready";
     case NativeGuestThreadRegistrationStatus::kThreadAlreadyRegistered:
@@ -205,6 +301,8 @@ std::string_view NativeGuestThreadRegistrationStatusName(
       return "guest-stack-not-accessible";
     case NativeGuestThreadRegistrationStatus::kGuestStackAlreadyRegistered:
       return "guest-stack-already-registered";
+    case NativeGuestThreadRegistrationStatus::kGuestStackAllocationFailed:
+      return "guest-stack-allocation-failed";
   }
   return "unknown";
 }
@@ -232,6 +330,8 @@ std::string_view NativeGuestThreadRunStatusName(
       return "continuation-capture-failed";
     case NativeGuestThreadRunStatus::kSchedulerUpdateFailed:
       return "scheduler-update-failed";
+    case NativeGuestThreadRunStatus::kGuestStackReleaseFailed:
+      return "guest-stack-release-failed";
     case NativeGuestThreadRunStatus::kGuestExecutionFailed:
       return "guest-execution-failed";
   }

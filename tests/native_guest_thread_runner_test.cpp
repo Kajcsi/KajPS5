@@ -5,6 +5,7 @@
 
 #include "cpu/native_guest_thread_runner.h"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -258,6 +259,50 @@ int main() {
             pump_two_snapshot->exit_value == 10 &&
             runner.registered_thread_count() == 0,
         "bounded guest thread pump did not drain ready work");
+
+  const auto stack_attribute = pthreads.CreateAttribute();
+  Check(stack_attribute && pthreads.SetAttributeStackSize(
+                               stack_attribute.handle, stack_size) ==
+                               kajps5::kernel::KernelStatus::kOk,
+        "automatic guest stack attribute setup failed");
+  const auto automatic = pthreads.CreateThread(
+      "automatic", stack_attribute.handle, peer_code, 0x55);
+  const auto allocation =
+      runner.AllocateAndRegisterThread(automatic.handle, base);
+  const auto guard = memory->QueryRegion(allocation.guard_address);
+  std::array<std::byte, 16> initial_stack{};
+  Check(automatic && allocation && allocation.stack_size == stack_size &&
+            allocation.guard_size == memory->mapping_granularity() && guard &&
+            guard->protection == GuestMemoryProtection::kNone &&
+            memory->CanAccess(allocation.stack_address, allocation.stack_size,
+                              read_write) &&
+            memory->Read(allocation.stack_address, initial_stack),
+        "automatic guest stack mapping is invalid");
+  for (const auto value : initial_stack) {
+    Check(value == std::byte{0}, "automatic guest stack was not zeroed");
+  }
+  const auto automatic_exit = runner.RunNext();
+  const auto automatic_snapshot = scheduler.Snapshot(automatic.handle);
+  Check(automatic_exit.status == NativeGuestThreadRunStatus::kThreadExited &&
+            automatic_snapshot && automatic_snapshot->exit_value == 0x55 &&
+            !memory->IsMapped(allocation.guard_address,
+                              allocation.guard_size + allocation.stack_size) &&
+            pthreads.DestroyAttribute(stack_attribute.handle) ==
+                kajps5::kernel::KernelStatus::kOk,
+        "automatic guest stack was not released after thread exit");
+
+  const auto oversized = pthreads.CreateThread("oversized", 0, peer_code, 0);
+  const auto oversized_allocation =
+      runner.AllocateAndRegisterThread(oversized.handle, base);
+  const auto oversized_snapshot = scheduler.Snapshot(oversized.handle);
+  Check(oversized &&
+            oversized_allocation.status == NativeGuestThreadRegistrationStatus::
+                                               kGuestStackAllocationFailed &&
+            oversized_snapshot &&
+            oversized_snapshot->state ==
+                kajps5::kernel::GuestThreadState::kReady &&
+            pthreads.DiscardReadyThread(oversized.handle),
+        "failed guest stack allocation changed scheduler state");
 
   const auto unregistered =
       pthreads.CreateThread("unregistered", 0, peer_code, 0);

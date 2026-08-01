@@ -119,9 +119,11 @@ calling that handler a second time.
 Native pthread entries use their assigned guest stack and receive the thread
 argument in the System V `RDI` register.
 The native thread runner selects work from the existing scheduler and keeps one
-continuation per registered guest thread. Automatic guest-stack allocation and
-portable fault containment are still required before the command-line tool can
-run a title.
+continuation per registered guest thread. For threads without a supplied stack,
+it maps the requested pthread stack size, protects its guard page, zeroes the
+writable range, and releases the mapping after exit. Process-entry integration
+and portable fault containment are still required before the command-line tool
+can run a title.
 
 Known runtime data never points into host memory. Startup maps one checked
 16 KiB guest page for the stack guard, process name, and two libc need flags.

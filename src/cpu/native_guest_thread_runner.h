@@ -26,11 +26,26 @@ enum class NativeGuestThreadRegistrationStatus {
   kInvalidArgument,
   kHostMappingRequired,
   kThreadNotFound,
+  kThreadAttributesNotFound,
   kThreadNotReady,
   kThreadAlreadyRegistered,
   kGuestCodeNotExecutable,
   kGuestStackNotAccessible,
   kGuestStackAlreadyRegistered,
+  kGuestStackAllocationFailed,
+};
+
+struct NativeGuestThreadAllocationResult {
+  NativeGuestThreadRegistrationStatus status =
+      NativeGuestThreadRegistrationStatus::kOk;
+  std::uint64_t stack_address = 0;
+  std::uint64_t stack_size = 0;
+  std::uint64_t guard_address = 0;
+  std::uint64_t guard_size = 0;
+
+  [[nodiscard]] explicit operator bool() const noexcept {
+    return status == NativeGuestThreadRegistrationStatus::kOk;
+  }
 };
 
 enum class NativeGuestThreadRunStatus {
@@ -44,6 +59,7 @@ enum class NativeGuestThreadRunStatus {
   kThreadStateInvalid,
   kContinuationCaptureFailed,
   kSchedulerUpdateFailed,
+  kGuestStackReleaseFailed,
   kGuestExecutionFailed,
 };
 
@@ -60,6 +76,7 @@ class NativeGuestThreadRunner final {
       memory::GuestMemory& memory, kernel::GuestScheduler& scheduler,
       kernel::PthreadService& pthreads,
       NativeGuestExecutionContext& execution_context) noexcept;
+  ~NativeGuestThreadRunner();
 
   NativeGuestThreadRunner(const NativeGuestThreadRunner&) = delete;
   NativeGuestThreadRunner& operator=(const NativeGuestThreadRunner&) = delete;
@@ -67,6 +84,8 @@ class NativeGuestThreadRunner final {
   [[nodiscard]] NativeGuestThreadRegistrationStatus RegisterThread(
       kernel::KernelHandle handle, std::uint64_t stack_address,
       std::uint64_t stack_size);
+  [[nodiscard]] NativeGuestThreadAllocationResult AllocateAndRegisterThread(
+      kernel::KernelHandle handle, std::uint64_t search_start);
   [[nodiscard]] NativeGuestThreadRunResult RunNext();
   [[nodiscard]] NativeGuestThreadRunResult RunUntilIdle(
       std::size_t maximum_slices);
@@ -77,8 +96,14 @@ class NativeGuestThreadRunner final {
     std::uint64_t stack_address = 0;
     std::uint64_t stack_size = 0;
     bool started = false;
+    bool owns_stack = false;
+    std::uint64_t allocation_address = 0;
+    std::uint64_t allocation_size = 0;
     std::unique_ptr<NativeGuestContinuation> continuation;
   };
+
+  [[nodiscard]] bool ReleaseThread(
+      std::map<kernel::KernelHandle, ThreadState>::iterator thread) noexcept;
 
   memory::GuestMemory& memory_;
   kernel::GuestScheduler& scheduler_;

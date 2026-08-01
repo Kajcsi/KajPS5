@@ -74,7 +74,8 @@ The current core includes:
   not call the completed handler twice.
 - A native thread runner uses the existing scheduler and one shared execution
   lane. It runs registered guest stacks, parks blocked or yielded threads, and
-  records normal thread returns through the pthread service.
+  records normal thread returns through the pthread service. It can allocate a
+  zeroed stack with a no-access guard page from the pthread attributes.
 - Small public and generated test fixtures, including an ELF that loads
   without running guest code and controlled x86-64 leaf programs used only by
   tests.
