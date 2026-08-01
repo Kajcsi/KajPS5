@@ -317,6 +317,13 @@ argument behavior in `src/kernel/pthread.cpp` at commit
 `a65d17a5d689257a35644e01e9d15539361f0bf0`. No upstream assembly or source
 was copied.
 
+The native thread runner follows KytyPS5's guest entry, stack, and thread-exit
+flow in `src/kernel/pthread.cpp`. Its ready, blocked, resumed, and exited state
+transitions also adapt SharpEmu's behavior in
+`src/SharpEmu.Core/Cpu/Native/DirectExecutionBackend.cs` at commit
+`7c9740fee8a633e17b145c6bc6d794e41d46c73f`. No upstream runner source was
+copied.
+
 The process-time handlers in `src/hle/kernel_clock_exports.cpp` and
 `tests/hle_kernel_clock_exports_test.cpp` adapt the matching process-time,
 counter, and frequency behavior from the pinned KytyPS5

@@ -72,6 +72,9 @@ The current core includes:
   thread wakes, the handler is retried and guest code resumes with its final
   return value. A cooperative yield uses the same continuation path but does
   not call the completed handler twice.
+- A native thread runner uses the existing scheduler and one shared execution
+  lane. It runs registered guest stacks, parks blocked or yielded threads, and
+  records normal thread returns through the pthread service.
 - Small public and generated test fixtures, including an ELF that loads
   without running guest code and controlled x86-64 leaf programs used only by
   tests.

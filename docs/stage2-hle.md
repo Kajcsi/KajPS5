@@ -118,8 +118,10 @@ ready scheduler thread and resumes after the completed yield import without
 calling that handler a second time.
 Native pthread entries use their assigned guest stack and receive the thread
 argument in the System V `RDI` register.
-Portable fault containment and a multi-thread execution loop are still
-required before the command-line tool can run a title.
+The native thread runner selects work from the existing scheduler and keeps one
+continuation per registered guest thread. Automatic guest-stack allocation and
+portable fault containment are still required before the command-line tool can
+run a title.
 
 Known runtime data never points into host memory. Startup maps one checked
 16 KiB guest page for the stack guard, process name, and two libc need flags.

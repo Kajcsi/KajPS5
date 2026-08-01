@@ -93,6 +93,8 @@
       selected guest thread.
 - [x] Return a native pthread yield to the scheduler and resume it without a
       second HLE dispatch.
+- [x] Run selected native guest threads through one shared execution lane with
+      per-thread continuations and registered guest stacks.
 - [x] Build and own native HLE trampolines for all resolved executable imports.
 - Expand thread, event, file, and time coverage as their HLE bridges grow.
 - Compare small, repeatable traces with both upstream projects.
