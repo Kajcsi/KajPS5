@@ -94,6 +94,9 @@ int main() {
   const auto stack_address = base + 0x4000;
   const auto stack_size = std::uint64_t{0x4000};
   const auto parameters_address = stack_address + 0x100;
+  const auto worker_stack_address = base + 0x8000;
+  const auto worker_stack_size = std::uint64_t{0x4000};
+  const auto worker_parameters_address = worker_stack_address + 0x100;
   const auto exit_handler_address = std::uint64_t{0x123456789abcdef0};
 
   Check(memory->Map(
@@ -101,6 +104,9 @@ int main() {
             GuestMemoryProtection::kRead | GuestMemoryProtection::kWrite) &&
             memory->Map(
                 stack_address, stack_size,
+                GuestMemoryProtection::kRead | GuestMemoryProtection::kWrite) &&
+            memory->Map(
+                worker_stack_address, worker_stack_size,
                 GuestMemoryProtection::kRead | GuestMemoryProtection::kWrite),
         "guest entry mappings failed");
 
@@ -291,13 +297,35 @@ int main() {
                          parameters_address, 0, &execution_context)
                 .status == NativeGuestExecutionStatus::kInvalidArgument,
         "suspended execution context accepted a new guest entry");
+  kajps5::cpu::NativeGuestContinuation continuation;
+  Check(executor.TakeContinuation(execution_context, continuation) &&
+            continuation.valid() && !execution_context.suspended(),
+        "blocked guest continuation did not leave the shared execution lane");
+  const auto worker = scheduler.CreateThread("native-worker", 0);
+  Check(worker && scheduler.SelectNext() == worker.handle,
+        "second native guest thread did not start");
+  const auto worker_result = executor.Execute(
+      *memory, code_address, worker_stack_address, worker_stack_size,
+      worker_parameters_address, 0, &execution_context);
+  Check(worker_result.status == NativeGuestExecutionStatus::kOk &&
+            worker_result.return_value == 0x1122334455667788 &&
+            scheduler.ExitCurrent(worker_result.return_value),
+        "shared execution lane did not run a second guest thread");
+  auto unrelated_memory = GuestMemory::CreateHostMapped(0x10000);
+  Check(unrelated_memory &&
+            executor.Resume(*unrelated_memory, continuation, execution_context)
+                    .status == NativeGuestExecutionStatus::kInvalidArgument &&
+            continuation.valid() && !execution_context.suspended(),
+        "guest continuation accepted a different memory owner");
   Check(scheduler.WakeBlockedThreads("native-hle-test", 1) == 1 &&
             scheduler.SelectNext() == waiter.handle,
         "blocked native guest thread did not wake");
-  const auto resumed = executor.Resume(*memory, execution_context);
+  const auto resumed =
+      executor.Resume(*memory, continuation, execution_context);
   Check(resumed.status == NativeGuestExecutionStatus::kOk &&
             resumed.return_value == 0x16a && blocking_dispatch_count == 2 &&
-            !execution_context.active() && !execution_context.suspended(),
+            !continuation.valid() && !execution_context.active() &&
+            !execution_context.suspended(),
         "woken HLE call did not resume the saved guest continuation");
   Check(executor.Resume(*memory, execution_context).status ==
             NativeGuestExecutionStatus::kInvalidArgument,
@@ -356,7 +384,7 @@ int main() {
                 .status == NativeGuestExecutionStatus::kGuestStackNotAccessible,
         "non-writable guest stack was accepted");
   Check(executor.Execute(*memory, code_address, stack_address, stack_size,
-                         base + 0x9000, 0)
+                         base + 0xd000, 0)
                 .status ==
             NativeGuestExecutionStatus::kGuestParametersNotReadable,
         "unmapped guest entry parameters were accepted");

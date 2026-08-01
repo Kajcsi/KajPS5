@@ -19,6 +19,37 @@ inline constexpr std::uint64_t kMinimumNativeGuestStackSize = 4096;
 
 class NativeHleTrampoline;
 
+class NativeGuestContinuation final {
+ public:
+  NativeGuestContinuation() = default;
+  NativeGuestContinuation(const NativeGuestContinuation&) = delete;
+  NativeGuestContinuation& operator=(const NativeGuestContinuation&) = delete;
+  NativeGuestContinuation(NativeGuestContinuation&&) = delete;
+  NativeGuestContinuation& operator=(NativeGuestContinuation&&) = delete;
+
+  [[nodiscard]] bool valid() const noexcept { return valid_ != 0; }
+
+ private:
+  friend class NativeGuestExecutor;
+
+  using ResumeHleDispatch = std::uint64_t (*)(void*, const std::uint64_t*,
+                                              std::byte*,
+                                              const std::uint64_t*) noexcept;
+
+  std::uint64_t valid_ = 0;
+  hle::HleContextStatus hle_status_ = hle::HleContextStatus::kOk;
+  ResumeHleDispatch resume_hle_dispatch_ = nullptr;
+  void* resume_hle_state_ = nullptr;
+  const std::uint64_t* resume_arguments_ = nullptr;
+  std::uint64_t resume_instruction_pointer_ = 0;
+  std::uint64_t resume_stack_pointer_ = 0;
+  std::uint64_t root_return_slot_ = 0;
+  std::uint64_t guest_memory_base_ = 0;
+  std::uint64_t guest_memory_end_ = 0;
+  std::array<std::uint64_t, 6> nonvolatile_registers_{};
+  alignas(16) std::array<std::byte, 512> floating_state_{};
+};
+
 class NativeGuestExecutionContext final {
  public:
   NativeGuestExecutionContext() = default;
@@ -59,6 +90,8 @@ class NativeGuestExecutionContext final {
   std::uint64_t resume_instruction_pointer_ = 0;
   std::uint64_t resume_stack_pointer_ = 0;
   std::uint64_t root_return_slot_ = 0;
+  std::uint64_t guest_memory_base_ = 0;
+  std::uint64_t guest_memory_end_ = 0;
   std::array<std::uint64_t, 6> nonvolatile_registers_{};
   alignas(16) std::array<std::byte, 512> floating_state_{};
 };
@@ -113,6 +146,12 @@ class NativeGuestExecutor final {
   [[nodiscard]] NativeGuestExecutionResult Resume(
       memory::GuestMemory& memory,
       NativeGuestExecutionContext& execution_context) const;
+  [[nodiscard]] NativeGuestExecutionResult Resume(
+      memory::GuestMemory& memory, NativeGuestContinuation& continuation,
+      NativeGuestExecutionContext& execution_context) const;
+  [[nodiscard]] bool TakeContinuation(
+      NativeGuestExecutionContext& execution_context,
+      NativeGuestContinuation& continuation) const noexcept;
 
  private:
   [[nodiscard]] static NativeGuestExecutionResult RunGuestEntry(
@@ -126,6 +165,7 @@ class NativeGuestExecutor final {
       std::uint64_t hle_return_value);
   static void ResetExecutionContext(
       NativeGuestExecutionContext& execution_context) noexcept;
+  static void ResetContinuation(NativeGuestContinuation& continuation) noexcept;
 };
 
 [[nodiscard]] std::string_view NativeGuestExecutionStatusName(

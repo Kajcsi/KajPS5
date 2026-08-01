@@ -301,8 +301,9 @@ wake, handler retry, and guest-resume behavior in SharpEmu
 `src/SharpEmu.HLE/GuestThreadExecution.cs` and
 `src/SharpEmu.Core/Cpu/Native/DirectExecutionBackend.Imports.cs` at commit
 `7c9740fee8a633e17b145c6bc6d794e41d46c73f`. KajPS5 stores the continuation
-inside its C++ execution context and uses its existing guest scheduler. No
-upstream continuation or trampoline source was copied.
+in a checked C++ record, parks it per guest thread, and reuses its existing
+scheduler and shared native execution lane. No upstream continuation or
+trampoline source was copied.
 
 The process-time handlers in `src/hle/kernel_clock_exports.cpp` and
 `tests/hle_kernel_clock_exports_test.cpp` adapt the matching process-time,

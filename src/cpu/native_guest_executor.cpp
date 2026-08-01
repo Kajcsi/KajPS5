@@ -413,6 +413,8 @@ NativeGuestExecutionResult NativeGuestExecutor::Execute(
 #if !defined(_M_X64) && !defined(__x86_64__)
   return {NativeGuestExecutionStatus::kUnsupportedHost, 0};
 #else
+  context->guest_memory_base_ = memory.base_address();
+  context->guest_memory_end_ = memory.end_address();
   context->root_return_slot_ = stack_top - sizeof(std::uint64_t);
   const auto result =
       RunGuestEntry(memory, entry_point, stack_top, root_frame,
@@ -437,6 +439,8 @@ NativeGuestExecutionResult NativeGuestExecutor::Resume(
   constexpr auto captured_call_frame_bytes = 7 * sizeof(std::uint64_t);
   if (!memory.host_mapped() || execution_context.active() ||
       !execution_context.suspended() ||
+      execution_context.guest_memory_base_ != memory.base_address() ||
+      execution_context.guest_memory_end_ != memory.end_address() ||
       execution_context.resume_hle_dispatch_ == nullptr ||
       execution_context.resume_hle_state_ == nullptr ||
       execution_context.resume_arguments_ == nullptr ||
@@ -485,6 +489,62 @@ NativeGuestExecutionResult NativeGuestExecutor::Resume(
   }
   return result;
 #endif
+}
+
+NativeGuestExecutionResult NativeGuestExecutor::Resume(
+    memory::GuestMemory& memory, NativeGuestContinuation& continuation,
+    NativeGuestExecutionContext& execution_context) const {
+  if (!continuation.valid_ || execution_context.active() ||
+      execution_context.control_request_ !=
+          NativeGuestExecutionContext::kControlNone ||
+      !memory.host_mapped() ||
+      continuation.guest_memory_base_ != memory.base_address() ||
+      continuation.guest_memory_end_ != memory.end_address()) {
+    return {NativeGuestExecutionStatus::kInvalidArgument, 0};
+  }
+
+  execution_context.control_request_ =
+      NativeGuestExecutionContext::kControlBlocked;
+  execution_context.hle_status_ = continuation.hle_status_;
+  execution_context.resume_hle_dispatch_ = continuation.resume_hle_dispatch_;
+  execution_context.resume_hle_state_ = continuation.resume_hle_state_;
+  execution_context.resume_arguments_ = continuation.resume_arguments_;
+  execution_context.resume_instruction_pointer_ =
+      continuation.resume_instruction_pointer_;
+  execution_context.resume_stack_pointer_ = continuation.resume_stack_pointer_;
+  execution_context.root_return_slot_ = continuation.root_return_slot_;
+  execution_context.guest_memory_base_ = continuation.guest_memory_base_;
+  execution_context.guest_memory_end_ = continuation.guest_memory_end_;
+  execution_context.nonvolatile_registers_ =
+      continuation.nonvolatile_registers_;
+  execution_context.floating_state_ = continuation.floating_state_;
+  ResetContinuation(continuation);
+  return Resume(memory, execution_context);
+}
+
+bool NativeGuestExecutor::TakeContinuation(
+    NativeGuestExecutionContext& execution_context,
+    NativeGuestContinuation& continuation) const noexcept {
+  if (!execution_context.suspended() || continuation.valid_) {
+    return false;
+  }
+
+  continuation.valid_ = true;
+  continuation.hle_status_ = execution_context.hle_status_;
+  continuation.resume_hle_dispatch_ = execution_context.resume_hle_dispatch_;
+  continuation.resume_hle_state_ = execution_context.resume_hle_state_;
+  continuation.resume_arguments_ = execution_context.resume_arguments_;
+  continuation.resume_instruction_pointer_ =
+      execution_context.resume_instruction_pointer_;
+  continuation.resume_stack_pointer_ = execution_context.resume_stack_pointer_;
+  continuation.root_return_slot_ = execution_context.root_return_slot_;
+  continuation.guest_memory_base_ = execution_context.guest_memory_base_;
+  continuation.guest_memory_end_ = execution_context.guest_memory_end_;
+  continuation.nonvolatile_registers_ =
+      execution_context.nonvolatile_registers_;
+  continuation.floating_state_ = execution_context.floating_state_;
+  ResetExecutionContext(execution_context);
+  return true;
 }
 
 NativeGuestExecutionResult NativeGuestExecutor::RunGuestEntry(
@@ -545,8 +605,26 @@ void NativeGuestExecutor::ResetExecutionContext(
   execution_context.resume_instruction_pointer_ = 0;
   execution_context.resume_stack_pointer_ = 0;
   execution_context.root_return_slot_ = 0;
+  execution_context.guest_memory_base_ = 0;
+  execution_context.guest_memory_end_ = 0;
   execution_context.nonvolatile_registers_.fill(0);
   execution_context.floating_state_.fill(std::byte{0});
+}
+
+void NativeGuestExecutor::ResetContinuation(
+    NativeGuestContinuation& continuation) noexcept {
+  continuation.valid_ = false;
+  continuation.hle_status_ = hle::HleContextStatus::kOk;
+  continuation.resume_hle_dispatch_ = nullptr;
+  continuation.resume_hle_state_ = nullptr;
+  continuation.resume_arguments_ = nullptr;
+  continuation.resume_instruction_pointer_ = 0;
+  continuation.resume_stack_pointer_ = 0;
+  continuation.root_return_slot_ = 0;
+  continuation.guest_memory_base_ = 0;
+  continuation.guest_memory_end_ = 0;
+  continuation.nonvolatile_registers_.fill(0);
+  continuation.floating_state_.fill(std::byte{0});
 }
 
 std::string_view NativeGuestExecutionStatusName(

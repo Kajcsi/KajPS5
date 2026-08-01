@@ -107,11 +107,14 @@ boundary accepts faults only from guest memory, restores the saved host state,
 and reports the exception code, instruction address, and accessed address.
 When a handler blocks the current scheduler thread, the trampoline saves the
 guest return address, stack, nonvolatile registers, and floating-point state.
-It then returns to the host. After the shared scheduler wakes and selects that
-thread, the executor retries the handler and resumes after the import with its
-final return value. Controlled tests cover this full block, wake, retry, and
-resume sequence. Portable fault containment and a multi-thread execution loop
-are still required before the command-line tool can run a title.
+It then returns to the host. The continuation can leave the shared execution
+lane while another selected scheduler thread runs on a separate guest stack.
+After the first thread wakes and is selected again, the executor retries the
+handler and resumes after the import with its final return value. A
+continuation is bound to its original guest-memory owner. Controlled tests
+cover this full block, park, interleave, wake, retry, and resume sequence.
+Portable fault containment and a multi-thread execution loop are still
+required before the command-line tool can run a title.
 
 Known runtime data never points into host memory. Startup maps one checked
 16 KiB guest page for the stack guard, process name, and two libc need flags.

@@ -67,8 +67,10 @@ The current core includes:
   back to the saved host stack before a C++ handler runs. On Windows, guest
   access violations and illegal instructions return a checked fault result;
   they do not leave the runtime on the guest stack. A blocked HLE call saves
-  its guest continuation, returns control to the scheduler, retries after the
-  thread wakes, and resumes with the handler's final return value.
+  its guest continuation and returns control to the scheduler. The shared HLE
+  table and execution lane can run another selected thread. After the first
+  thread wakes, the handler is retried and guest code resumes with its final
+  return value.
 - Small public and generated test fixtures, including an ELF that loads
   without running guest code and controlled x86-64 leaf programs used only by
   tests.
