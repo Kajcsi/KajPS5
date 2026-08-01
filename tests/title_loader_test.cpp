@@ -209,6 +209,14 @@ int main(int argc, char** argv) {
   Check(argc == 2, "CLI executable path was not supplied");
   const auto fixture_path =
       std::filesystem::current_path() / "kajps5-public-run.elf";
+  const auto module_directory =
+      std::filesystem::current_path() / "kajps5-public-modules";
+  std::error_code setup_error;
+  std::filesystem::remove_all(module_directory, setup_error);
+  setup_error.clear();
+  Check(std::filesystem::create_directory(module_directory, setup_error) &&
+            !setup_error,
+        "public CLI module directory could not be created");
   {
     std::ofstream fixture(fixture_path, std::ios::binary | std::ios::trunc);
     Check(static_cast<bool>(fixture), "public CLI fixture could not be opened");
@@ -217,17 +225,29 @@ int main(int argc, char** argv) {
     Check(static_cast<bool>(fixture),
           "public CLI fixture could not be written");
   }
+  {
+    std::ofstream module(module_directory / "public-module.prx",
+                         std::ios::binary | std::ios::trunc);
+    Check(static_cast<bool>(module), "public CLI module could not be opened");
+    module.write(reinterpret_cast<const char*>(image.data()),
+                 static_cast<std::streamsize>(image.size()));
+    Check(static_cast<bool>(module), "public CLI module could not be written");
+  }
 #if defined(_WIN32)
   const std::string command = "\"\"" + std::string(argv[1]) +
                               "\" --run-elf \"" + fixture_path.string() +
-                              "\"\"";
+                              "\" --module-dir \"" +
+                              module_directory.string() + "\"\"";
 #else
   const std::string command = '"' + std::string(argv[1]) + "\" --run-elf \"" +
-                              fixture_path.string() + '"';
+                              fixture_path.string() + "\" --module-dir \"" +
+                              module_directory.string() + '"';
 #endif
   const auto cli_status = std::system(command.c_str());
   std::error_code remove_error;
   std::filesystem::remove(fixture_path, remove_error);
+  remove_error.clear();
+  std::filesystem::remove_all(module_directory, remove_error);
   if (cli_status != 0) {
     std::cerr << "title_loader_test: CLI command=" << command << '\n';
   }

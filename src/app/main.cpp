@@ -9,6 +9,7 @@
 #include <iostream>
 #include <limits>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -42,6 +43,7 @@ namespace {
 constexpr std::uint64_t kMaximumExecutableFileSize = 512U * 1024U * 1024U;
 constexpr std::uint64_t kMaximumTraceMemorySize = 512U * 1024U * 1024U;
 constexpr std::size_t kMaximumTitleRunSlices = 1000000;
+constexpr std::size_t kMaximumModuleOverlayDirectories = 16;
 
 std::optional<std::uint64_t> AlignUp(std::uint64_t value,
                                      std::uint64_t alignment) noexcept {
@@ -296,7 +298,9 @@ int TraceExecutableFile(const char* path) {
   return 0;
 }
 
-int RunExecutableFile(const char* path) {
+int RunExecutableFile(
+    const char* path,
+    std::span<const std::string_view> module_overlay_directories) {
   std::string file_error;
   auto image = ReadExecutableFile(path, file_error);
   if (!image) {
@@ -314,6 +318,11 @@ int RunExecutableFile(const char* path) {
     return 2;
   }
   const auto title_root = title_path.parent_path();
+  if (module_overlay_directories.size() >
+      kMaximumModuleOverlayDirectories) {
+    std::cerr << "Title preparation failed: too many module directories\n";
+    return 2;
+  }
 
   kajps5::kernel::KernelRuntime intake_runtime;
   const auto mount_status =
@@ -323,12 +332,51 @@ int RunExecutableFile(const char* path) {
               << " (kernel status " << static_cast<int>(mount_status) << ")\n";
     return 2;
   }
-  auto adjacent =
-      kajps5::loader::DiscoverAdjacentModules(intake_runtime.files());
+  std::vector<std::filesystem::path> module_overlay_roots;
+  std::vector<std::string> module_guest_directories = {
+      "/app0/sce_module", "/app0/sce_modules"};
+  module_overlay_roots.reserve(module_overlay_directories.size());
+  module_guest_directories.reserve(2 + module_overlay_directories.size());
+  for (std::size_t index = 0; index < module_overlay_directories.size();
+       ++index) {
+    const auto directory = module_overlay_directories[index];
+    if (directory.empty() || directory.find('\0') != std::string_view::npos) {
+      std::cerr << "Title preparation failed: invalid module directory\n";
+      return 2;
+    }
+    std::error_code overlay_error;
+    auto overlay_root = std::filesystem::absolute(
+        std::filesystem::path(std::string(directory)), overlay_error);
+    if (overlay_error) {
+      std::cerr << "Title preparation failed: cannot resolve module directory\n";
+      return 2;
+    }
+    auto guest_root =
+        "/module_overlay/" + std::to_string(module_overlay_roots.size());
+    const auto overlay_mount_status =
+        intake_runtime.files().MountReadOnly(guest_root, overlay_root);
+    if (overlay_mount_status != kajps5::kernel::KernelStatus::kOk) {
+      std::cerr << "Title preparation failed: cannot mount module directory"
+                << " (kernel status "
+                << static_cast<int>(overlay_mount_status) << ")\n";
+      return 2;
+    }
+    module_overlay_roots.push_back(std::move(overlay_root));
+    module_guest_directories.push_back(std::move(guest_root));
+  }
+  std::vector<std::string_view> module_search_directories;
+  module_search_directories.reserve(module_guest_directories.size());
+  for (const auto& directory : module_guest_directories) {
+    module_search_directories.push_back(directory);
+  }
+  auto adjacent = kajps5::loader::DiscoverAdjacentModules(
+      intake_runtime.files(), module_search_directories);
   std::cout << "title.modules.status="
             << kajps5::loader::AdjacentModuleLoadStatusName(adjacent.status)
             << '\n'
-            << "title.modules.count=" << adjacent.modules.size() << '\n';
+            << "title.modules.count=" << adjacent.modules.size() << '\n'
+            << "title.module_overlays.count=" << module_overlay_roots.size()
+            << '\n';
   if (!adjacent) {
     std::cerr << "Title module intake failed: "
               << kajps5::loader::AdjacentModuleLoadStatusName(adjacent.status);
@@ -392,6 +440,19 @@ int RunExecutableFile(const char* path) {
               << ")\n";
     return 3;
   }
+  for (std::size_t index = 0; index < module_overlay_roots.size(); ++index) {
+    const auto overlay_mount_status =
+        prepared.session->kernel_runtime().files().MountReadOnly(
+            module_guest_directories[index + 2],
+            module_overlay_roots[index]);
+    if (overlay_mount_status != kajps5::kernel::KernelStatus::kOk) {
+      std::cerr << "Title preparation failed: cannot mount runtime module "
+                   "directory"
+                << " (kernel status "
+                << static_cast<int>(overlay_mount_status) << ")\n";
+      return 3;
+    }
+  }
 
   const auto started =
       prepared.session->Start(process_image_name, prepared.stack_search_start);
@@ -434,13 +495,23 @@ int main(int argc, char** argv) {
   if (argc == 3 && std::string_view(argv[1]) == "--trace-elf") {
     return TraceExecutableFile(argv[2]);
   }
-  if (argc == 3 && std::string_view(argv[1]) == "--run-elf") {
-    return RunExecutableFile(argv[2]);
+  if (argc >= 3 && std::string_view(argv[1]) == "--run-elf") {
+    std::vector<std::string_view> module_directories;
+    for (int index = 3; index < argc;) {
+      if (std::string_view(argv[index]) != "--module-dir" ||
+          index + 1 >= argc) {
+        std::cerr << "Usage: kajps5 --run-elf <path> [--module-dir <path>]\n";
+        return 1;
+      }
+      module_directories.emplace_back(argv[index + 1]);
+      index += 2;
+    }
+    return RunExecutableFile(argv[2], module_directories);
   }
 
   if (argc > 1) {
     std::cerr << "Usage: kajps5 [--version | --trace-elf <path> | --run-elf "
-                 "<path>]\n";
+                 "<path> [--module-dir <path>]]\n";
     return 1;
   }
 

@@ -139,6 +139,15 @@ partial module batch, unresolved required imports, and TLS titles that the
 runtime cannot start correctly. It is a controlled research path, not a claim
 of game compatibility.
 
+Add a separate, read-only module folder without copying it into the title:
+
+```powershell
+_Build\src\Release\kajps5.exe --run-elf R:\path\public-sample.elf --module-dir R:\path\public-modules
+```
+
+The option can be repeated. KajPS5 accepts at most 16 module folders and keeps
+each folder in a separate confined guest mount.
+
 ## Legal use
 
 KajPS5 is for research and education. The project does not include games,

@@ -178,6 +178,11 @@ reverse order. A failed batch does not expose a title session. Static TLS
 layout is preserved, but title execution still stops until the native thread
 path can install that layout.
 
+The run command can add up to 16 explicit read-only module directories. Each
+directory receives its own confined guest mount and joins the same bounded,
+parse-before-use module batch. The loader does not copy a module into the title
+folder or the repository.
+
 The separate controlled native tests are documented in `stage2-cpu.md` and
 `stage2-hle.md`.
 
