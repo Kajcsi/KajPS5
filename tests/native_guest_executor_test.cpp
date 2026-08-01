@@ -93,6 +93,7 @@ int main() {
   const auto blocked_hle_code_address = base + 0x300;
   const auto yielded_hle_code_address = base + 0x500;
   const auto thread_code_address = base + 0x600;
+  const auto function_code_address = base + 0x700;
   const auto stack_address = base + 0x4000;
   const auto stack_size = std::uint64_t{0x4000};
   const auto parameters_address = stack_address + 0x100;
@@ -274,6 +275,12 @@ int main() {
                                                             std::byte{0x0b}};
   const std::array<std::byte, 4> thread_entry = {
       std::byte{0x48}, std::byte{0x89}, std::byte{0xf8}, std::byte{0xc3}};
+  const std::array<std::byte, 19> function_entry = {
+      std::byte{0x48}, std::byte{0x89}, std::byte{0xf8}, std::byte{0x48},
+      std::byte{0x01}, std::byte{0xf0}, std::byte{0x48}, std::byte{0x01},
+      std::byte{0xd0}, std::byte{0x48}, std::byte{0x01}, std::byte{0xc8},
+      std::byte{0x4c}, std::byte{0x01}, std::byte{0xc0}, std::byte{0x4c},
+      std::byte{0x01}, std::byte{0xc8}, std::byte{0xc3}};
 
   Check(memory->Initialize(code_address, complete_entry) &&
             memory->Initialize(hle_code_address, hle_entry) &&
@@ -283,6 +290,7 @@ int main() {
             memory->Initialize(blocked_hle_code_address, blocked_hle_entry) &&
             memory->Initialize(yielded_hle_code_address, yielded_hle_entry) &&
             memory->Initialize(thread_code_address, thread_entry) &&
+            memory->Initialize(function_code_address, function_entry) &&
             memory->Protect(
                 code_address, 0x1000,
                 GuestMemoryProtection::kRead | GuestMemoryProtection::kExecute),
@@ -306,6 +314,20 @@ int main() {
   Check(thread_entry_result.status == NativeGuestExecutionStatus::kOk &&
             thread_entry_result.return_value == 0xcafebabedeadbeefULL,
         "guest thread entry did not receive its System V argument");
+
+  const std::array<std::uint64_t, 6> function_arguments = {1, 2, 3, 4, 5, 6};
+  const auto function_result = executor.ExecuteFunction(
+      *memory, function_code_address, stack_address, stack_size,
+      function_arguments, &execution_context);
+  Check(function_result.status == NativeGuestExecutionStatus::kOk &&
+            function_result.return_value == 21,
+        "guest function did not receive all System V integer arguments");
+  const std::array<std::uint64_t, 7> excessive_arguments{};
+  Check(executor.ExecuteFunction(*memory, function_code_address, stack_address,
+                                 stack_size, excessive_arguments,
+                                 &execution_context)
+                .status == NativeGuestExecutionStatus::kInvalidArgument,
+        "guest function accepted too many register arguments");
 
   const auto hle =
       executor.Execute(*memory, hle_code_address, stack_address, stack_size,

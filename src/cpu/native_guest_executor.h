@@ -8,6 +8,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <string_view>
 
 #include "core/memory/guest_memory.h"
@@ -155,6 +156,11 @@ class NativeGuestExecutor final {
       std::uint64_t stack_address, std::uint64_t stack_size,
       std::uint64_t argument,
       NativeGuestExecutionContext* execution_context = nullptr) const;
+  [[nodiscard]] NativeGuestExecutionResult ExecuteFunction(
+      memory::GuestMemory& memory, std::uint64_t entry_point,
+      std::uint64_t stack_address, std::uint64_t stack_size,
+      std::span<const std::uint64_t> arguments,
+      NativeGuestExecutionContext* execution_context = nullptr) const;
   [[nodiscard]] NativeGuestExecutionResult Resume(
       memory::GuestMemory& memory,
       NativeGuestExecutionContext& execution_context) const;
@@ -169,13 +175,13 @@ class NativeGuestExecutor final {
   [[nodiscard]] NativeGuestExecutionResult ExecuteEntry(
       memory::GuestMemory& memory, std::uint64_t entry_point,
       std::uint64_t stack_address, std::uint64_t stack_size,
-      std::uint64_t first_argument, std::uint64_t second_argument,
-      bool require_readable_first_argument,
+      std::span<const std::uint64_t> arguments,
+      std::uint64_t readable_first_argument_size,
       NativeGuestExecutionContext* execution_context) const;
   [[nodiscard]] static NativeGuestExecutionResult RunGuestEntry(
       memory::GuestMemory& memory, std::uint64_t entry_point,
       std::uint64_t stack_top, std::uint64_t root_frame,
-      std::uint64_t first_argument, std::uint64_t second_argument,
+      const std::array<std::uint64_t, 6>& arguments,
       NativeGuestExecutionContext& execution_context);
   [[nodiscard]] static NativeGuestExecutionResult RunGuestContinuation(
       memory::GuestMemory& memory,

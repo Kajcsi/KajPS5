@@ -103,6 +103,8 @@
       process mapping.
 - [x] Create and roll back the main scheduler thread from checked launch
       metadata.
+- [x] Pass up to six System V integer arguments through the shared native guest
+      entry bridge.
 - [x] Build and own native HLE trampolines for all resolved executable imports.
 - Expand thread, event, file, and time coverage as their HLE bridges grow.
 - Compare small, repeatable traces with both upstream projects.

@@ -330,6 +330,9 @@ checked UTF-8 argument placement is adapted without its managed CPU runtime.
 The process launcher connects checked loader metadata to that entry path and
 keeps SharpEmu's explicit startup failure boundary. It does not copy SharpEmu
 runtime code or add a second dispatcher.
+The general guest-function entry path extends the same bridge to the six System
+V integer argument registers. This supports KytyPS5's three-argument module
+initializer ABI and SharpEmu's zeroed module frame without another executor.
 
 The process-time handlers in `src/hle/kernel_clock_exports.cpp` and
 `tests/hle_kernel_clock_exports_test.cpp` adapt the matching process-time,

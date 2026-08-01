@@ -5,6 +5,7 @@
 
 #include "cpu/native_guest_executor.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <initializer_list>
 #include <limits>
@@ -137,8 +138,8 @@ NativeGuestExecutionResult ControlResult(
 NativeGuestExecutionResult RunGuestEntryBridge(
     std::uint64_t entry_point, std::uint64_t guest_memory_begin,
     std::uint64_t guest_memory_end, std::uint64_t stack_top,
-    std::uint64_t root_frame, std::uint64_t first_argument,
-    std::uint64_t second_argument, volatile std::uint64_t* host_stack_slot,
+    std::uint64_t root_frame, const std::array<std::uint64_t, 6>& arguments,
+    volatile std::uint64_t* host_stack_slot,
     volatile std::uint64_t* recovery_address,
     volatile std::uint64_t* control_request,
     hle::HleContextStatus* hle_status) {
@@ -160,8 +161,12 @@ NativeGuestExecutionResult RunGuestEntryBridge(
   EmitMoveImmediate(bridge, {0x48, 0xb8}, stack_top);
   Emit(bridge, {0x48, 0x89, 0xc4});
   EmitMoveImmediate(bridge, {0x48, 0xbd}, root_frame);
-  EmitMoveImmediate(bridge, {0x48, 0xbf}, first_argument);
-  EmitMoveImmediate(bridge, {0x48, 0xbe}, second_argument);
+  EmitMoveImmediate(bridge, {0x48, 0xbf}, arguments[0]);
+  EmitMoveImmediate(bridge, {0x48, 0xbe}, arguments[1]);
+  EmitMoveImmediate(bridge, {0x48, 0xba}, arguments[2]);
+  EmitMoveImmediate(bridge, {0x48, 0xb9}, arguments[3]);
+  EmitMoveImmediate(bridge, {0x49, 0xb8}, arguments[4]);
+  EmitMoveImmediate(bridge, {0x49, 0xb9}, arguments[5]);
   EmitMoveImmediate(bridge, {0x48, 0xb8}, entry_point);
   Emit(bridge, {0xff, 0xd0});
   Emit(bridge, {0x49, 0x89, 0xc3});
@@ -370,9 +375,9 @@ NativeGuestExecutionResult NativeGuestExecutor::Execute(
     std::uint64_t stack_address, std::uint64_t stack_size,
     std::uint64_t parameters_address, std::uint64_t exit_handler_address,
     NativeGuestExecutionContext* execution_context) const {
-  return ExecuteEntry(memory, entry_point, stack_address, stack_size,
-                      parameters_address, exit_handler_address, true,
-                      execution_context);
+  const std::array arguments = {parameters_address, exit_handler_address};
+  return ExecuteEntry(memory, entry_point, stack_address, stack_size, arguments,
+                      sizeof(NativeGuestEntryParameters), execution_context);
 }
 
 NativeGuestExecutionResult NativeGuestExecutor::ExecuteThread(
@@ -380,20 +385,30 @@ NativeGuestExecutionResult NativeGuestExecutor::ExecuteThread(
     std::uint64_t stack_address, std::uint64_t stack_size,
     std::uint64_t argument,
     NativeGuestExecutionContext* execution_context) const {
-  return ExecuteEntry(memory, entry_point, stack_address, stack_size, argument,
-                      0, false, execution_context);
+  const std::array arguments = {argument};
+  return ExecuteEntry(memory, entry_point, stack_address, stack_size, arguments,
+                      0, execution_context);
+}
+
+NativeGuestExecutionResult NativeGuestExecutor::ExecuteFunction(
+    memory::GuestMemory& memory, std::uint64_t entry_point,
+    std::uint64_t stack_address, std::uint64_t stack_size,
+    std::span<const std::uint64_t> arguments,
+    NativeGuestExecutionContext* execution_context) const {
+  return ExecuteEntry(memory, entry_point, stack_address, stack_size, arguments,
+                      0, execution_context);
 }
 
 NativeGuestExecutionResult NativeGuestExecutor::ExecuteEntry(
     memory::GuestMemory& memory, std::uint64_t entry_point,
     std::uint64_t stack_address, std::uint64_t stack_size,
-    std::uint64_t first_argument, std::uint64_t second_argument,
-    bool require_readable_first_argument,
+    std::span<const std::uint64_t> arguments,
+    std::uint64_t readable_first_argument_size,
     NativeGuestExecutionContext* execution_context) const {
   NativeGuestExecutionContext local_context;
   auto* const context =
       execution_context != nullptr ? execution_context : &local_context;
-  if (context->active() ||
+  if (arguments.size() > 6 || context->active() ||
       context->control_request_ != NativeGuestExecutionContext::kControlNone) {
     return {NativeGuestExecutionStatus::kInvalidArgument, 0};
   }
@@ -418,11 +433,15 @@ NativeGuestExecutionResult NativeGuestExecutor::ExecuteEntry(
   if (!memory.CanAccess(stack_address, stack_size, stack_access)) {
     return {NativeGuestExecutionStatus::kGuestStackNotAccessible, 0};
   }
-  if (require_readable_first_argument &&
-      !memory.CanAccess(first_argument, sizeof(NativeGuestEntryParameters),
-                        memory::GuestMemoryProtection::kRead)) {
+  if (readable_first_argument_size != 0 &&
+      (arguments.empty() ||
+       !memory.CanAccess(arguments[0], readable_first_argument_size,
+                         memory::GuestMemoryProtection::kRead))) {
     return {NativeGuestExecutionStatus::kGuestParametersNotReadable, 0};
   }
+
+  std::array<std::uint64_t, 6> argument_registers{};
+  std::copy(arguments.begin(), arguments.end(), argument_registers.begin());
 
   const auto stack_end = stack_address + stack_size;
   const auto stack_top = stack_end & ~(kStackAlignment - 1);
@@ -440,9 +459,8 @@ NativeGuestExecutionResult NativeGuestExecutor::ExecuteEntry(
   context->guest_memory_base_ = memory.base_address();
   context->guest_memory_end_ = memory.end_address();
   context->root_return_slot_ = stack_top - sizeof(std::uint64_t);
-  const auto result =
-      RunGuestEntry(memory, entry_point, stack_top, root_frame,
-                    first_argument, second_argument, *context);
+  const auto result = RunGuestEntry(memory, entry_point, stack_top, root_frame,
+                                    argument_registers, *context);
   if (result.status != NativeGuestExecutionStatus::kHleBlocked &&
       result.status != NativeGuestExecutionStatus::kHleYielded) {
     ResetExecutionContext(*context);
@@ -589,22 +607,20 @@ bool NativeGuestExecutor::TakeContinuation(
 NativeGuestExecutionResult NativeGuestExecutor::RunGuestEntry(
     memory::GuestMemory& memory, std::uint64_t entry_point,
     std::uint64_t stack_top, std::uint64_t root_frame,
-    std::uint64_t first_argument, std::uint64_t second_argument,
+    const std::array<std::uint64_t, 6>& arguments,
     NativeGuestExecutionContext& execution_context) {
 #if !defined(_M_X64) && !defined(__x86_64__)
   (void)memory;
   (void)entry_point;
   (void)stack_top;
   (void)root_frame;
-  (void)first_argument;
-  (void)second_argument;
+  (void)arguments;
   (void)execution_context;
   return {NativeGuestExecutionStatus::kUnsupportedHost, 0};
 #else
   return RunGuestEntryBridge(
       entry_point, memory.base_address(), memory.end_address(), stack_top,
-      root_frame, first_argument, second_argument,
-      &execution_context.host_stack_pointer_,
+      root_frame, arguments, &execution_context.host_stack_pointer_,
       &execution_context.recovery_address_, &execution_context.control_request_,
       &execution_context.hle_status_);
 #endif
