@@ -15,6 +15,7 @@
 #include <unordered_map>
 
 #include "gpu/command_processor.h"
+#include "gpu/submission_queue.h"
 
 namespace kajps5::memory {
 class GuestMemory;
@@ -99,8 +100,19 @@ class GpuRuntime final {
       std::uint64_t address, std::uint32_t dword_count,
       GpuSubmissionSink& sink,
       GpuCommandLimits limits = {});
+  [[nodiscard]] GpuCommandCursor BeginCommandBuffer(
+      std::uint64_t address, std::uint32_t dword_count,
+      GpuCommandLimits limits = {});
+  [[nodiscard]] GpuCommandResult ResumeCommandBuffer(
+      GpuCommandCursor& cursor, GpuSubmissionSink& sink);
   [[nodiscard]] std::optional<std::uint32_t> ReadRegister(
       GpuRegisterSpace space, std::uint32_t offset) const noexcept;
+  [[nodiscard]] GpuSubmissionQueue& submissions() noexcept {
+    return submission_queue_;
+  }
+  [[nodiscard]] const GpuSubmissionQueue& submissions() const noexcept {
+    return submission_queue_;
+  }
 
  private:
   [[nodiscard]] GpuPacketResult AppendPacket(
@@ -111,6 +123,7 @@ class GpuRuntime final {
   std::unordered_map<std::uint32_t, std::uint32_t> context_registers_;
   std::unordered_map<std::uint32_t, std::uint32_t> shader_registers_;
   std::unordered_map<std::uint32_t, std::uint32_t> user_config_registers_;
+  GpuSubmissionQueue submission_queue_;
 };
 
 [[nodiscard]] const char* GpuRuntimeStatusName(

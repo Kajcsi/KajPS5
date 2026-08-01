@@ -80,6 +80,12 @@ adapted paths change.
 - Validation: the new checked PM4 processor and all 60 KajPS5 tests passed in
   Debug, Release, and AddressSanitizer builds. Gitleaks, actionlint, commit
   email, and repository privacy checks also passed.
+- The M6 submission path snapshots each reached command buffer, preserves the
+  exact nested cursor at an unsatisfied wait, and drains graphics and compute
+  queues to a fixed point. This follows KytyPS5 submission ordering and
+  re-expresses SharpEmu wait-resume behavior without importing another GPU or
+  scheduler owner. All 61 tests pass in Debug, Release, and AddressSanitizer
+  builds.
 
 When KajPS5 imports code, identify the upstream file and commit, keep its
 copyright and license notice, and update `THIRD_PARTY_NOTICES.md` in the same

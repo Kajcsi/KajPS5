@@ -10,6 +10,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -96,6 +97,35 @@ struct GpuCommandResult {
   [[nodiscard]] explicit operator bool() const noexcept {
     return status == GpuCommandStatus::kComplete;
   }
+};
+
+struct GpuCommandFrame {
+  std::uint64_t address = 0;
+  std::uint32_t dword_count = 0;
+  std::uint32_t offset = 0;
+  std::vector<std::uint32_t> words;
+};
+
+struct GpuCommandPendingWait {
+  std::uint64_t packet_address = 0;
+  std::uint64_t address = 0;
+  std::uint64_t mask = 0;
+  std::uint64_t reference = 0;
+  std::uint32_t packet_dwords = 0;
+  std::uint32_t opcode = 0;
+  std::uint32_t function = 0;
+  bool is_64_bit = false;
+};
+
+// Runtime-owned execution position for one submitted command buffer. Command
+// words are copied when each buffer is first reached, so a blocked submission
+// resumes the same stream without repeating completed actions.
+struct GpuCommandCursor {
+  GpuCommandLimits limits{};
+  std::vector<GpuCommandFrame> frames;
+  std::optional<GpuCommandPendingWait> pending_wait;
+  GpuCommandResult result{};
+  bool terminal = false;
 };
 
 [[nodiscard]] const char* GpuCommandStatusName(

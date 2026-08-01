@@ -452,6 +452,18 @@ packet, and indirect traversal cases also use behavior from SharpEmu
 `src/SharpEmu.Libs/Agc/AgcExports.cs` and
 `src/SharpEmu.Libs/Agc/GpuWaitRegistry.cs` at commit
 `5ee7cd1dfafdeb0ce0e458a365692df4b2e1c445`.
+
+The snapshot-backed continuation and submission queue in
+`src/gpu/command_processor.*` and `src/gpu/submission_queue.*` adapt the
+submission ordering in KytyPS5 `src/libs/agc.cpp` at commit
+`a65d17a5d689257a35644e01e9d15539361f0bf0`. The queue-owned blocked cursor,
+fixed-point cross-queue drain, and no-replay tests re-express SharpEmu
+`src/SharpEmu.Libs/Agc/AgcExports.cs`,
+`src/SharpEmu.Libs/Agc/GpuWaitRegistry.cs`, and
+`tests/SharpEmu.Libs.Tests/Agc/AgcWaitRegMemTests.cs` at commit
+`5ee7cd1dfafdeb0ce0e458a365692df4b2e1c445`. The KajPS5 destination source
+files use `GPL-2.0-only`, matching KytyPS5. The behavior tests use
+`GPL-2.0-or-later`.
 The SharpEmu reference file states:
 
 `Copyright (C) 2026 SharpEmu Emulator Project`

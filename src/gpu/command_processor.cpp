@@ -68,29 +68,10 @@ using RegisterMap = std::unordered_map<std::uint32_t, std::uint32_t>;
 struct DecodeContext {
   memory::GuestMemory& memory;
   GpuSubmissionSink& sink;
-  const GpuCommandLimits& limits;
+  GpuCommandCursor& cursor;
   RegisterMap& context_registers;
   RegisterMap& shader_registers;
   RegisterMap& user_config_registers;
-  GpuCommandResult result;
-  std::vector<std::pair<std::uint64_t, std::uint32_t>> path;
-};
-
-class PathGuard final {
- public:
-  PathGuard(std::vector<std::pair<std::uint64_t, std::uint32_t>>& path,
-            std::uint64_t address, std::uint32_t dword_count)
-      : path_(path) {
-    path_.emplace_back(address, dword_count);
-  }
-
-  ~PathGuard() { path_.pop_back(); }
-
-  PathGuard(const PathGuard&) = delete;
-  PathGuard& operator=(const PathGuard&) = delete;
-
- private:
-  std::vector<std::pair<std::uint64_t, std::uint32_t>>& path_;
 };
 
 std::uint32_t Read32(std::span<const std::byte> bytes,
@@ -158,20 +139,21 @@ GpuAction MakeAction(GpuActionType type, std::uint64_t packet_address,
 GpuCommandStatus Stop(DecodeContext& context, GpuCommandStatus status,
                       std::uint64_t packet_address,
                       std::uint32_t opcode = 0) noexcept {
-  context.result.status = status;
-  context.result.packet_address = packet_address;
-  context.result.opcode = opcode;
+  context.cursor.result.status = status;
+  context.cursor.result.packet_address = packet_address;
+  context.cursor.result.opcode = opcode;
   return status;
 }
 
 GpuCommandStatus Emit(DecodeContext& context,
                       const GpuAction& action) noexcept {
-  if (context.result.submitted_actions >= context.limits.max_actions ||
+  if (context.cursor.result.submitted_actions >=
+          context.cursor.limits.max_actions ||
       !context.sink.Submit(action)) {
     return Stop(context, GpuCommandStatus::kResourceLimit,
                 action.packet_address, action.opcode);
   }
-  ++context.result.submitted_actions;
+  ++context.cursor.result.submitted_actions;
   return GpuCommandStatus::kComplete;
 }
 
@@ -179,7 +161,7 @@ GpuCommandStatus ReadDwords(DecodeContext& context, std::uint64_t address,
                             std::uint32_t dword_count,
                             std::vector<std::uint32_t>& words) {
   if (address == 0 || (address & 3U) != 0 || dword_count == 0 ||
-      dword_count > context.limits.max_buffer_dwords) {
+      dword_count > context.cursor.limits.max_buffer_dwords) {
     return Stop(context, GpuCommandStatus::kInvalidArgument, address);
   }
   const auto byte_count = static_cast<std::size_t>(dword_count) * 4U;
@@ -286,8 +268,8 @@ GpuCommandStatus ApplyIndirectRegisters(
   if (register_count == 0) {
     return GpuCommandStatus::kComplete;
   }
-  if (register_count > context.limits.max_buffer_dwords / 2U ||
-      register_count > context.limits.max_actions) {
+  if (register_count > context.cursor.limits.max_buffer_dwords / 2U ||
+      register_count > context.cursor.limits.max_actions) {
     return Stop(context, GpuCommandStatus::kResourceLimit, packet_address,
                 opcode);
   }
@@ -295,8 +277,8 @@ GpuCommandStatus ApplyIndirectRegisters(
   const auto read_status = ReadDwords(context, table_address,
                                      register_count * 2U, table);
   if (read_status != GpuCommandStatus::kComplete) {
-    context.result.packet_address = packet_address;
-    context.result.opcode = opcode;
+    context.cursor.result.packet_address = packet_address;
+    context.cursor.result.opcode = opcode;
     return read_status;
   }
   for (std::uint32_t index = 0; index < register_count; ++index) {
@@ -345,14 +327,67 @@ GpuCommandStatus ProcessWait(DecodeContext& context,
     return emit_status;
   }
   if (!CompareWait(current, reference, mask, function)) {
+    context.cursor.pending_wait = GpuCommandPendingWait{
+        packet_address, address, mask, reference, packet_dwords,
+        opcode, function, is_64_bit};
     return Stop(context, GpuCommandStatus::kBlocked, packet_address, opcode);
   }
   return GpuCommandStatus::kComplete;
 }
 
-GpuCommandStatus ProcessBuffer(DecodeContext& context, std::uint64_t address,
-                               std::uint32_t dword_count,
-                               std::uint32_t depth);
+GpuCommandStatus SnapshotFrame(DecodeContext& context,
+                               std::uint64_t address,
+                               std::uint32_t dword_count) {
+  const auto depth = context.cursor.frames.size();
+  if (depth > context.cursor.limits.max_indirect_depth) {
+    return Stop(context, GpuCommandStatus::kResourceLimit, address,
+                kPm4IndirectBuffer);
+  }
+  for (const auto& frame : context.cursor.frames) {
+    if (frame.address == address && frame.dword_count == dword_count) {
+      return Stop(context, GpuCommandStatus::kResourceLimit, address,
+                  kPm4IndirectBuffer);
+    }
+  }
+  GpuCommandFrame frame;
+  frame.address = address;
+  frame.dword_count = dword_count;
+  const auto status = ReadDwords(context, address, dword_count, frame.words);
+  if (status != GpuCommandStatus::kComplete) {
+    return status;
+  }
+  try {
+    context.cursor.frames.push_back(std::move(frame));
+  } catch (...) {
+    return Stop(context, GpuCommandStatus::kResourceLimit, address);
+  }
+  return GpuCommandStatus::kComplete;
+}
+
+GpuCommandStatus ResumePendingWait(DecodeContext& context) noexcept {
+  if (!context.cursor.pending_wait.has_value()) {
+    return GpuCommandStatus::kComplete;
+  }
+  const auto wait = *context.cursor.pending_wait;
+  const auto value = ReadGuestValue(context, wait.address, wait.is_64_bit);
+  if (!value.has_value()) {
+    return Stop(context, GpuCommandStatus::kMemoryFault,
+                wait.packet_address, wait.opcode);
+  }
+  if (!CompareWait(*value, wait.reference, wait.mask, wait.function)) {
+    return Stop(context, GpuCommandStatus::kBlocked, wait.packet_address,
+                wait.opcode);
+  }
+  if (context.cursor.frames.empty() ||
+      context.cursor.frames.back().offset >
+          context.cursor.frames.back().dword_count - wait.packet_dwords) {
+    return Stop(context, GpuCommandStatus::kMalformedPacket,
+                wait.packet_address, wait.opcode);
+  }
+  context.cursor.frames.back().offset += wait.packet_dwords;
+  context.cursor.pending_wait.reset();
+  return GpuCommandStatus::kComplete;
+}
 
 GpuCommandStatus ProcessIndirectBuffer(
     DecodeContext& context, std::uint64_t packet_address,
@@ -368,30 +403,26 @@ GpuCommandStatus ProcessIndirectBuffer(
   if (emit_status != GpuCommandStatus::kComplete || target_dwords == 0) {
     return emit_status;
   }
-  return ProcessBuffer(context, target, target_dwords, depth + 1U);
+  return SnapshotFrame(context, target, target_dwords);
 }
 
-GpuCommandStatus ProcessBuffer(DecodeContext& context, std::uint64_t address,
-                               std::uint32_t dword_count,
-                               std::uint32_t depth) {
-  if (depth > context.limits.max_indirect_depth) {
-    return Stop(context, GpuCommandStatus::kResourceLimit, address);
+GpuCommandStatus ProcessFrames(DecodeContext& context) {
+  const auto wait_status = ResumePendingWait(context);
+  if (wait_status != GpuCommandStatus::kComplete) {
+    return wait_status;
   }
-  for (const auto& entry : context.path) {
-    if (entry.first == address && entry.second == dword_count) {
-      return Stop(context, GpuCommandStatus::kResourceLimit, address,
-                  kPm4IndirectBuffer);
+  while (!context.cursor.frames.empty()) {
+    const auto frame_index = context.cursor.frames.size() - 1U;
+    if (context.cursor.frames[frame_index].offset ==
+        context.cursor.frames[frame_index].dword_count) {
+      context.cursor.frames.pop_back();
+      continue;
     }
-  }
-  PathGuard path_guard(context.path, address, dword_count);
-  std::vector<std::uint32_t> words;
-  const auto read_status = ReadDwords(context, address, dword_count, words);
-  if (read_status != GpuCommandStatus::kComplete) {
-    return read_status;
-  }
-
-  std::uint32_t offset = 0;
-  while (offset < dword_count) {
+    const auto address = context.cursor.frames[frame_index].address;
+    const auto dword_count = context.cursor.frames[frame_index].dword_count;
+    const auto offset = context.cursor.frames[frame_index].offset;
+    const auto depth = static_cast<std::uint32_t>(frame_index);
+    const auto& words = context.cursor.frames[frame_index].words;
     std::uint64_t packet_address = 0;
     if (!Add(address, static_cast<std::uint64_t>(offset) * 4U,
              packet_address)) {
@@ -400,18 +431,18 @@ GpuCommandStatus ProcessBuffer(DecodeContext& context, std::uint64_t address,
     const auto header = words[offset];
     const auto packet_type = header & kPm4TypeMask;
     if (packet_type == kPm4Type2) {
-      if (context.result.processed_dwords >=
-          context.limits.max_processed_dwords) {
+      if (context.cursor.result.processed_dwords >=
+          context.cursor.limits.max_processed_dwords) {
         return Stop(context, GpuCommandStatus::kResourceLimit,
                     packet_address);
       }
-      ++context.result.processed_dwords;
+      ++context.cursor.result.processed_dwords;
       const auto status = Emit(context, MakeAction(
           GpuActionType::kNop, packet_address, 1, 0, 0));
       if (status != GpuCommandStatus::kComplete) {
         return status;
       }
-      ++offset;
+      ++context.cursor.frames[frame_index].offset;
       continue;
     }
     if (packet_type != kPm4Type3) {
@@ -430,12 +461,12 @@ GpuCommandStatus ProcessBuffer(DecodeContext& context, std::uint64_t address,
       return Stop(context, GpuCommandStatus::kMalformedPacket,
                   packet_address, opcode);
     }
-    if (packet_dwords > context.limits.max_processed_dwords -
-                            context.result.processed_dwords) {
+    if (packet_dwords > context.cursor.limits.max_processed_dwords -
+                            context.cursor.result.processed_dwords) {
       return Stop(context, GpuCommandStatus::kResourceLimit,
                   packet_address, opcode);
     }
-    context.result.processed_dwords += packet_dwords;
+    context.cursor.result.processed_dwords += packet_dwords;
     const std::span<const std::uint32_t> packet(words.data() + offset,
                                                 packet_dwords);
     GpuCommandStatus status = GpuCommandStatus::kComplete;
@@ -700,7 +731,7 @@ GpuCommandStatus ProcessBuffer(DecodeContext& context, std::uint64_t address,
     if (status != GpuCommandStatus::kComplete) {
       return status;
     }
-    offset += packet_dwords;
+    context.cursor.frames[frame_index].offset += packet_dwords;
   }
   return GpuCommandStatus::kComplete;
 }
@@ -737,28 +768,61 @@ void GpuActionTrace::Clear() noexcept { actions_.clear(); }
 GpuCommandResult GpuRuntime::ProcessCommandBuffer(
     std::uint64_t address, std::uint32_t dword_count,
     GpuSubmissionSink& sink, GpuCommandLimits limits) {
+  auto cursor = BeginCommandBuffer(address, dword_count, limits);
+  return ResumeCommandBuffer(cursor, sink);
+}
+
+GpuCommandCursor GpuRuntime::BeginCommandBuffer(
+    std::uint64_t address, std::uint32_t dword_count,
+    GpuCommandLimits limits) {
+  GpuCommandCursor cursor;
+  cursor.limits = limits;
   if (address == 0 || (address & 3U) != 0 || dword_count == 0 ||
       limits.max_actions == 0 || limits.max_buffer_dwords == 0 ||
       limits.max_processed_dwords == 0) {
-    return {GpuCommandStatus::kInvalidArgument, address};
+    cursor.result = {GpuCommandStatus::kInvalidArgument, address};
+    cursor.terminal = true;
+    return cursor;
   }
   std::lock_guard lock(mutex_);
+  GpuActionTrace unused_sink(0);
   DecodeContext context{memory_,
-                        sink,
-                        limits,
+                        unused_sink,
+                        cursor,
                         context_registers_,
                         shader_registers_,
-                        user_config_registers_,
-                        GpuCommandResult{},
-                        {}};
+                        user_config_registers_};
   try {
-    context.result.status =
-        ProcessBuffer(context, address, dword_count, 0);
+    cursor.result.status = SnapshotFrame(context, address, dword_count);
   } catch (...) {
-    context.result.status = GpuCommandStatus::kResourceLimit;
-    context.result.packet_address = address;
+    cursor.result.status = GpuCommandStatus::kResourceLimit;
+    cursor.result.packet_address = address;
   }
-  return context.result;
+  cursor.terminal = cursor.result.status != GpuCommandStatus::kComplete;
+  return cursor;
+}
+
+GpuCommandResult GpuRuntime::ResumeCommandBuffer(
+    GpuCommandCursor& cursor, GpuSubmissionSink& sink) {
+  if (cursor.terminal) {
+    return cursor.result;
+  }
+  std::lock_guard lock(mutex_);
+  DecodeContext context{memory_, sink, cursor, context_registers_,
+                        shader_registers_, user_config_registers_};
+  cursor.result.status = GpuCommandStatus::kComplete;
+  cursor.result.packet_address = 0;
+  cursor.result.opcode = 0;
+  try {
+    cursor.result.status = ProcessFrames(context);
+  } catch (...) {
+    cursor.result.status = GpuCommandStatus::kResourceLimit;
+    cursor.result.packet_address = cursor.frames.empty()
+                                       ? 0
+                                       : cursor.frames.back().address;
+  }
+  cursor.terminal = cursor.result.status != GpuCommandStatus::kBlocked;
+  return cursor.result;
 }
 
 std::optional<std::uint32_t> GpuRuntime::ReadRegister(

@@ -193,6 +193,49 @@ int main() {
             blocked_trace.actions()[1].type == GpuActionType::kDraw,
         "satisfied wait did not resume the command stream");
 
+  constexpr std::uint64_t kResumeRoot = kBase + 0x1100;
+  constexpr std::uint64_t kResumeNested = kBase + 0x1200;
+  const std::array resume_nested = {
+      Pm4(7, 0x10, 0x0a), static_cast<std::uint32_t>(kWaitLabel),
+      static_cast<std::uint32_t>(kWaitLabel >> 32U), 0xffU, 0x44U, 0x13U,
+      1U,
+      Pm4(3, 0x2d), 5U, 2U,
+  };
+  const std::array resume_root = {
+      Pm4(4, 0x3f), static_cast<std::uint32_t>(kResumeNested),
+      static_cast<std::uint32_t>(kResumeNested >> 32U),
+      0x0f200000U | static_cast<std::uint32_t>(resume_nested.size()),
+      Pm4(5, 0x15), 4U, 3U, 2U, 0x41U,
+  };
+  WriteValue32(memory, kWaitLabel, 0U);
+  WriteDwords(memory, kResumeNested, resume_nested);
+  WriteDwords(memory, kResumeRoot, resume_root);
+  auto cursor = runtime.BeginCommandBuffer(
+      kResumeRoot, static_cast<std::uint32_t>(resume_root.size()));
+  GpuActionTrace resume_trace(8);
+  const auto first_slice =
+      runtime.ResumeCommandBuffer(cursor, resume_trace);
+  Check(first_slice.status == GpuCommandStatus::kBlocked &&
+            resume_trace.actions().size() == 2 &&
+            resume_trace.actions()[0].type ==
+                GpuActionType::kIndirectBuffer &&
+            resume_trace.actions()[1].type == GpuActionType::kWaitMemory,
+        "nested wait did not preserve its submission position");
+  const std::array changed_words = {Pm4(2, 0xfe), 0U};
+  WriteDwords(memory, kResumeRoot, changed_words);
+  WriteDwords(memory, kResumeNested, changed_words);
+  WriteValue32(memory, kWaitLabel, 0x44U);
+  const auto final_slice =
+      runtime.ResumeCommandBuffer(cursor, resume_trace);
+  Check(final_slice.status == GpuCommandStatus::kComplete &&
+            final_slice.processed_dwords ==
+                resume_root.size() + resume_nested.size() &&
+            resume_trace.actions().size() == 4 &&
+            resume_trace.actions()[2].type == GpuActionType::kDraw &&
+            resume_trace.actions()[3].type == GpuActionType::kDispatch,
+        "blocked submission did not resume its owned command snapshot");
+  WriteValue32(memory, kWaitLabel, 0x99U);
+
   constexpr std::uint64_t kMalformed = kBase + 0x900;
   const std::array malformed = {Pm4(5, 0x15), 1U};
   WriteDwords(memory, kMalformed, malformed);

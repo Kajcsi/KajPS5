@@ -11,6 +11,7 @@ add_library(kajps5_core STATIC
   cpu/native_leaf_executor.cpp
   gpu/command_processor.cpp
   gpu/runtime.cpp
+  gpu/submission_queue.cpp
   hle/agc_exports.cpp
   hle/ampr_exports.cpp
   hle/call_context.cpp

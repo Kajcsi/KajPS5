@@ -325,6 +325,14 @@ kajps5_deploy_msvc_asan_runtime(kajps5_gpu_command_processor_test)
 add_test(NAME kajps5_gpu_command_processor
          COMMAND kajps5_gpu_command_processor_test)
 
+add_executable(kajps5_gpu_submission_queue_test
+               gpu_submission_queue_test.cpp)
+target_link_libraries(kajps5_gpu_submission_queue_test PRIVATE kajps5_core)
+kajps5_deploy_msvc_asan_runtime(kajps5_gpu_submission_queue_test)
+
+add_test(NAME kajps5_gpu_submission_queue
+         COMMAND kajps5_gpu_submission_queue_test)
+
 add_executable(kajps5_relocation_trace_test relocation_trace_test.cpp)
 target_link_libraries(kajps5_relocation_trace_test PRIVATE kajps5_core)
 kajps5_deploy_msvc_asan_runtime(kajps5_relocation_trace_test)
