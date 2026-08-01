@@ -6,6 +6,7 @@
 #include <memory>
 #include <utility>
 
+#include "kernel/ampr_command_buffer.h"
 #include "kernel/clock.h"
 #include "kernel/cxa_guard.h"
 #include "kernel/direct_memory.h"
@@ -65,6 +66,9 @@ public:
   [[nodiscard]] ProcessLifecycleService& process_lifecycle() noexcept {
     return process_lifecycle_;
   }
+  [[nodiscard]] AmprCommandBufferService& ampr_command_buffers() noexcept {
+    return ampr_command_buffers_;
+  }
 
 private:
   HandleTable handles_;
@@ -80,6 +84,7 @@ private:
   JsonValueService json_values_;
   LibcHeapService libc_heap_;
   ProcessLifecycleService process_lifecycle_;
+  AmprCommandBufferService ampr_command_buffers_;
 };
 
 } // namespace kajps5::kernel

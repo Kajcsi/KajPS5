@@ -305,6 +305,12 @@ kajps5_deploy_msvc_asan_runtime(kajps5_hle_json_exports_test)
 
 add_test(NAME kajps5_hle_json_exports COMMAND kajps5_hle_json_exports_test)
 
+add_executable(kajps5_hle_ampr_exports_test hle_ampr_exports_test.cpp)
+target_link_libraries(kajps5_hle_ampr_exports_test PRIVATE kajps5_core)
+kajps5_deploy_msvc_asan_runtime(kajps5_hle_ampr_exports_test)
+
+add_test(NAME kajps5_hle_ampr_exports COMMAND kajps5_hle_ampr_exports_test)
+
 add_executable(kajps5_relocation_trace_test relocation_trace_test.cpp)
 target_link_libraries(kajps5_relocation_trace_test PRIVATE kajps5_core)
 kajps5_deploy_msvc_asan_runtime(kajps5_relocation_trace_test)
@@ -359,6 +365,15 @@ kajps5_deploy_msvc_asan_runtime(kajps5_kernel_direct_memory_test)
 
 add_test(NAME kajps5_kernel_direct_memory
          COMMAND kajps5_kernel_direct_memory_test)
+
+add_executable(kajps5_kernel_ampr_command_buffer_test
+               kernel_ampr_command_buffer_test.cpp)
+target_link_libraries(kajps5_kernel_ampr_command_buffer_test
+                      PRIVATE kajps5_core)
+kajps5_deploy_msvc_asan_runtime(kajps5_kernel_ampr_command_buffer_test)
+
+add_test(NAME kajps5_kernel_ampr_command_buffer
+         COMMAND kajps5_kernel_ampr_command_buffer_test)
 
 add_executable(kajps5_kernel_file_test kernel_file_test.cpp)
 target_link_libraries(kajps5_kernel_file_test PRIVATE kajps5_core)

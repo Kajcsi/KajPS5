@@ -73,6 +73,7 @@ enum class TitleHleSetupStatus {
   kLibcExportsFailed,
   kLibcThreadExportsFailed,
   kJsonExportsFailed,
+  kAmprExportsFailed,
   kImportTableBuildFailed,
 };
 

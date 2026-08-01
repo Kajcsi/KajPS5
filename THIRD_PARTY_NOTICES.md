@@ -15,8 +15,9 @@ host timer thread. The SharpEmu reference files state:
 
 `Copyright (C) 2026 SharpEmu Emulator Project`
 
-Both references are GPL-2.0-or-later. No upstream host executor, continuation
-system, ownership model, or source was copied.
+KytyPS5 identifies as GPL-2.0-only. SharpEmu identifies as
+GPL-2.0-or-later. No upstream host executor, continuation system, ownership
+model, or source was copied.
 
 ## Loader and guest memory
 
@@ -199,6 +200,24 @@ constructor, destructor, and NIDs confirmed by pinned KytyPS5
 `src/SharpEmu.Libs/Json/JsonValueModel.cs`, `JsonValueExports.cs`, and
 `JsonExports.cs`. KajPS5 also registers the observed `libSceJson2` scope. No
 upstream JSON source or object layout was copied.
+
+The AMPR command-buffer service in `src/kernel/ampr_command_buffer.*`, its HLE
+bridge in `src/hle/ampr_exports.*`, and the matching focused tests adapt the
+header fields, record sizes, NIDs, bounded append behavior, counters, reset,
+clear, and write-address completion behavior from SharpEmu
+`src/SharpEmu.Libs/Ampr/AmprExports.cs` and
+`tests/SharpEmu.Libs.Tests/Ampr/AmprWriteAddressTests.cs` at commit
+`7c9740fee8a633e17b145c6bc6d794e41d46c73f`. KytyPS5
+`src/libs/libAmpr.cpp` at commit
+`a65d17a5d689257a35644e01e9d15539361f0bf0` confirms the native C++ service
+boundary and command-buffer role. KajPS5 keeps the state in its existing
+kernel runtime and uses its checked guest-memory owner. APR file reads are not
+registered as a success stub. The SharpEmu reference files state:
+
+`Copyright (C) 2026 SharpEmu Emulator Project`
+
+KytyPS5 identifies as GPL-2.0-only. SharpEmu identifies as
+GPL-2.0-or-later. No upstream AMPR source was copied.
 
 The process lifecycle service in `src/kernel/process_lifecycle.cpp` and its
 libc bridge in `src/hle/libc_exports.cpp` use the argument, callback, and exit
@@ -466,9 +485,9 @@ KytyPS5. The SharpEmu files state:
 
 `Copyright (C) 2026 SharpEmu Emulator Project`
 
-Both upstreams are GPL-2.0-or-later. No upstream pthread source was copied
-verbatim, and KajPS5 keeps all pthread state in its one kernel runtime and
-scheduler.
+KytyPS5 identifies as GPL-2.0-only. SharpEmu identifies as
+GPL-2.0-or-later. No upstream pthread source was copied verbatim, and KajPS5
+keeps all pthread state in its one kernel runtime and scheduler.
 
 The C++ mutex handlers in `src/hle/libc_thread_exports.cpp` and their focused
 test adapt the full `_Mtx_*` ABI, result values, recursive flag, and scheduler
@@ -513,9 +532,10 @@ behavior. The SharpEmu reference states:
 
 `Copyright (C) 2026 SharpEmu Emulator Project`
 
-Both upstreams are GPL-2.0-or-later. No upstream event-queue source was copied
-verbatim. Blocking wait dispatch remains deferred until the runtime can resume
-a saved guest continuation.
+KytyPS5 identifies as GPL-2.0-only. SharpEmu identifies as
+GPL-2.0-or-later. No upstream event-queue source was copied verbatim. Blocking
+wait dispatch remains deferred until the runtime can resume a saved guest
+continuation.
 
 ## Contributor guidance
 
@@ -527,8 +547,9 @@ and SharpEmu `CONTRIBUTING.md` and `.github/pull_request_template.md` at commit
 
 `Copyright (C) 2026 SharpEmu Emulator Project`
 
-Both references are GPL-2.0-or-later. The KajPS5 text is adapted for this
-project and does not copy the upstream wording verbatim.
+KytyPS5 identifies as GPL-2.0-only. SharpEmu identifies as
+GPL-2.0-or-later. The KajPS5 text is adapted for this project and does not copy
+the upstream wording verbatim.
 
 ## New adaptations
 

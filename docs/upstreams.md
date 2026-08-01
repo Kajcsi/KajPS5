@@ -4,11 +4,18 @@ KajPS5 uses these independent projects as references:
 
 | Project | Role | Language | License | Pinned commit |
 | --- | --- | --- | --- | --- |
-| [KytyPS5](https://github.com/KytyPS5/KytyPS5) | Primary native architecture reference | C++ | GPL-2.0-or-later | `a65d17a5d689257a35644e01e9d15539361f0bf0` |
+| [KytyPS5](https://github.com/KytyPS5/KytyPS5) | Primary native architecture reference | C++ | GPL-2.0-only, with original Kyty portions under MIT | `a65d17a5d689257a35644e01e9d15539361f0bf0` |
 | [SharpEmu](https://github.com/sharpemu/sharpemu) | Behavior and test reference | C# | GPL-2.0-or-later | `7c9740fee8a633e17b145c6bc6d794e41d46c73f` |
 
 The current code does not copy source from either project. Adapted behavior
 and provenance are recorded in `THIRD_PARTY_NOTICES.md`.
+
+The pinned KytyPS5 README explicitly identifies the project as
+`GPL-2.0-only`; its root `LICENSE` contains GPL version 2. KytyPS5 also keeps
+the original Kyty MIT notice in `LICENSES/Kyty-MIT.txt`. A direct source import
+must retain the exact notice and license that applies to that source. Do not
+combine GPL-2.0-only KytyPS5 code with GPL-3.0-only code unless the copyright
+holders supply a compatible grant.
 
 At the start of a development session, run the read-only update check:
 

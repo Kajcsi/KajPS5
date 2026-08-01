@@ -122,6 +122,8 @@
 - [x] Load the main image and adjacent modules into one guest address space,
       register their exports and TLS layouts, relocate them together, and
       combine their lifecycle order.
+- [x] Add checked AMPR command-buffer state, record layouts, measurements, and
+      write-address completion without a second memory owner.
 - Expand thread, event, file, and time coverage as their HLE bridges grow.
 - Compare small, repeatable traces with both upstream projects.
 

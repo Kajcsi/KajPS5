@@ -7,6 +7,7 @@
 
 #include <utility>
 
+#include "hle/ampr_exports.h"
 #include "hle/json_exports.h"
 #include "hle/kernel_exports.h"
 #include "hle/libc_exports.h"
@@ -125,6 +126,12 @@ TitleHleSetupResult TitleSession::PrepareHleBatch(
       hle::RegisterJsonExports(hle_exports_, kernel_runtime_.json_values());
   if (result.export_status != hle::ExportRegistryStatus::kOk) {
     result.status = TitleHleSetupStatus::kJsonExportsFailed;
+    return result;
+  }
+  result.export_status = hle::RegisterAmprExports(
+      hle_exports_, kernel_runtime_.ampr_command_buffers(), *memory_);
+  if (result.export_status != hle::ExportRegistryStatus::kOk) {
+    result.status = TitleHleSetupStatus::kAmprExportsFailed;
     return result;
   }
 
@@ -488,6 +495,8 @@ std::string_view TitleHleSetupStatusName(TitleHleSetupStatus status) noexcept {
       return "libc-thread-exports-failed";
     case TitleHleSetupStatus::kJsonExportsFailed:
       return "json-exports-failed";
+    case TitleHleSetupStatus::kAmprExportsFailed:
+      return "ampr-exports-failed";
     case TitleHleSetupStatus::kImportTableBuildFailed:
       return "import-table-build-failed";
   }

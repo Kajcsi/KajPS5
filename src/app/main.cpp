@@ -18,6 +18,7 @@
 #include "core/project_info.h"
 #include "cpu/native_guest_executor.h"
 #include "cpu/native_hle_import_table.h"
+#include "hle/ampr_exports.h"
 #include "hle/data_symbols.h"
 #include "hle/export_registry.h"
 #include "hle/import_coverage.h"
@@ -206,6 +207,15 @@ int TraceExecutableFile(const char* path) {
       std::cerr << "HLE coverage check failed: JSON export registration "
                    "returned "
                 << kajps5::hle::ExportRegistryStatusName(json_export_status)
+                << '\n';
+      return 7;
+    }
+    const auto ampr_export_status = kajps5::hle::RegisterAmprExports(
+        hle_exports, kernel_runtime.ampr_command_buffers(), memory);
+    if (ampr_export_status != kajps5::hle::ExportRegistryStatus::kOk) {
+      std::cerr << "HLE coverage check failed: AMPR export registration "
+                   "returned "
+                << kajps5::hle::ExportRegistryStatusName(ampr_export_status)
                 << '\n';
       return 7;
     }

@@ -9,6 +9,7 @@ add_library(kajps5_core STATIC
   cpu/native_hle_import_table.cpp
   cpu/native_hle_trampoline.cpp
   cpu/native_leaf_executor.cpp
+  hle/ampr_exports.cpp
   hle/call_context.cpp
   hle/data_symbols.cpp
   hle/export_registry.cpp
@@ -26,6 +27,7 @@ add_library(kajps5_core STATIC
   hle/libc_exports.cpp
   hle/libc_format.cpp
   hle/libc_thread_exports.cpp
+  kernel/ampr_command_buffer.cpp
   kernel/clock.cpp
   kernel/cxa_guard.cpp
   kernel/direct_memory.cpp

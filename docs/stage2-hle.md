@@ -215,3 +215,12 @@ Direct mappings share one sparse physical backing store. Aliases see the same
 contents across 16 KiB page boundaries, and contents survive unmap and remap.
 Releasing an allocation clears its committed pages. The v2 memory type is
 accepted but is not applied per mapping yet.
+
+The first AMPR batch keeps command-buffer state in the kernel runtime and
+writes every visible header and record through checked guest memory. It covers
+construction, reset, clear, size and offset queries, record measurements,
+event-queue records, and write-address records. Completing a write-address
+record updates its checked guest target. Event delivery is deferred until the
+event queue has AMPR registration generations. APR file reads remain
+unresolved until guest paths and file IDs share one checked service; the
+runtime does not return a false success for them.
