@@ -11,8 +11,10 @@ and tests.
 
 KajPS5 is not a 50/50 source merge. It keeps one C++20 runtime, scheduler,
 guest-memory model, and graphics owner. KytyPS5 components can be adapted when
-they fit that design. SharpEmu behavior first becomes a small trace or test,
-then a small implementation in the same C++ core.
+they fit that design. When a complete KytyPS5 subsystem fits, KajPS5 adapts
+that path instead of rebuilding it one small part at a time. SharpEmu behavior
+first becomes a focused trace or test, then an implementation in the same C++
+core.
 
 ## Current status
 
@@ -55,10 +57,11 @@ The current core includes:
 - Checked libc memory, byte-string, and 16-bit wide-string calls, scalar math
   through XMM registers, bounded formatted output, C++ allocation, a
   guest-memory heap, and caller-owned mspaces.
-- A small native HLE trampoline that carries register and bounded stack
-  arguments, including XMM values, from public guest code into the checked C++
-  call context. A biased public ELF can run directly from host-mapped guest
-  memory and call that trampoline without a copied code buffer.
+- A native HLE table that resolves each known executable import and owns its
+  trampoline for the full link and execution lifetime. The trampolines carry
+  register and bounded stack arguments, including XMM values, into the checked
+  C++ call context. A biased public ELF can run directly from host-mapped guest
+  memory and call the linked table without a copied code buffer.
 - Small public and generated test fixtures, including an ELF that loads
   without running guest code and controlled x86-64 leaf programs used only by
   tests.

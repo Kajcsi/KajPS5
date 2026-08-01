@@ -254,16 +254,26 @@ NIDs. KajPS5 implements the behavior in its checked C++ guest-memory boundary.
 No upstream formatter source was copied.
 
 The native HLE bridge in `src/cpu/native_hle_trampoline.cpp` adapts the
-register-pack and host-call boundary from pinned SharpEmu
-`src/SharpEmu.Core/Cpu/Native/DirectExecutionBackend.Imports.cs`. Its shared
-write-then-execute buffer follows the virtual-memory boundary in pinned
-KytyPS5 `src/common/virtualMemory.cpp` and the matching platform files. KajPS5
-currently captures the six System V integer registers and a declared, bounded
-number of stack arguments. It also transfers XMM0-XMM7 and optional XMM0-XMM1
-returns through an FXSAVE64 image. The Windows entry bridge preserves
-host-only nonvolatile state around the System V call. Valid libc memory copies
-can bypass context and vector marshalling after library and symbol resolution.
-No upstream trampoline bytes or handler source were copied.
+register-pack and host-call boundary from SharpEmu
+`src/SharpEmu.Core/Cpu/Native/DirectExecutionBackend.Imports.cs` at commit
+`7c9740fee8a633e17b145c6bc6d794e41d46c73f`. Its shared write-then-execute
+buffer follows the virtual-memory boundary in KytyPS5
+`src/common/virtualMemory.cpp` and the matching platform files at commit
+`a65d17a5d689257a35644e01e9d15539361f0bf0`. KajPS5 captures the six System V
+integer registers and a declared, bounded number of stack arguments. It also
+transfers XMM0-XMM7 and optional XMM0-XMM1 returns through an FXSAVE64 image.
+The Windows entry bridge preserves host-only nonvolatile state around the
+System V call. Valid libc memory copies can bypass context and vector
+marshalling after library and symbol resolution.
+
+The per-executable table in `src/cpu/native_hle_import_table.cpp` and its
+public guest tests adapt KytyPS5's call-table installation before relocation
+from `src/loader/runtimeLinker.cpp` at the same commit, and SharpEmu's complete
+import inventory and stub setup from
+`src/SharpEmu.Core/Cpu/Native/DirectExecutionBackend.cs` at the same SharpEmu
+commit. KajPS5 keeps the table inside its C++ runtime, resolves only registered
+library and NID pairs, and layers guest data symbols below function targets.
+No upstream trampoline bytes, table source, or handler source were copied.
 
 The process-time handlers in `src/hle/kernel_clock_exports.cpp` and
 `tests/hle_kernel_clock_exports_test.cpp` adapt the matching process-time,

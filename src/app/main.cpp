@@ -15,6 +15,7 @@
 
 #include "core/memory/guest_memory.h"
 #include "core/project_info.h"
+#include "cpu/native_hle_import_table.h"
 #include "hle/data_symbols.h"
 #include "hle/export_registry.h"
 #include "hle/import_coverage.h"
@@ -26,6 +27,7 @@
 #include "loader/elf.h"
 #include "loader/elf_trace.h"
 #include "loader/launch_metadata.h"
+#include "loader/layered_import_resolver.h"
 #include "loader/lifecycle_plan.h"
 #include "loader/relocation_trace.h"
 #include "loader/relocator.h"
@@ -202,9 +204,34 @@ int TraceExecutableFile(const char* path) {
       return 7;
     }
 
+    kajps5::cpu::NativeHleImportTable hle_functions(memory, hle_exports);
+    const auto function_status = hle_functions.Build(
+        loaded.metadata, kajps5::hle::kMaximumCapturedHleStackArguments);
+    std::cout << "hle.trampolines.status="
+              << kajps5::cpu::NativeHleImportTableStatusName(
+                     function_status.status)
+              << '\n'
+              << "hle.trampolines.imports=" << function_status.import_count
+              << '\n'
+              << "hle.trampolines.resolved_imports="
+              << function_status.resolved_import_count << '\n'
+              << "hle.trampolines.unresolved_imports="
+              << function_status.unresolved_import_count << '\n'
+              << "hle.trampolines.created="
+              << function_status.trampoline_count << '\n';
+    if (!function_status) {
+      std::cerr << "HLE trampoline setup failed: "
+                << kajps5::cpu::NativeHleImportTableStatusName(
+                       function_status.status)
+                << '\n';
+      return 7;
+    }
+
     const auto tls_module_id = launch.metadata.tls.has_value() ? 1U : 0U;
+    const kajps5::loader::LayeredImportResolver imports(hle_functions,
+                                                        hle_data);
     const auto relocated = kajps5::loader::ApplyRelocations(
-        loaded.metadata, memory, hle_data, 0, tls_module_id);
+        loaded.metadata, memory, imports, 0, tls_module_id);
     std::cout << kajps5::loader::FormatRelocationTrace(relocated);
     if (!relocated) {
       std::cerr << "Executable relocation check failed: "

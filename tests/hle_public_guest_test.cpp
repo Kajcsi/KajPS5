@@ -10,10 +10,10 @@
 #include <vector>
 
 #include "core/memory/guest_memory.h"
+#include "cpu/native_hle_import_table.h"
 #include "cpu/native_hle_trampoline.h"
 #include "cpu/native_leaf_executor.h"
 #include "hle/export_registry.h"
-#include "hle/import_registry.h"
 #include "hle/libc_exports.h"
 #include "loader/elf.h"
 #include "loader/relocator.h"
@@ -226,6 +226,8 @@ std::vector<std::byte> MakePublicHleElf() {
 }  // namespace
 
 int main() {
+  using kajps5::cpu::NativeHleImportTable;
+  using kajps5::cpu::NativeHleImportTableStatus;
   using kajps5::cpu::NativeHleTrampoline;
   using kajps5::cpu::NativeHleTrampolineStatus;
   using kajps5::cpu::NativeExecutionStatus;
@@ -233,8 +235,6 @@ int main() {
   using kajps5::hle::ExportRegistry;
   using kajps5::hle::ExportRegistryStatus;
   using kajps5::hle::HleContextStatus;
-  using kajps5::hle::ImportRegistry;
-  using kajps5::hle::ImportRegistryStatus;
   using kajps5::memory::GuestMemory;
   using kajps5::memory::GuestMemoryProtection;
 
@@ -279,15 +279,45 @@ int main() {
               return HleContextStatus::kOk;
             }) == ExportRegistryStatus::kOk,
         "checked HLE handler registration failed");
-  NativeHleTrampoline trampoline(memory, exports, "answer",
-                                 {"libkajps5_test"}, 2);
-  if (trampoline.status() == NativeHleTrampolineStatus::kUnsupportedHost) {
+  auto duplicate_metadata = loaded.metadata;
+  duplicate_metadata.dynamic_info.relocations.push_back(
+      loaded.metadata.dynamic_info.plt_relocations.front());
+  NativeHleImportTable imports(memory, exports);
+  const auto import_status = imports.Build(duplicate_metadata, 2);
+  if (import_status.status ==
+          NativeHleImportTableStatus::kTrampolineBuildFailed &&
+      import_status.trampoline_status ==
+          NativeHleTrampolineStatus::kUnsupportedHost) {
     std::cout << "native HLE guest execution is unsupported on this host\n";
     return failures == 0 ? 0 : 1;
   }
-  Check(trampoline.status() == NativeHleTrampolineStatus::kOk &&
-            trampoline.address() != 0,
-        "native HLE trampoline creation failed");
+  const auto* trampoline = imports.Find(
+      "answer", loaded.metadata.dynamic_info.needed_libraries);
+  Check(import_status && import_status.import_count == 1 &&
+            import_status.resolved_import_count == 1 &&
+            import_status.unresolved_import_count == 0 &&
+            import_status.trampoline_count == 1 && imports.size() == 1 &&
+            trampoline != nullptr && trampoline->address() != 0,
+        "native HLE import table creation failed");
+  Check(imports.Build(loaded.metadata).status ==
+            NativeHleImportTableStatus::kAlreadyBuilt,
+        "native HLE import table accepted a second build");
+
+  auto invalid_symbol_metadata = loaded.metadata;
+  invalid_symbol_metadata.dynamic_info.plt_relocations.front().info =
+      (99ULL << 32U) | 7U;
+  NativeHleImportTable invalid_symbol_imports(memory, exports);
+  Check(invalid_symbol_imports.Build(invalid_symbol_metadata).status ==
+            NativeHleImportTableStatus::kInvalidSymbolIndex &&
+            invalid_symbol_imports.size() == 0,
+        "invalid import symbol index changed the HLE table");
+  auto empty_symbol_metadata = loaded.metadata;
+  empty_symbol_metadata.dynamic_info.symbols[1].name.clear();
+  NativeHleImportTable empty_symbol_imports(memory, exports);
+  Check(empty_symbol_imports.Build(empty_symbol_metadata).status ==
+            NativeHleImportTableStatus::kEmptyImportSymbol &&
+            empty_symbol_imports.size() == 0,
+        "empty import symbol changed the HLE table");
   NativeHleTrampoline missing_trampoline(
       memory, exports, "missing", {"libkajps5_test"});
   Check(missing_trampoline.status() ==
@@ -301,11 +331,6 @@ int main() {
                 NativeHleTrampolineStatus::kInvalidArgument &&
             oversized_stack_trampoline.address() == 0,
         "oversized stack capture produced an executable trampoline");
-
-  ImportRegistry imports;
-  Check(imports.Register("libkajps5_test", "answer", trampoline.address()) ==
-            ImportRegistryStatus::kOk,
-        "native HLE trampoline registration failed");
   const auto linked =
       kajps5::loader::ApplyRelocations(loaded.metadata, memory, imports);
   Check(linked && linked.applied_count == 1 &&
@@ -320,7 +345,9 @@ int main() {
     std::cout << "public HLE guest execution is unsupported on this host\n";
     return failures == 0 ? 0 : 1;
   }
-  const auto dispatch = trampoline.last_dispatch();
+  const auto dispatch = trampoline == nullptr
+                            ? kajps5::cpu::NativeHleDispatchSnapshot{}
+                            : trampoline->last_dispatch();
   Check(executed &&
             executed.return_value == (360ULL ^ kVectorReturnBits),
         "public guest did not return the checked HLE result");
@@ -338,14 +365,13 @@ int main() {
     const auto load_bias = host_memory->base_address() - kProgramAddress;
     const auto host_loaded =
         kajps5::loader::LoadElf64(image, *host_memory, load_bias);
-    NativeHleTrampoline host_trampoline(
-        *host_memory, exports, "answer", {"libkajps5_test"}, 2);
-    ImportRegistry host_imports;
-    Check(host_loaded &&
-              host_trampoline.status() == NativeHleTrampolineStatus::kOk &&
-              host_imports.Register("libkajps5_test", "answer",
-                                    host_trampoline.address()) ==
-                  ImportRegistryStatus::kOk,
+    NativeHleImportTable host_imports(*host_memory, exports);
+    const auto host_import_status =
+        host_loaded ? host_imports.Build(host_loaded.metadata, 2)
+                    : kajps5::cpu::NativeHleImportTableResult{};
+    const auto* host_trampoline = host_imports.Find(
+        "answer", loaded.metadata.dynamic_info.needed_libraries);
+    Check(host_loaded && host_import_status && host_trampoline != nullptr,
           "host-mapped HLE setup failed");
     const auto host_linked =
         host_loaded
@@ -361,7 +387,10 @@ int main() {
             : kajps5::cpu::NativeExecutionResult{
                   kajps5::cpu::NativeExecutionStatus::kGuestCodeNotExecutable,
                   0};
-    const auto host_dispatch = host_trampoline.last_dispatch();
+    const auto host_dispatch =
+        host_trampoline == nullptr
+            ? kajps5::cpu::NativeHleDispatchSnapshot{}
+            : host_trampoline->last_dispatch();
     Check(host_linked && host_linked.resolved_import_count == 1 &&
               host_executed &&
               host_executed.return_value == (360ULL ^ kVectorReturnBits) &&
@@ -454,5 +483,8 @@ int main() {
             NativeHleTrampolineStatus::kHostProtectionFailed) ==
             "host-protection-failed",
         "native trampoline status name is unstable");
+  Check(kajps5::cpu::NativeHleImportTableStatusName(
+            NativeHleImportTableStatus::kAlreadyBuilt) == "already-built",
+        "native HLE import table status name is unstable");
   return failures == 0 ? 0 : 1;
 }

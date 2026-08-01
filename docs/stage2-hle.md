@@ -1,9 +1,10 @@
 # Stage 2 HLE research
 
-KajPS5 has one import registry for future HLE trampolines. Each entry contains
-a library name, symbol name, and nonzero target address. Exact duplicates are
-rejected. Lookup follows the ELF's ordered needed-library list, while an
-unscoped lookup succeeds only when one library owns the symbol.
+KajPS5 builds one native HLE import table for each executable. The table owns
+one trampoline for each resolved library and NID pair. It stays alive for the
+relocation and execution lifetime. Lookup follows the ELF's ordered
+needed-library list, while an unscoped lookup succeeds only when one library
+owns the symbol.
 
 The design review used these pinned references:
 
@@ -23,12 +24,14 @@ produce structured diagnostics. A trace shows at most 32 imports and 128
 hex-encoded input bytes per name, so guest data cannot inject lines or produce
 unbounded output.
 
-The registry does not generate general executable stubs. One redistributable
-test ELF goes through parse, load, link, and native leaf execution to call a
-checked HLE handler. Its generated trampoline preserves the six System V
-integer registers and a declared, bounded number of stack arguments across the
-Windows or POSIX host call. It also captures XMM0-XMM7 and returns the
-handler's `RAX` and optional XMM0-XMM1 values.
+The runtime inventories referenced imports, resolves each library-scoped NID,
+builds executable trampolines, and gives the complete table to relocation.
+Guest-owned data symbols remain a lower-priority resolver layer. One
+redistributable test ELF goes through parse, load, automatic table creation,
+link, and native leaf execution to call a checked HLE handler. Each trampoline
+preserves the six System V integer registers and a declared, bounded number of
+stack arguments across the Windows or POSIX host call. It also captures
+XMM0-XMM7 and returns the handler's `RAX` and optional XMM0-XMM1 values.
 
 The platform-neutral HLE call context maps the six System V integer argument
 registers and the return register. Integer and string access use guest memory,
@@ -86,6 +89,12 @@ imports are grouped like SharpEmu's useful import inventory, while lookup
 preserves KytyPS5's library scope. Missing imports are ranked by relocation
 count. Names and scope use a bounded hex format, so guest text cannot add trace
 lines.
+
+The same inventory now creates the runtime call table before relocation. This
+follows KytyPS5's per-program call-table lifecycle and SharpEmu's executable
+import-stub setup. Table construction is transactional: malformed metadata or
+a failed executable allocation leaves no callable entry. Duplicate relocation
+references share one trampoline.
 
 Known runtime data never points into host memory. Startup maps one checked
 16 KiB guest page for the stack guard, process name, and two libc need flags.
