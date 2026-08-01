@@ -69,6 +69,8 @@ int main() {
   const auto base = memory->base_address();
   const auto code_address = base;
   const auto hle_code_address = base + 0x100;
+  const auto memory_fault_code_address = base + 0x200;
+  const auto instruction_fault_code_address = base + 0x220;
   const auto stack_address = base + 0x4000;
   const auto stack_size = std::uint64_t{0x4000};
   const auto parameters_address = stack_address + 0x100;
@@ -134,8 +136,19 @@ int main() {
   hle_entry.push_back(std::byte{0x08});
   hle_entry.push_back(std::byte{0xc3});
 
+  const std::array<std::byte, 14> memory_fault_entry = {
+      std::byte{0x48}, std::byte{0xb8}, std::byte{0x01}, std::byte{0x00},
+      std::byte{0x00}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00},
+      std::byte{0x00}, std::byte{0x00}, std::byte{0x48}, std::byte{0x8b},
+      std::byte{0x00}, std::byte{0xc3}};
+  const std::array<std::byte, 2> instruction_fault_entry = {std::byte{0x0f},
+                                                            std::byte{0x0b}};
+
   Check(memory->Initialize(code_address, complete_entry) &&
             memory->Initialize(hle_code_address, hle_entry) &&
+            memory->Initialize(memory_fault_code_address, memory_fault_entry) &&
+            memory->Initialize(instruction_fault_code_address,
+                               instruction_fault_entry) &&
             memory->Protect(
                 code_address, 0x1000,
                 GuestMemoryProtection::kRead | GuestMemoryProtection::kExecute),
@@ -164,6 +177,41 @@ int main() {
             nested_status == NativeGuestExecutionStatus::kInvalidArgument &&
             !execution_context.active(),
         "guest entry did not return through the checked HLE trampoline");
+
+#if defined(_WIN32)
+  const auto memory_fault =
+      executor.Execute(*memory, memory_fault_code_address, stack_address,
+                       stack_size, parameters_address, 0, &execution_context);
+  Check(
+      memory_fault.status == NativeGuestExecutionStatus::kGuestMemoryFault &&
+          NativeGuestExecutionStatusName(memory_fault.status) ==
+              "guest-memory-fault" &&
+          memory_fault.host_exception_code == 0xc0000005U &&
+          memory_fault.fault_instruction_pointer >= memory_fault_code_address &&
+          memory_fault.fault_instruction_pointer <
+              memory_fault_code_address + memory_fault_entry.size() &&
+          memory_fault.fault_address == 1 && !execution_context.active(),
+      "guest memory fault did not return through the Windows boundary");
+
+  const auto instruction_fault =
+      executor.Execute(*memory, instruction_fault_code_address, stack_address,
+                       stack_size, parameters_address, 0, &execution_context);
+  Check(
+      instruction_fault.status ==
+              NativeGuestExecutionStatus::kGuestInstructionFault &&
+          NativeGuestExecutionStatusName(instruction_fault.status) ==
+              "guest-instruction-fault" &&
+          instruction_fault.host_exception_code == 0xc000001dU &&
+          instruction_fault.fault_instruction_pointer ==
+              instruction_fault_code_address &&
+          !execution_context.active(),
+      "illegal guest instruction did not return through the Windows boundary");
+
+  Check(executor.Execute(*memory, code_address, stack_address, stack_size,
+                         parameters_address, 0, &execution_context)
+                .status == NativeGuestExecutionStatus::kOk,
+        "guest execution did not recover after a contained fault");
+#endif
 
   GuestMemory copied(0x1000, 0x4000,
                      GuestMemoryProtection::kRead |

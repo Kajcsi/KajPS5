@@ -47,6 +47,10 @@ enum class NativeGuestExecutionStatus {
   kGuestCodeNotExecutable,
   kGuestStackNotAccessible,
   kGuestParametersNotReadable,
+  kFaultBoundaryUnavailable,
+  kGuestMemoryFault,
+  kGuestInstructionFault,
+  kGuestFault,
   kHostAllocationFailed,
   kHostProtectionFailed,
 };
@@ -54,6 +58,9 @@ enum class NativeGuestExecutionStatus {
 struct NativeGuestExecutionResult {
   NativeGuestExecutionStatus status = NativeGuestExecutionStatus::kOk;
   std::uint64_t return_value = 0;
+  std::uint32_t host_exception_code = 0;
+  std::uint64_t fault_instruction_pointer = 0;
+  std::uint64_t fault_address = 0;
 
   [[nodiscard]] explicit operator bool() const noexcept {
     return status == NativeGuestExecutionStatus::kOk;

@@ -11,12 +11,86 @@
 
 #include "cpu/host_executable_buffer.h"
 
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 namespace kajps5::cpu {
 namespace {
 
 constexpr std::size_t kNativeGuestBridgeBytes = 256;
 constexpr std::uint64_t kGuestRootFrameSize = 32;
 constexpr std::uint64_t kStackAlignment = 16;
+
+#if defined(_WIN32)
+
+struct NativeGuestFaultBoundary {
+  std::uint64_t guest_begin = 0;
+  std::uint64_t guest_end = 0;
+  std::uint64_t recovery_address = 0;
+  volatile std::uint64_t* host_stack_slot = nullptr;
+  std::uint32_t exception_code = 0;
+  std::uint64_t instruction_pointer = 0;
+  std::uint64_t fault_address = 0;
+  bool caught = false;
+};
+
+thread_local NativeGuestFaultBoundary* active_fault_boundary = nullptr;
+
+LONG CALLBACK HandleNativeGuestException(EXCEPTION_POINTERS* exception) {
+  auto* const boundary = active_fault_boundary;
+  if (boundary == nullptr || exception == nullptr ||
+      exception->ExceptionRecord == nullptr ||
+      exception->ContextRecord == nullptr ||
+      boundary->host_stack_slot == nullptr) {
+    return EXCEPTION_CONTINUE_SEARCH;
+  }
+  const auto instruction_pointer =
+      static_cast<std::uint64_t>(exception->ContextRecord->Rip);
+  const auto host_stack_pointer = *boundary->host_stack_slot;
+  if (instruction_pointer < boundary->guest_begin ||
+      instruction_pointer >= boundary->guest_end || host_stack_pointer == 0 ||
+      boundary->recovery_address == 0) {
+    return EXCEPTION_CONTINUE_SEARCH;
+  }
+
+  boundary->exception_code = exception->ExceptionRecord->ExceptionCode;
+  boundary->instruction_pointer = instruction_pointer;
+  if ((boundary->exception_code == EXCEPTION_ACCESS_VIOLATION ||
+       boundary->exception_code == EXCEPTION_IN_PAGE_ERROR) &&
+      exception->ExceptionRecord->NumberParameters >= 2) {
+    boundary->fault_address = static_cast<std::uint64_t>(
+        exception->ExceptionRecord->ExceptionInformation[1]);
+  }
+  boundary->caught = true;
+  exception->ContextRecord->Rsp = host_stack_pointer;
+  exception->ContextRecord->Rip = boundary->recovery_address;
+  return EXCEPTION_CONTINUE_EXECUTION;
+}
+
+bool EnsureNativeGuestExceptionHandler() noexcept {
+  static void* const handler =
+      AddVectoredExceptionHandler(1, HandleNativeGuestException);
+  return handler != nullptr;
+}
+
+NativeGuestExecutionStatus FaultStatus(std::uint32_t exception_code) noexcept {
+  switch (exception_code) {
+    case EXCEPTION_ACCESS_VIOLATION:
+    case EXCEPTION_IN_PAGE_ERROR:
+      return NativeGuestExecutionStatus::kGuestMemoryFault;
+    case EXCEPTION_ILLEGAL_INSTRUCTION:
+    case EXCEPTION_PRIV_INSTRUCTION:
+      return NativeGuestExecutionStatus::kGuestInstructionFault;
+    default:
+      return NativeGuestExecutionStatus::kGuestFault;
+  }
+}
+
+#endif
 
 void Emit(std::vector<std::byte>& code,
           std::initializer_list<unsigned int> bytes) {
@@ -41,7 +115,8 @@ void EmitMoveImmediate(std::vector<std::byte>& code,
 #if defined(_M_X64) || defined(__x86_64__)
 
 NativeGuestExecutionResult RunGuestEntry(
-    std::uint64_t entry_point, std::uint64_t stack_top,
+    std::uint64_t entry_point, std::uint64_t guest_memory_begin,
+    std::uint64_t guest_memory_end, std::uint64_t stack_top,
     std::uint64_t root_frame, std::uint64_t parameters_address,
     std::uint64_t exit_handler_address,
     volatile std::uint64_t* host_stack_slot) {
@@ -80,6 +155,20 @@ NativeGuestExecutionResult RunGuestEntry(
   Emit(bridge, {0x41, 0x5f, 0x41, 0x5e, 0x41, 0x5d, 0x41, 0x5c});
   Emit(bridge, {0x5e, 0x5f, 0x5d, 0x5b, 0xc3});
 
+#if defined(_WIN32)
+  const auto recovery_offset = bridge.size();
+  Emit(bridge, {0xfc});
+  EmitMoveImmediate(bridge, {0x48, 0xb8},
+                    static_cast<std::uint64_t>(
+                        reinterpret_cast<std::uintptr_t>(host_stack_slot)));
+  Emit(bridge, {0x48, 0xc7, 0x00, 0x00, 0x00, 0x00, 0x00});
+  Emit(bridge, {0x48, 0x0f, 0xae, 0x0c, 0x24});
+  Emit(bridge, {0x48, 0x81, 0xc4, 0x08, 0x02, 0x00, 0x00});
+  Emit(bridge, {0x31, 0xc0});
+  Emit(bridge, {0x41, 0x5f, 0x41, 0x5e, 0x41, 0x5d, 0x41, 0x5c});
+  Emit(bridge, {0x5e, 0x5f, 0x5d, 0x5b, 0xc3});
+#endif
+
   HostExecutableBuffer entry_bridge(kNativeGuestBridgeBytes);
   if (!entry_bridge.allocated() || !entry_bridge.Write(bridge)) {
     return {NativeGuestExecutionStatus::kHostAllocationFailed, 0};
@@ -89,7 +178,33 @@ NativeGuestExecutionResult RunGuestEntry(
   }
   using EntryBridge = std::uint64_t (*)();
   const auto function = reinterpret_cast<EntryBridge>(entry_bridge.address());
+#if defined(_WIN32)
+  if (active_fault_boundary != nullptr) {
+    return {NativeGuestExecutionStatus::kInvalidArgument, 0};
+  }
+  if (!EnsureNativeGuestExceptionHandler()) {
+    return {NativeGuestExecutionStatus::kFaultBoundaryUnavailable, 0};
+  }
+  NativeGuestFaultBoundary boundary;
+  boundary.guest_begin = guest_memory_begin;
+  boundary.guest_end = guest_memory_end;
+  boundary.recovery_address =
+      static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(
+          static_cast<std::byte*>(entry_bridge.address()) + recovery_offset));
+  boundary.host_stack_slot = host_stack_slot;
+  active_fault_boundary = &boundary;
+  const auto return_value = function();
+  active_fault_boundary = nullptr;
+  if (boundary.caught) {
+    return {FaultStatus(boundary.exception_code), 0, boundary.exception_code,
+            boundary.instruction_pointer, boundary.fault_address};
+  }
+  return {NativeGuestExecutionStatus::kOk, return_value};
+#else
+  (void)guest_memory_begin;
+  (void)guest_memory_end;
   return {NativeGuestExecutionStatus::kOk, function()};
+#endif
 }
 
 #endif
@@ -141,7 +256,8 @@ NativeGuestExecutionResult NativeGuestExecutor::Execute(
 #if !defined(_M_X64) && !defined(__x86_64__)
   return {NativeGuestExecutionStatus::kUnsupportedHost, 0};
 #else
-  return RunGuestEntry(entry_point, stack_top, root_frame, parameters_address,
+  return RunGuestEntry(entry_point, memory.base_address(), memory.end_address(),
+                       stack_top, root_frame, parameters_address,
                        exit_handler_address, &context->host_stack_pointer_);
 #endif
 }
@@ -163,6 +279,14 @@ std::string_view NativeGuestExecutionStatusName(
       return "guest-stack-not-accessible";
     case NativeGuestExecutionStatus::kGuestParametersNotReadable:
       return "guest-parameters-not-readable";
+    case NativeGuestExecutionStatus::kFaultBoundaryUnavailable:
+      return "fault-boundary-unavailable";
+    case NativeGuestExecutionStatus::kGuestMemoryFault:
+      return "guest-memory-fault";
+    case NativeGuestExecutionStatus::kGuestInstructionFault:
+      return "guest-instruction-fault";
+    case NativeGuestExecutionStatus::kGuestFault:
+      return "guest-fault";
     case NativeGuestExecutionStatus::kHostAllocationFailed:
       return "host-allocation-failed";
     case NativeGuestExecutionStatus::kHostProtectionFailed:

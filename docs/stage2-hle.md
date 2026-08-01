@@ -102,8 +102,11 @@ and parameter block before changing RSP. A linked HLE trampoline follows
 SharpEmu's host-return design: it saves the guest call frame, runs the C++
 handler on the original host stack, then restores the guest frame and return
 register. An inactive execution context cannot switch stacks. Controlled tests
-cover direct return and linked HLE return. Fault containment and blocked-call
-continuation are still required before the command-line tool can run a title.
+cover direct return and linked HLE return. On Windows, a vectored exception
+boundary accepts faults only from guest memory, restores the saved host state,
+and reports the exception code, instruction address, and accessed address.
+Portable fault containment and blocked-call continuation are still required
+before the command-line tool can run a title.
 
 Known runtime data never points into host memory. Startup maps one checked
 16 KiB guest page for the stack guard, process name, and two libc need flags.

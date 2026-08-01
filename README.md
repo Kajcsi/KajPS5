@@ -64,7 +64,9 @@ The current core includes:
   C++ call context. A biased public ELF can run directly from host-mapped guest
   memory and call the linked table without a copied code buffer. Controlled
   entry tests use the real guest stack and entry arguments. HLE dispatch moves
-  back to the saved host stack before a C++ handler runs.
+  back to the saved host stack before a C++ handler runs. On Windows, guest
+  access violations and illegal instructions return a checked fault result;
+  they do not leave the runtime on the guest stack.
 - Small public and generated test fixtures, including an ELF that loads
   without running guest code and controlled x86-64 leaf programs used only by
   tests.

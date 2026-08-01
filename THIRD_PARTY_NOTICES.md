@@ -284,6 +284,17 @@ at commit `7c9740fee8a633e17b145c6bc6d794e41d46c73f`. KajPS5 implements a small 
 execution context and checked guest-memory boundary. No upstream bridge or
 trampoline bytes were copied.
 
+The Windows guest-fault boundary in `src/cpu/native_guest_executor.cpp`
+adapts the host-exception classification and mutable native-context boundary
+from KytyPS5 `src/common/hostException.h` and
+`src/common/hostException.cpp` at commit
+`a65d17a5d689257a35644e01e9d15539361f0bf0`. Returning from a guest fault on
+the saved host stack follows SharpEmu
+`src/SharpEmu.Core/Cpu/Native/Windows/WindowsFaultHandling.cs` at commit
+`7c9740fee8a633e17b145c6bc6d794e41d46c73f`. KajPS5 handles only exceptions
+whose instruction address is inside the active guest mapping. No upstream
+exception-handler or recovery-bridge source was copied.
+
 The process-time handlers in `src/hle/kernel_clock_exports.cpp` and
 `tests/hle_kernel_clock_exports_test.cpp` adapt the matching process-time,
 counter, and frequency behavior from the pinned KytyPS5

@@ -85,6 +85,8 @@
 - [x] Share one host-mapped backing between native guest code and checked HLE.
 - [x] Run a checked guest entry on its guest stack and return HLE work to the
       saved host stack.
+- [x] Contain Windows guest access and instruction faults and restore the host
+      execution state.
 - [x] Build and own native HLE trampolines for all resolved executable imports.
 - Expand thread, event, file, and time coverage as their HLE bridges grow.
 - Compare small, repeatable traces with both upstream projects.
