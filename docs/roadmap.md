@@ -73,6 +73,7 @@
 - [x] Add checked libc memory, string, scalar math, and C++ allocation calls.
 - [x] Add bounded libc formatted output with register and `va_list` arguments.
 - [x] Add scheduler-aware C++ static initialization guards.
+- [x] Connect the complete libc C++ mutex ABI to the shared pthread service.
 - [x] Register consistent libkernel process-time handlers.
 - [x] Add a transactional libkernel clock-gettime handler.
 - [x] Add a transactional libkernel gettimeofday handler.

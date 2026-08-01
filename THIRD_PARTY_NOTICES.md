@@ -340,6 +340,16 @@ Both upstreams are GPL-2.0-or-later. No upstream pthread source was copied
 verbatim, and KajPS5 keeps all pthread state in its one kernel runtime and
 scheduler.
 
+The C++ mutex handlers in `src/hle/libc_thread_exports.cpp` and their focused
+test adapt the full `_Mtx_*` ABI, result values, recursive flag, and scheduler
+connection from KytyPS5 `src/libs/libC.cpp` at commit
+`a65d17a5d689257a35644e01e9d15539361f0bf0`. SharpEmu
+`scripts/ps5_names.txt` at commit
+`7c9740fee8a633e17b145c6bc6d794e41d46c73f` confirms the public mutex names.
+KajPS5 uses its existing checked guest memory and pthread owner. It also
+reports real current-thread ownership instead of KytyPS5's fixed placeholder.
+No upstream mutex source was copied verbatim.
+
 ## Semaphores, event flags, and event queues
 
 The non-blocking semaphore handlers in

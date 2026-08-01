@@ -130,6 +130,14 @@ clears the low guard state and also wakes waiters. A blocked handler returns a
 distinct HLE status; the general executor still needs a continuation path to
 resume that call.
 
+The libc C++ mutex family uses the same scheduler-backed pthread service. It
+includes plain, recursive, named, try-lock, timed-lock, ownership, unlock, and
+destroy entry points under both their public names and PS5 NIDs. Guest mutex
+storage holds a checked runtime handle. Failed initialization, invalid memory,
+and busy destruction cannot leave a partial guest object. The timed entry
+currently follows KytyPS5 and performs a normal scheduler-backed lock; the
+general executor still needs the same continuation path for a blocked call.
+
 The first `libkernel` handler batch exposes
 `sceKernelGetProcessTime`, `sceKernelGetProcessTimeCounter`, and
 `sceKernelGetProcessTimeCounterFrequency`. All three use the shared kernel

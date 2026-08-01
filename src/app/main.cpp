@@ -23,6 +23,7 @@
 #include "hle/json_exports.h"
 #include "hle/kernel_exports.h"
 #include "hle/libc_exports.h"
+#include "hle/libc_thread_exports.h"
 #include "kernel/runtime.h"
 #include "loader/elf.h"
 #include "loader/elf_trace.h"
@@ -182,6 +183,18 @@ int TraceExecutableFile(const char* path) {
       std::cerr << "HLE coverage check failed: libc export registration "
                    "returned "
                 << kajps5::hle::ExportRegistryStatusName(libc_export_status)
+                << '\n';
+      return 7;
+    }
+    const auto libc_thread_export_status =
+        kajps5::hle::RegisterLibcThreadExports(hle_exports,
+                                               kernel_runtime.pthreads());
+    if (libc_thread_export_status !=
+        kajps5::hle::ExportRegistryStatus::kOk) {
+      std::cerr << "HLE coverage check failed: libc thread export "
+                   "registration returned "
+                << kajps5::hle::ExportRegistryStatusName(
+                       libc_thread_export_status)
                 << '\n';
       return 7;
     }

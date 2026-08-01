@@ -388,6 +388,20 @@ std::optional<PthreadMutexSnapshot> PthreadService::GetMutex(
                               mutex.condition_waiter_count};
 }
 
+std::optional<bool> PthreadService::CurrentThreadOwnsMutex(
+    std::uint64_t handle) const {
+  const auto current_thread = scheduler_.current_thread();
+  if (!current_thread) {
+    return false;
+  }
+  std::lock_guard lock(mutex_);
+  const auto found = mutexes_.find(handle);
+  if (found == mutexes_.end()) {
+    return std::nullopt;
+  }
+  return found->second.owner == *current_thread;
+}
+
 PthreadConditionCreateResult PthreadService::CreateCondition() {
   std::lock_guard lock(mutex_);
   if (next_condition_id_ == 0 ||

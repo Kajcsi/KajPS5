@@ -160,6 +160,8 @@ class PthreadService final {
   [[nodiscard]] KernelStatus UnlockMutex(std::uint64_t handle);
   [[nodiscard]] std::optional<PthreadMutexSnapshot> GetMutex(
       std::uint64_t handle) const;
+  [[nodiscard]] std::optional<bool> CurrentThreadOwnsMutex(
+      std::uint64_t handle) const;
 
   [[nodiscard]] PthreadConditionCreateResult CreateCondition();
   [[nodiscard]] KernelStatus DestroyCondition(std::uint64_t handle);
