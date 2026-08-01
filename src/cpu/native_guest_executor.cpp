@@ -7,6 +7,7 @@
 
 #include <cstddef>
 #include <initializer_list>
+#include <limits>
 #include <vector>
 
 #include "cpu/host_executable_buffer.h"
@@ -21,9 +22,11 @@
 namespace kajps5::cpu {
 namespace {
 
-constexpr std::size_t kNativeGuestBridgeBytes = 256;
+constexpr std::size_t kNativeGuestBridgeBytes = 512;
 constexpr std::uint64_t kGuestRootFrameSize = 32;
 constexpr std::uint64_t kStackAlignment = 16;
+constexpr std::uint64_t kNativeControlNone = 0;
+constexpr std::uint64_t kNativeControlBlocked = 1;
 
 #if defined(_WIN32)
 
@@ -114,12 +117,28 @@ void EmitMoveImmediate(std::vector<std::byte>& code,
 
 #if defined(_M_X64) || defined(__x86_64__)
 
-NativeGuestExecutionResult RunGuestEntry(
+NativeGuestExecutionResult ControlResult(
+    std::uint64_t control_request, hle::HleContextStatus hle_status) noexcept {
+  NativeGuestExecutionResult result;
+  result.hle_status = hle_status;
+  if (control_request == kNativeControlBlocked) {
+    result.status = NativeGuestExecutionStatus::kHleBlocked;
+  } else if (hle_status == hle::HleContextStatus::kGuestExit) {
+    result.status = NativeGuestExecutionStatus::kGuestExit;
+  } else {
+    result.status = NativeGuestExecutionStatus::kHleDispatchFailed;
+  }
+  return result;
+}
+
+NativeGuestExecutionResult RunGuestEntryBridge(
     std::uint64_t entry_point, std::uint64_t guest_memory_begin,
     std::uint64_t guest_memory_end, std::uint64_t stack_top,
     std::uint64_t root_frame, std::uint64_t parameters_address,
-    std::uint64_t exit_handler_address,
-    volatile std::uint64_t* host_stack_slot) {
+    std::uint64_t exit_handler_address, volatile std::uint64_t* host_stack_slot,
+    volatile std::uint64_t* recovery_address,
+    volatile std::uint64_t* control_request,
+    hle::HleContextStatus* hle_status) {
   std::vector<std::byte> bridge;
   bridge.reserve(kNativeGuestBridgeBytes);
 
@@ -155,7 +174,6 @@ NativeGuestExecutionResult RunGuestEntry(
   Emit(bridge, {0x41, 0x5f, 0x41, 0x5e, 0x41, 0x5d, 0x41, 0x5c});
   Emit(bridge, {0x5e, 0x5f, 0x5d, 0x5b, 0xc3});
 
-#if defined(_WIN32)
   const auto recovery_offset = bridge.size();
   Emit(bridge, {0xfc});
   EmitMoveImmediate(bridge, {0x48, 0xb8},
@@ -167,7 +185,6 @@ NativeGuestExecutionResult RunGuestEntry(
   Emit(bridge, {0x31, 0xc0});
   Emit(bridge, {0x41, 0x5f, 0x41, 0x5e, 0x41, 0x5d, 0x41, 0x5c});
   Emit(bridge, {0x5e, 0x5f, 0x5d, 0x5b, 0xc3});
-#endif
 
   HostExecutableBuffer entry_bridge(kNativeGuestBridgeBytes);
   if (!entry_bridge.allocated() || !entry_bridge.Write(bridge)) {
@@ -179,9 +196,6 @@ NativeGuestExecutionResult RunGuestEntry(
   using EntryBridge = std::uint64_t (*)();
   const auto function = reinterpret_cast<EntryBridge>(entry_bridge.address());
 #if defined(_WIN32)
-  if (active_fault_boundary != nullptr) {
-    return {NativeGuestExecutionStatus::kInvalidArgument, 0};
-  }
   if (!EnsureNativeGuestExceptionHandler()) {
     return {NativeGuestExecutionStatus::kFaultBoundaryUnavailable, 0};
   }
@@ -192,19 +206,156 @@ NativeGuestExecutionResult RunGuestEntry(
       static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(
           static_cast<std::byte*>(entry_bridge.address()) + recovery_offset));
   boundary.host_stack_slot = host_stack_slot;
+  *recovery_address = boundary.recovery_address;
   active_fault_boundary = &boundary;
   const auto return_value = function();
   active_fault_boundary = nullptr;
+  *recovery_address = 0;
   if (boundary.caught) {
-    return {FaultStatus(boundary.exception_code), 0, boundary.exception_code,
-            boundary.instruction_pointer, boundary.fault_address};
+    NativeGuestExecutionResult result;
+    result.status = FaultStatus(boundary.exception_code);
+    result.host_exception_code = boundary.exception_code;
+    result.fault_instruction_pointer = boundary.instruction_pointer;
+    result.fault_address = boundary.fault_address;
+    return result;
   }
-  return {NativeGuestExecutionStatus::kOk, return_value};
 #else
   (void)guest_memory_begin;
   (void)guest_memory_end;
-  return {NativeGuestExecutionStatus::kOk, function()};
+  *recovery_address =
+      static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(
+          static_cast<std::byte*>(entry_bridge.address()) + recovery_offset));
+  const auto return_value = function();
+  *recovery_address = 0;
 #endif
+  if (*control_request != kNativeControlNone) {
+    return ControlResult(*control_request, *hle_status);
+  }
+  return {NativeGuestExecutionStatus::kOk, return_value};
+}
+
+bool WriteGuestUInt64(memory::GuestMemory& memory, std::uint64_t address,
+                      std::uint64_t value) {
+  std::array<std::byte, sizeof(value)> bytes{};
+  for (std::size_t index = 0; index < bytes.size(); ++index) {
+    bytes[index] = static_cast<std::byte>((value >> (index * 8U)) & 0xffU);
+  }
+  return memory.Write(address, bytes);
+}
+
+NativeGuestExecutionResult RunGuestContinuationBridge(
+    memory::GuestMemory& memory, std::uint64_t resume_instruction_pointer,
+    std::uint64_t resume_stack_pointer, std::uint64_t root_return_slot,
+    std::uint64_t return_value,
+    const std::array<std::uint64_t, 6>& nonvolatile_registers,
+    const std::array<std::byte, 512>& floating_state,
+    volatile std::uint64_t* host_stack_slot,
+    volatile std::uint64_t* recovery_address,
+    volatile std::uint64_t* control_request,
+    hle::HleContextStatus* hle_status) {
+  std::vector<std::byte> bridge;
+  bridge.reserve(kNativeGuestBridgeBytes);
+
+  Emit(bridge, {0x53, 0x55, 0x57, 0x56});
+  Emit(bridge, {0x41, 0x54, 0x41, 0x55, 0x41, 0x56, 0x41, 0x57});
+  Emit(bridge, {0x48, 0x81, 0xec, 0x08, 0x02, 0x00, 0x00});
+  Emit(bridge, {0x48, 0x0f, 0xae, 0x04, 0x24});
+  EmitMoveImmediate(bridge, {0x48, 0xb8},
+                    static_cast<std::uint64_t>(
+                        reinterpret_cast<std::uintptr_t>(host_stack_slot)));
+  Emit(bridge, {0x48, 0x89, 0x20});
+
+  EmitMoveImmediate(bridge, {0x48, 0xb8},
+                    static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(
+                        floating_state.data())));
+  Emit(bridge, {0x48, 0x0f, 0xae, 0x08});
+  EmitMoveImmediate(bridge, {0x48, 0xbb}, nonvolatile_registers[5]);
+  EmitMoveImmediate(bridge, {0x48, 0xbd}, nonvolatile_registers[4]);
+  EmitMoveImmediate(bridge, {0x49, 0xbc}, nonvolatile_registers[3]);
+  EmitMoveImmediate(bridge, {0x49, 0xbd}, nonvolatile_registers[2]);
+  EmitMoveImmediate(bridge, {0x49, 0xbe}, nonvolatile_registers[1]);
+  EmitMoveImmediate(bridge, {0x49, 0xbf}, nonvolatile_registers[0]);
+  EmitMoveImmediate(bridge, {0x49, 0xbb}, resume_instruction_pointer);
+  EmitMoveImmediate(bridge, {0x48, 0xb8}, return_value);
+  EmitMoveImmediate(bridge, {0x48, 0xbc}, resume_stack_pointer);
+  Emit(bridge, {0x41, 0xff, 0xe3});
+
+  const auto guest_return_offset = bridge.size();
+  Emit(bridge, {0x49, 0x89, 0xc3});
+  EmitMoveImmediate(bridge, {0x48, 0xb8},
+                    static_cast<std::uint64_t>(
+                        reinterpret_cast<std::uintptr_t>(host_stack_slot)));
+  Emit(bridge, {0x48, 0x8b, 0x20});
+  Emit(bridge, {0x48, 0xc7, 0x00, 0x00, 0x00, 0x00, 0x00});
+  Emit(bridge, {0x48, 0x0f, 0xae, 0x0c, 0x24});
+  Emit(bridge, {0x48, 0x81, 0xc4, 0x08, 0x02, 0x00, 0x00});
+  Emit(bridge, {0x4c, 0x89, 0xd8});
+  Emit(bridge, {0x41, 0x5f, 0x41, 0x5e, 0x41, 0x5d, 0x41, 0x5c});
+  Emit(bridge, {0x5e, 0x5f, 0x5d, 0x5b, 0xc3});
+
+  const auto recovery_offset = bridge.size();
+  Emit(bridge, {0xfc});
+  EmitMoveImmediate(bridge, {0x48, 0xb8},
+                    static_cast<std::uint64_t>(
+                        reinterpret_cast<std::uintptr_t>(host_stack_slot)));
+  Emit(bridge, {0x48, 0xc7, 0x00, 0x00, 0x00, 0x00, 0x00});
+  Emit(bridge, {0x48, 0x0f, 0xae, 0x0c, 0x24});
+  Emit(bridge, {0x48, 0x81, 0xc4, 0x08, 0x02, 0x00, 0x00});
+  Emit(bridge, {0x31, 0xc0});
+  Emit(bridge, {0x41, 0x5f, 0x41, 0x5e, 0x41, 0x5d, 0x41, 0x5c});
+  Emit(bridge, {0x5e, 0x5f, 0x5d, 0x5b, 0xc3});
+
+  HostExecutableBuffer resume_bridge(kNativeGuestBridgeBytes);
+  if (!resume_bridge.allocated() || !resume_bridge.Write(bridge)) {
+    return {NativeGuestExecutionStatus::kHostAllocationFailed, 0};
+  }
+  const auto guest_return_address =
+      static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(
+          static_cast<std::byte*>(resume_bridge.address()) +
+          guest_return_offset));
+  if (!WriteGuestUInt64(memory, root_return_slot, guest_return_address)) {
+    return {NativeGuestExecutionStatus::kGuestStackNotAccessible, 0};
+  }
+  if (!resume_bridge.Seal()) {
+    return {NativeGuestExecutionStatus::kHostProtectionFailed, 0};
+  }
+
+  using ResumeBridge = std::uint64_t (*)();
+  const auto function = reinterpret_cast<ResumeBridge>(resume_bridge.address());
+  const auto recovery =
+      static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(
+          static_cast<std::byte*>(resume_bridge.address()) + recovery_offset));
+  *recovery_address = recovery;
+#if defined(_WIN32)
+  if (!EnsureNativeGuestExceptionHandler()) {
+    *recovery_address = 0;
+    return {NativeGuestExecutionStatus::kFaultBoundaryUnavailable, 0};
+  }
+  NativeGuestFaultBoundary boundary;
+  boundary.guest_begin = memory.base_address();
+  boundary.guest_end = memory.end_address();
+  boundary.recovery_address = recovery;
+  boundary.host_stack_slot = host_stack_slot;
+  active_fault_boundary = &boundary;
+  const auto guest_return_value = function();
+  active_fault_boundary = nullptr;
+  *recovery_address = 0;
+  if (boundary.caught) {
+    NativeGuestExecutionResult result;
+    result.status = FaultStatus(boundary.exception_code);
+    result.host_exception_code = boundary.exception_code;
+    result.fault_instruction_pointer = boundary.instruction_pointer;
+    result.fault_address = boundary.fault_address;
+    return result;
+  }
+#else
+  const auto guest_return_value = function();
+  *recovery_address = 0;
+#endif
+  if (*control_request != kNativeControlNone) {
+    return ControlResult(*control_request, *hle_status);
+  }
+  return {NativeGuestExecutionStatus::kOk, guest_return_value};
 }
 
 #endif
@@ -219,9 +370,15 @@ NativeGuestExecutionResult NativeGuestExecutor::Execute(
   NativeGuestExecutionContext local_context;
   auto* const context =
       execution_context != nullptr ? execution_context : &local_context;
-  if (context->active()) {
+  if (context->active() ||
+      context->control_request_ != NativeGuestExecutionContext::kControlNone) {
     return {NativeGuestExecutionStatus::kInvalidArgument, 0};
   }
+#if defined(_WIN32)
+  if (active_fault_boundary != nullptr) {
+    return {NativeGuestExecutionStatus::kInvalidArgument, 0};
+  }
+#endif
   if (stack_size < kMinimumNativeGuestStackSize || stack_size > memory.size() ||
       stack_address > memory.end_address() ||
       stack_size > memory.end_address() - stack_address) {
@@ -256,10 +413,140 @@ NativeGuestExecutionResult NativeGuestExecutor::Execute(
 #if !defined(_M_X64) && !defined(__x86_64__)
   return {NativeGuestExecutionStatus::kUnsupportedHost, 0};
 #else
-  return RunGuestEntry(entry_point, memory.base_address(), memory.end_address(),
-                       stack_top, root_frame, parameters_address,
-                       exit_handler_address, &context->host_stack_pointer_);
+  context->root_return_slot_ = stack_top - sizeof(std::uint64_t);
+  const auto result =
+      RunGuestEntry(memory, entry_point, stack_top, root_frame,
+                    parameters_address, exit_handler_address, *context);
+  if (result.status != NativeGuestExecutionStatus::kHleBlocked) {
+    ResetExecutionContext(*context);
+  }
+  return result;
 #endif
+}
+
+NativeGuestExecutionResult NativeGuestExecutor::Resume(
+    memory::GuestMemory& memory,
+    NativeGuestExecutionContext& execution_context) const {
+#if !defined(_M_X64) && !defined(__x86_64__)
+  (void)memory;
+  (void)execution_context;
+  return {NativeGuestExecutionStatus::kUnsupportedHost, 0};
+#else
+  const auto resume_arguments_address = static_cast<std::uint64_t>(
+      reinterpret_cast<std::uintptr_t>(execution_context.resume_arguments_));
+  constexpr auto captured_call_frame_bytes = 7 * sizeof(std::uint64_t);
+  if (!memory.host_mapped() || execution_context.active() ||
+      !execution_context.suspended() ||
+      execution_context.resume_hle_dispatch_ == nullptr ||
+      execution_context.resume_hle_state_ == nullptr ||
+      execution_context.resume_arguments_ == nullptr ||
+      resume_arguments_address > std::numeric_limits<std::uint64_t>::max() -
+                                     captured_call_frame_bytes ||
+      resume_arguments_address + captured_call_frame_bytes !=
+          execution_context.resume_stack_pointer_ ||
+      !memory.CanAccess(resume_arguments_address, captured_call_frame_bytes,
+                        memory::GuestMemoryProtection::kRead) ||
+      !memory.CanExecute(execution_context.resume_instruction_pointer_, 1) ||
+      !memory.CanAccess(execution_context.root_return_slot_,
+                        sizeof(std::uint64_t),
+                        memory::GuestMemoryProtection::kRead |
+                            memory::GuestMemoryProtection::kWrite)) {
+    return {NativeGuestExecutionStatus::kInvalidArgument, 0};
+  }
+#if defined(_WIN32)
+  if (active_fault_boundary != nullptr) {
+    return {NativeGuestExecutionStatus::kInvalidArgument, 0};
+  }
+#endif
+
+  execution_context.control_request_ =
+      NativeGuestExecutionContext::kControlNone;
+  execution_context.hle_status_ = hle::HleContextStatus::kOk;
+  execution_context.retrying_hle_dispatch_ = true;
+  const auto hle_return = execution_context.resume_hle_dispatch_(
+      execution_context.resume_hle_state_, execution_context.resume_arguments_,
+      execution_context.floating_state_.data(),
+      execution_context.nonvolatile_registers_.data());
+  execution_context.retrying_hle_dispatch_ = false;
+  if (execution_context.control_request_ !=
+      NativeGuestExecutionContext::kControlNone) {
+    const auto result = ControlResult(execution_context.control_request_,
+                                      execution_context.hle_status_);
+    if (result.status != NativeGuestExecutionStatus::kHleBlocked) {
+      ResetExecutionContext(execution_context);
+    }
+    return result;
+  }
+
+  const auto result =
+      RunGuestContinuation(memory, execution_context, hle_return);
+  if (result.status != NativeGuestExecutionStatus::kHleBlocked) {
+    ResetExecutionContext(execution_context);
+  }
+  return result;
+#endif
+}
+
+NativeGuestExecutionResult NativeGuestExecutor::RunGuestEntry(
+    memory::GuestMemory& memory, std::uint64_t entry_point,
+    std::uint64_t stack_top, std::uint64_t root_frame,
+    std::uint64_t parameters_address, std::uint64_t exit_handler_address,
+    NativeGuestExecutionContext& execution_context) {
+#if !defined(_M_X64) && !defined(__x86_64__)
+  (void)memory;
+  (void)entry_point;
+  (void)stack_top;
+  (void)root_frame;
+  (void)parameters_address;
+  (void)exit_handler_address;
+  (void)execution_context;
+  return {NativeGuestExecutionStatus::kUnsupportedHost, 0};
+#else
+  return RunGuestEntryBridge(
+      entry_point, memory.base_address(), memory.end_address(), stack_top,
+      root_frame, parameters_address, exit_handler_address,
+      &execution_context.host_stack_pointer_,
+      &execution_context.recovery_address_, &execution_context.control_request_,
+      &execution_context.hle_status_);
+#endif
+}
+
+NativeGuestExecutionResult NativeGuestExecutor::RunGuestContinuation(
+    memory::GuestMemory& memory, NativeGuestExecutionContext& execution_context,
+    std::uint64_t hle_return_value) {
+#if !defined(_M_X64) && !defined(__x86_64__)
+  (void)memory;
+  (void)execution_context;
+  (void)hle_return_value;
+  return {NativeGuestExecutionStatus::kUnsupportedHost, 0};
+#else
+  return RunGuestContinuationBridge(
+      memory, execution_context.resume_instruction_pointer_,
+      execution_context.resume_stack_pointer_,
+      execution_context.root_return_slot_, hle_return_value,
+      execution_context.nonvolatile_registers_,
+      execution_context.floating_state_, &execution_context.host_stack_pointer_,
+      &execution_context.recovery_address_, &execution_context.control_request_,
+      &execution_context.hle_status_);
+#endif
+}
+
+void NativeGuestExecutor::ResetExecutionContext(
+    NativeGuestExecutionContext& execution_context) noexcept {
+  execution_context.host_stack_pointer_ = 0;
+  execution_context.recovery_address_ = 0;
+  execution_context.control_request_ =
+      NativeGuestExecutionContext::kControlNone;
+  execution_context.retrying_hle_dispatch_ = false;
+  execution_context.hle_status_ = hle::HleContextStatus::kOk;
+  execution_context.resume_hle_dispatch_ = nullptr;
+  execution_context.resume_hle_state_ = nullptr;
+  execution_context.resume_arguments_ = nullptr;
+  execution_context.resume_instruction_pointer_ = 0;
+  execution_context.resume_stack_pointer_ = 0;
+  execution_context.root_return_slot_ = 0;
+  execution_context.nonvolatile_registers_.fill(0);
+  execution_context.floating_state_.fill(std::byte{0});
 }
 
 std::string_view NativeGuestExecutionStatusName(
@@ -287,6 +574,12 @@ std::string_view NativeGuestExecutionStatusName(
       return "guest-instruction-fault";
     case NativeGuestExecutionStatus::kGuestFault:
       return "guest-fault";
+    case NativeGuestExecutionStatus::kHleBlocked:
+      return "hle-blocked";
+    case NativeGuestExecutionStatus::kHleDispatchFailed:
+      return "hle-dispatch-failed";
+    case NativeGuestExecutionStatus::kGuestExit:
+      return "guest-exit";
     case NativeGuestExecutionStatus::kHostAllocationFailed:
       return "host-allocation-failed";
     case NativeGuestExecutionStatus::kHostProtectionFailed:

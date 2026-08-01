@@ -87,6 +87,8 @@
       saved host stack.
 - [x] Contain Windows guest access and instruction faults and restore the host
       execution state.
+- [x] Save and resume a blocked HLE continuation after the shared scheduler
+      wakes its guest thread.
 - [x] Build and own native HLE trampolines for all resolved executable imports.
 - Expand thread, event, file, and time coverage as their HLE bridges grow.
 - Compare small, repeatable traces with both upstream projects.

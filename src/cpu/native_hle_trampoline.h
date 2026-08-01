@@ -34,8 +34,7 @@ struct NativeHleDispatchSnapshot {
   hle::ExportRegistryStatus lookup_status = hle::ExportRegistryStatus::kOk;
   hle::HleContextStatus handler_status = hle::HleContextStatus::kOk;
   bool return_written = false;
-  std::array<bool, hle::kHleVectorReturnRegisterCount>
-      vector_return_written{};
+  std::array<bool, hle::kHleVectorReturnRegisterCount> vector_return_written{};
   bool host_exception = false;
   std::string library;
 };
@@ -45,8 +44,7 @@ class HostExecutableBuffer;
 class NativeHleTrampoline final {
  public:
   NativeHleTrampoline(memory::GuestMemory& memory,
-                      const hle::ExportRegistry& registry,
-                      std::string symbol,
+                      const hle::ExportRegistry& registry, std::string symbol,
                       std::vector<std::string> library_order,
                       std::size_t stack_argument_count = 0,
                       NativeGuestExecutionContext* execution_context = nullptr);
@@ -64,7 +62,8 @@ class NativeHleTrampoline final {
 
   [[nodiscard]] static std::uint64_t Dispatch(
       void* opaque_state, const std::uint64_t* arguments,
-      std::byte* floating_state) noexcept;
+      std::byte* floating_state,
+      const std::uint64_t* nonvolatile_registers) noexcept;
   void Build();
 
   std::unique_ptr<State> state_;

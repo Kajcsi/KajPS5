@@ -15,6 +15,9 @@
 #include "core/memory/guest_memory.h"
 #include "cpu/native_hle_trampoline.h"
 #include "hle/export_registry.h"
+#include "kernel/clock.h"
+#include "kernel/guest_scheduler.h"
+#include "kernel/handle_table.h"
 
 namespace {
 
@@ -47,6 +50,22 @@ std::uint64_t ReadUInt64(const kajps5::memory::GuestMemory& memory,
   return value;
 }
 
+kajps5::hle::HleVectorValue MakeVector(std::uint64_t low_bits) {
+  kajps5::hle::HleVectorValue value{};
+  for (std::size_t index = 0; index < sizeof(low_bits); ++index) {
+    value[index] = static_cast<std::byte>((low_bits >> (index * 8U)) & 0xffU);
+  }
+  return value;
+}
+
+std::uint64_t ReadVector(const kajps5::hle::HleVectorValue& value) {
+  std::uint64_t low_bits = 0;
+  for (std::size_t index = 0; index < sizeof(low_bits); ++index) {
+    low_bits |= static_cast<std::uint64_t>(value[index]) << (index * 8U);
+  }
+  return low_bits;
+}
+
 }  // namespace
 
 int main() {
@@ -71,6 +90,7 @@ int main() {
   const auto hle_code_address = base + 0x100;
   const auto memory_fault_code_address = base + 0x200;
   const auto instruction_fault_code_address = base + 0x220;
+  const auto blocked_hle_code_address = base + 0x300;
   const auto stack_address = base + 0x4000;
   const auto stack_size = std::uint64_t{0x4000};
   const auto parameters_address = stack_address + 0x100;
@@ -86,7 +106,11 @@ int main() {
 
   NativeGuestExecutor executor;
   kajps5::cpu::NativeGuestExecutionContext execution_context;
+  kajps5::kernel::HandleTable handles;
+  kajps5::kernel::KernelClockService clock;
+  kajps5::kernel::GuestScheduler scheduler(handles, clock);
   auto nested_status = NativeGuestExecutionStatus::kOk;
+  std::size_t blocking_dispatch_count = 0;
   ExportRegistry registry;
   Check(registry.Register(
             "libTest", "addOne",
@@ -100,11 +124,36 @@ int main() {
               return HleContextStatus::kOk;
             }) == ExportRegistryStatus::kOk,
         "HLE guest entry handler registration failed");
+  Check(registry.Register(
+            "libTest", "blockUntilWake",
+            [&](kajps5::hle::HleCallContext& call_context) {
+              ++blocking_dispatch_count;
+              const auto vector_argument = call_context.VectorArgument(0);
+              Check(vector_argument &&
+                        ReadVector(*vector_argument) == 0x0102030405060708ULL,
+                    "blocked HLE call changed its vector argument");
+              if (blocking_dispatch_count == 1) {
+                return scheduler.BlockCurrent("native-hle-test")
+                           ? HleContextStatus::kBlocked
+                           : HleContextStatus::kInvalidArgument;
+              }
+              call_context.SetReturn(0x55);
+              Check(call_context.SetVectorReturn(0, MakeVector(0x100)),
+                    "resumed HLE call rejected its vector return");
+              return HleContextStatus::kOk;
+            }) == ExportRegistryStatus::kOk,
+        "blocking HLE handler registration failed");
   kajps5::cpu::NativeHleTrampoline trampoline(
       *memory, registry, "addOne", std::vector<std::string>{"libTest"}, 0,
       &execution_context);
   Check(trampoline.status() == kajps5::cpu::NativeHleTrampolineStatus::kOk,
         "HLE guest entry trampoline creation failed");
+  kajps5::cpu::NativeHleTrampoline blocking_trampoline(
+      *memory, registry, "blockUntilWake", std::vector<std::string>{"libTest"},
+      0, &execution_context);
+  Check(blocking_trampoline.status() ==
+            kajps5::cpu::NativeHleTrampolineStatus::kOk,
+        "blocking HLE trampoline creation failed");
   using RawTrampoline = std::uint64_t (*)();
   Check(reinterpret_cast<RawTrampoline>(
             static_cast<std::uintptr_t>(trampoline.address()))() == 0,
@@ -136,6 +185,52 @@ int main() {
   hle_entry.push_back(std::byte{0x08});
   hle_entry.push_back(std::byte{0xc3});
 
+  std::vector<std::byte> blocked_hle_entry = {std::byte{0x48}, std::byte{0xbb}};
+  AppendUInt64(blocked_hle_entry, 1);
+  blocked_hle_entry.insert(blocked_hle_entry.end(),
+                           {std::byte{0x48}, std::byte{0xbd}});
+  AppendUInt64(blocked_hle_entry, 2);
+  blocked_hle_entry.insert(blocked_hle_entry.end(),
+                           {std::byte{0x49}, std::byte{0xbc}});
+  AppendUInt64(blocked_hle_entry, 3);
+  blocked_hle_entry.insert(blocked_hle_entry.end(),
+                           {std::byte{0x49}, std::byte{0xbd}});
+  AppendUInt64(blocked_hle_entry, 4);
+  blocked_hle_entry.insert(blocked_hle_entry.end(),
+                           {std::byte{0x49}, std::byte{0xbe}});
+  AppendUInt64(blocked_hle_entry, 5);
+  blocked_hle_entry.insert(blocked_hle_entry.end(),
+                           {std::byte{0x49}, std::byte{0xbf}});
+  AppendUInt64(blocked_hle_entry, 6);
+  blocked_hle_entry.insert(blocked_hle_entry.end(),
+                           {std::byte{0x48}, std::byte{0xb8}});
+  AppendUInt64(blocked_hle_entry, 0x0102030405060708ULL);
+  blocked_hle_entry.insert(
+      blocked_hle_entry.end(),
+      {std::byte{0x66}, std::byte{0x48}, std::byte{0x0f}, std::byte{0x6e},
+       std::byte{0xc0}, std::byte{0x48}, std::byte{0xb8}});
+  AppendUInt64(blocked_hle_entry, blocking_trampoline.address());
+  blocked_hle_entry.push_back(std::byte{0x48});
+  blocked_hle_entry.push_back(std::byte{0x83});
+  blocked_hle_entry.push_back(std::byte{0xec});
+  blocked_hle_entry.push_back(std::byte{0x08});
+  blocked_hle_entry.push_back(std::byte{0xff});
+  blocked_hle_entry.push_back(std::byte{0xd0});
+  blocked_hle_entry.push_back(std::byte{0x48});
+  blocked_hle_entry.push_back(std::byte{0x83});
+  blocked_hle_entry.push_back(std::byte{0xc4});
+  blocked_hle_entry.push_back(std::byte{0x08});
+  blocked_hle_entry.insert(
+      blocked_hle_entry.end(),
+      {std::byte{0x48}, std::byte{0x01}, std::byte{0xd8}, std::byte{0x48},
+       std::byte{0x01}, std::byte{0xe8}, std::byte{0x4c}, std::byte{0x01},
+       std::byte{0xe0}, std::byte{0x4c}, std::byte{0x01}, std::byte{0xe8},
+       std::byte{0x4c}, std::byte{0x01}, std::byte{0xf0}, std::byte{0x4c},
+       std::byte{0x01}, std::byte{0xf8}, std::byte{0x66}, std::byte{0x48},
+       std::byte{0x0f}, std::byte{0x7e}, std::byte{0xc1}, std::byte{0x48},
+       std::byte{0x01}, std::byte{0xc8}});
+  blocked_hle_entry.push_back(std::byte{0xc3});
+
   const std::array<std::byte, 14> memory_fault_entry = {
       std::byte{0x48}, std::byte{0xb8}, std::byte{0x01}, std::byte{0x00},
       std::byte{0x00}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00},
@@ -149,6 +244,7 @@ int main() {
             memory->Initialize(memory_fault_code_address, memory_fault_entry) &&
             memory->Initialize(instruction_fault_code_address,
                                instruction_fault_entry) &&
+            memory->Initialize(blocked_hle_code_address, blocked_hle_entry) &&
             memory->Protect(
                 code_address, 0x1000,
                 GuestMemoryProtection::kRead | GuestMemoryProtection::kExecute),
@@ -177,6 +273,37 @@ int main() {
             nested_status == NativeGuestExecutionStatus::kInvalidArgument &&
             !execution_context.active(),
         "guest entry did not return through the checked HLE trampoline");
+
+  const auto waiter = scheduler.CreateThread("native-waiter", 0);
+  Check(waiter && scheduler.SelectNext() == waiter.handle,
+        "native wait test thread did not start");
+  const auto blocked =
+      executor.Execute(*memory, blocked_hle_code_address, stack_address,
+                       stack_size, parameters_address, 0, &execution_context);
+  const auto blocked_thread = scheduler.Snapshot(waiter.handle);
+  Check(blocked.status == NativeGuestExecutionStatus::kHleBlocked &&
+            NativeGuestExecutionStatusName(blocked.status) == "hle-blocked" &&
+            blocked.hle_status == HleContextStatus::kBlocked &&
+            execution_context.suspended() && blocked_thread &&
+            blocked_thread->state == kajps5::kernel::GuestThreadState::kBlocked,
+        "blocked HLE call did not suspend its guest continuation");
+  Check(executor.Execute(*memory, code_address, stack_address, stack_size,
+                         parameters_address, 0, &execution_context)
+                .status == NativeGuestExecutionStatus::kInvalidArgument,
+        "suspended execution context accepted a new guest entry");
+  Check(scheduler.WakeBlockedThreads("native-hle-test", 1) == 1 &&
+            scheduler.SelectNext() == waiter.handle,
+        "blocked native guest thread did not wake");
+  const auto resumed = executor.Resume(*memory, execution_context);
+  Check(resumed.status == NativeGuestExecutionStatus::kOk &&
+            resumed.return_value == 0x16a && blocking_dispatch_count == 2 &&
+            !execution_context.active() && !execution_context.suspended(),
+        "woken HLE call did not resume the saved guest continuation");
+  Check(executor.Resume(*memory, execution_context).status ==
+            NativeGuestExecutionStatus::kInvalidArgument,
+        "completed guest continuation resumed twice");
+  Check(scheduler.ExitCurrent(resumed.return_value),
+        "resumed native guest thread did not exit cleanly");
 
 #if defined(_WIN32)
   const auto memory_fault =

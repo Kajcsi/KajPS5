@@ -66,13 +66,15 @@ The current core includes:
   entry tests use the real guest stack and entry arguments. HLE dispatch moves
   back to the saved host stack before a C++ handler runs. On Windows, guest
   access violations and illegal instructions return a checked fault result;
-  they do not leave the runtime on the guest stack.
+  they do not leave the runtime on the guest stack. A blocked HLE call saves
+  its guest continuation, returns control to the scheduler, retries after the
+  thread wakes, and resumes with the handler's final return value.
 - Small public and generated test fixtures, including an ELF that loads
   without running guest code and controlled x86-64 leaf programs used only by
   tests.
 
-KajPS5 still lacks general guest CPU execution, SELF decryption, resumable
-blocked HLE calls, graphics, audio, and title compatibility. The repository
+KajPS5 still lacks general guest CPU execution, SELF decryption, a multi-thread
+execution loop, graphics, audio, and title compatibility. The repository
 contains no games, firmware, keys, proprietary modules, or encrypted
 executables.
 
