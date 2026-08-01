@@ -87,7 +87,9 @@ int main() {
   if (!hle_memory) {
     return 1;
   }
-  const auto hle_base = hle_memory->base_address();
+  const auto hle_base =
+      (hle_memory->base_address() + kajps5::hle::kHleDataPageSize - 1) &
+      ~(kajps5::hle::kHleDataPageSize - 1);
   auto hle_session = TitleSession::Create(std::move(hle_memory));
   Check(hle_session != nullptr, "staged title session creation failed");
   if (!hle_session) {
