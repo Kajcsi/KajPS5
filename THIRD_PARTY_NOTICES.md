@@ -413,21 +413,25 @@ synthetic.
 ## Graphics
 
 The checked AGC command-buffer owner in `src/gpu/runtime.*` closely adapts the
-command-buffer allocation, type-3 PM4 header, NOP, direct-dispatch,
-packet-length, and predication algorithms from KytyPS5 `src/libs/agc.cpp` and
-`src/graphics/guest_gpu/pm4.h` at commit
+command-buffer allocation and type-3 PM4 packet algorithms from KytyPS5
+`src/libs/agc.cpp` and `src/graphics/guest_gpu/pm4.h` at commit
 `a65d17a5d689257a35644e01e9d15539361f0bf0`. These destination files use
 `GPL-2.0-only`, matching KytyPS5. They replace raw guest pointers and the
 upstream callback call with KajPS5's checked guest-memory boundary and an
 explicit callback-required result. KytyPS5 does not place a separate
-copyright header in these source files.
+copyright header in these source files. The adapted packet families cover
+NOP, direct and indirect dispatch, direct register writes, index state,
+indexed draws, indirect-buffer jumps, rewinds, predication, guest-backed data
+writes, level-of-detail statistics, waits, packet length, and packet
+predication.
 
 The HLE bridge in `src/hle/agc_exports.*` and
 `tests/hle_agc_exports_test.cpp` use the names and NIDs confirmed by the same
 KytyPS5 sources and by SharpEmu
 `src/SharpEmu.Libs/Agc/AgcExports.cs` at commit
 `7c9740fee8a633e17b145c6bc6d794e41d46c73f`. SharpEmu supplies independent
-bounds, reserved-space, packet-word, modifier, and invalid-pointer behavior.
+bounds, reserved-space, packed-register ABI, stack arguments, packet words,
+modifier rules, and invalid-pointer behavior.
 The SharpEmu reference file states:
 
 `Copyright (C) 2026 SharpEmu Emulator Project`

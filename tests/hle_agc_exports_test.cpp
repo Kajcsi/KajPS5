@@ -38,6 +38,11 @@ void SetArguments(kajps5::hle::HleCallContext& context,
                               index < arguments.size() ? arguments[index] : 0),
           "argument register setup failed");
   }
+  const auto stack_arguments = arguments.size() > registers.size()
+                                   ? arguments.subspan(registers.size())
+                                   : std::span<const std::uint64_t>{};
+  Check(context.SetCapturedStackArguments(stack_arguments),
+        "stack argument setup failed");
 }
 
 std::uint64_t ReturnValue(const kajps5::hle::HleCallContext& context) {
@@ -162,6 +167,117 @@ int main() {
             ReturnValue(context) == 0 && memory.Read(kPackets, nop) &&
             Read32(nop, 0) == 0xc0021001U,
         "packet predication was not applied");
+
+  Write64(command_buffer, kajps5::gpu::kAgcCommandBufferCursorUpOffset,
+          kPackets);
+  Write32(command_buffer,
+          kajps5::gpu::kAgcCommandBufferReservedDwordsOffset, 0);
+  Write64(command_buffer, kajps5::gpu::kAgcCommandBufferCallbackOffset, 0);
+  Check(memory.Write(kCommandBuffer, command_buffer),
+        "extended packet setup failed");
+
+  constexpr std::uint64_t kPackedRegister = 0x11223344abcd1234ULL;
+  const std::array register_arguments = {kCommandBuffer, kPackedRegister};
+  SetArguments(context, register_arguments);
+  Check(registry.Dispatch(kajps5::hle::kAgcDcbSetCxRegisterDirectNid,
+                          context) &&
+            ReturnValue(context) == kPackets,
+        "context-register packet call failed");
+  std::array<std::byte, 12> register_packet{};
+  Check(memory.Read(kPackets, register_packet) &&
+            Read32(register_packet, 0) == 0xc0016900U &&
+            Read32(register_packet, 4) == 0x1234U &&
+            Read32(register_packet, 8) == 0x11223344U,
+        "context-register packet words are incorrect");
+
+  constexpr auto kDrawPacket = kPackets + register_packet.size();
+  const std::array draw_arguments = {
+      kCommandBuffer, std::uint64_t{9}, std::uint64_t{0x123456780ULL},
+      std::uint64_t{0}};
+  SetArguments(context, draw_arguments);
+  Check(registry.Dispatch(kajps5::hle::kAgcDcbDrawIndexNid, context) &&
+            ReturnValue(context) == kDrawPacket,
+        "indexed-draw packet call failed");
+  std::array<std::byte, 24> draw_packet{};
+  Check(memory.Read(kDrawPacket, draw_packet) &&
+            Read32(draw_packet, 0) == 0xc0042700U &&
+            Read32(draw_packet, 4) == 9 &&
+            Read32(draw_packet, 8) == 0x23456780U &&
+            Read32(draw_packet, 12) == 1 &&
+            Read32(draw_packet, 16) == 9 && Read32(draw_packet, 20) == 0,
+        "indexed-draw packet words are incorrect");
+
+  constexpr auto kJumpPacket = kDrawPacket + draw_packet.size();
+  const std::array jump_arguments = {
+      kCommandBuffer, std::uint64_t{1}, std::uint64_t{2},
+      std::uint64_t{0x234567880ULL}, std::uint64_t{0x12345}};
+  SetArguments(context, jump_arguments);
+  Check(registry.Dispatch(kajps5::hle::kAgcDcbJumpNid, context) &&
+            ReturnValue(context) == kJumpPacket,
+        "jump packet call failed");
+  std::array<std::byte, 16> jump_packet{};
+  Check(memory.Read(kJumpPacket, jump_packet) &&
+            Read32(jump_packet, 0) == 0xc0023f00U &&
+            Read32(jump_packet, 4) == 0x34567880U &&
+            Read32(jump_packet, 8) == 2 &&
+            Read32(jump_packet, 12) == 0x2f312345U,
+        "jump packet words are incorrect");
+
+  constexpr std::uint64_t kWriteSource = kBase + 0x800;
+  std::array<std::byte, 8> write_source{};
+  Write32(write_source, 0, 0x55667788U);
+  Write32(write_source, 4, 0x99aabbccU);
+  Check(memory.Write(kWriteSource, write_source), "write-data setup failed");
+  constexpr auto kWritePacket = kJumpPacket + jump_packet.size();
+  const std::array write_arguments = {
+      kCommandBuffer, std::uint64_t{2}, std::uint64_t{1},
+      std::uint64_t{0x345678980ULL}, kWriteSource, std::uint64_t{2},
+      std::uint64_t{1}, std::uint64_t{1}};
+  SetArguments(context, write_arguments);
+  Check(registry.Dispatch(kajps5::hle::kAgcDcbWriteDataNid, context) &&
+            ReturnValue(context) == kWritePacket,
+        "write-data packet call failed");
+  std::array<std::byte, 24> write_packet{};
+  Check(memory.Read(kWritePacket, write_packet) &&
+            Read32(write_packet, 0) == 0xc0043700U &&
+            Read32(write_packet, 4) == 0x02110100U &&
+            Read32(write_packet, 8) == 0x45678980U &&
+            Read32(write_packet, 12) == 3 &&
+            Read32(write_packet, 16) == 0x55667788U &&
+            Read32(write_packet, 20) == 0x99aabbccU,
+        "write-data packet words are incorrect");
+
+  constexpr auto kWaitPacket = kWritePacket + write_packet.size();
+  const std::array wait_arguments = {
+      kCommandBuffer, std::uint64_t{0}, std::uint64_t{3},
+      std::uint64_t{2}, std::uint64_t{1}, std::uint64_t{0x456789a83ULL},
+      std::uint64_t{0x55}, std::uint64_t{0xff}, std::uint64_t{0x120}};
+  SetArguments(context, wait_arguments);
+  Check(registry.Dispatch(kajps5::hle::kAgcDcbWaitRegMemNid, context) &&
+            ReturnValue(context) == kWaitPacket,
+        "wait-memory packet call failed");
+  std::array<std::byte, 28> wait_packet{};
+  Check(memory.Read(kWaitPacket, wait_packet) &&
+            Read32(wait_packet, 0) == 0xc0051028U &&
+            Read32(wait_packet, 4) == 0x56789a80U &&
+            Read32(wait_packet, 8) == 4 &&
+            Read32(wait_packet, 12) == 0xffU &&
+            Read32(wait_packet, 16) == 0x55U &&
+            Read32(wait_packet, 20) == 0x02000213U &&
+            Read32(wait_packet, 24) == 0x12U,
+        "wait-memory packet words are incorrect");
+
+  const std::array write_size_argument = {std::uint64_t{5}};
+  SetArguments(context, write_size_argument);
+  Check(registry.Dispatch(kajps5::hle::kAgcDcbWriteDataGetSizeNid, context) &&
+            ReturnValue(context) == 36,
+        "write-data size query is incorrect");
+  const std::array wait_size_argument = {std::uint64_t{1}};
+  SetArguments(context, wait_size_argument);
+  Check(registry.Dispatch(kajps5::hle::kAgcDcbWaitOnAddressGetSizeNid,
+                          context) &&
+            ReturnValue(context) == 64,
+        "wait-memory size query is incorrect");
 
   std::array<std::byte, sizeof(std::uint32_t)> custom_header{};
   Write32(custom_header, 0, 0x3fff1000U);

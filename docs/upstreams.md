@@ -58,6 +58,15 @@ adapted paths change.
 - Validation: the update checker reported both pins current; all 46 KajPS5
   tests passed in Debug, Release, and AddressSanitizer builds. Gitleaks and
   actionlint also passed.
+- A normalized library-scope comparison found SharpEmu implementations that
+  do not have matching KytyPS5 `LIB_VERSION` families:
+  `libSceBluetoothHid`, `libSceDiscMap`, `libSceNpCppWebApi`,
+  `libSceNpManagerForToolkit`, `libSceShareUtility`, and
+  `libSceVideoRecording`. SharpEmu also has `libSceJson` and
+  `libSceVideodec` aliases for KytyPS5's `Json2` and `Videodec2` families.
+  Its `libfmod` surface is third-party-facing and needs separate provenance.
+  These scopes remain SharpEmu coverage targets where title evidence requires
+  them.
 
 When KajPS5 imports code, identify the upstream file and commit, keep its
 copyright and license notice, and update `THIRD_PARTY_NOTICES.md` in the same

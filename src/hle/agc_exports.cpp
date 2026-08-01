@@ -5,6 +5,7 @@
 
 #include "hle/agc_exports.h"
 
+#include <array>
 #include <bit>
 #include <cstdint>
 #include <utility>
@@ -37,6 +38,84 @@ HleContextStatus ReturnPacket(HleCallContext& context,
   context.SetReturn(result ? result.address : 0);
   return HleContextStatus::kOk;
 }
+
+struct PacketExport {
+  const char* name;
+  const char* nid;
+  gpu::AgcPacketType type;
+  std::size_t argument_count;
+};
+
+constexpr std::array kPacketExports = {
+    PacketExport{"sceAgcDcbSetShRegisterDirect",
+                 kAgcDcbSetShRegisterDirectNid,
+                 gpu::AgcPacketType::kSetShRegisterDirect, 2},
+    PacketExport{"sceAgcDcbSetCxRegisterDirect",
+                 kAgcDcbSetCxRegisterDirectNid,
+                 gpu::AgcPacketType::kSetCxRegisterDirect, 2},
+    PacketExport{"sceAgcDcbSetUcRegisterDirect",
+                 kAgcDcbSetUcRegisterDirectNid,
+                 gpu::AgcPacketType::kSetUcRegisterDirect, 2},
+    PacketExport{"sceAgcDcbSetIndexSize", kAgcDcbSetIndexSizeNid,
+                 gpu::AgcPacketType::kSetIndexSize, 3},
+    PacketExport{"sceAgcDcbSetIndexBuffer", kAgcDcbSetIndexBufferNid,
+                 gpu::AgcPacketType::kSetIndexBuffer, 2},
+    PacketExport{"sceAgcDcbSetIndexCount", kAgcDcbSetIndexCountNid,
+                 gpu::AgcPacketType::kSetIndexCount, 2},
+    PacketExport{"sceAgcDcbSetNumInstances", kAgcDcbSetNumInstancesNid,
+                 gpu::AgcPacketType::kSetNumInstances, 2},
+    PacketExport{"sceAgcDcbDrawIndex", kAgcDcbDrawIndexNid,
+                 gpu::AgcPacketType::kDrawIndex, 4},
+    PacketExport{"sceAgcDcbDrawIndexMultiInstanced",
+                 kAgcDcbDrawIndexMultiInstancedNid,
+                 gpu::AgcPacketType::kDrawIndexMultiInstanced, 6},
+    PacketExport{"sceAgcDcbDrawIndexAuto", kAgcDcbDrawIndexAutoNid,
+                 gpu::AgcPacketType::kDrawIndexAuto, 3},
+    PacketExport{"sceAgcDcbDrawIndexOffset", kAgcDcbDrawIndexOffsetNid,
+                 gpu::AgcPacketType::kDrawIndexOffset, 4},
+    PacketExport{"sceAgcDcbSetBaseIndirectArgs",
+                 kAgcDcbSetBaseIndirectArgsNid,
+                 gpu::AgcPacketType::kSetBaseIndirectArgs, 3},
+    PacketExport{"sceAgcDcbDispatchIndirect", kAgcDcbDispatchIndirectNid,
+                 gpu::AgcPacketType::kDispatchIndirect, 3},
+    PacketExport{"sceAgcDcbJump", kAgcDcbJumpNid,
+                 gpu::AgcPacketType::kJump, 5},
+    PacketExport{"sceAgcDcbRewind", kAgcDcbRewindNid,
+                 gpu::AgcPacketType::kRewind, 2},
+    PacketExport{"sceAgcDcbSetPredication", kAgcDcbSetPredicationNid,
+                 gpu::AgcPacketType::kSetPredication, 6},
+    PacketExport{"sceAgcDcbWriteData", kAgcDcbWriteDataNid,
+                 gpu::AgcPacketType::kWriteData, 8},
+    PacketExport{"sceAgcDcbGetLodStats", kAgcDcbGetLodStatsNid,
+                 gpu::AgcPacketType::kGetLodStats, 8},
+    PacketExport{"sceAgcDcbWaitRegMem", kAgcDcbWaitRegMemNid,
+                 gpu::AgcPacketType::kWaitRegMem, 9},
+};
+
+struct FixedSizeExport {
+  const char* name;
+  const char* nid;
+  std::uint32_t bytes;
+};
+
+constexpr std::array kFixedSizeExports = {
+    FixedSizeExport{"sceAgcDcbSetCxRegisterDirectGetSize",
+                    kAgcDcbSetCxRegisterDirectGetSizeNid, 12},
+    FixedSizeExport{"sceAgcDcbSetNumInstancesGetSize",
+                    kAgcDcbSetNumInstancesGetSizeNid, 8},
+    FixedSizeExport{"sceAgcDcbDrawIndexGetSize", kAgcDcbDrawIndexGetSizeNid,
+                    24},
+    FixedSizeExport{"sceAgcDcbDrawIndexMultiInstancedGetSize",
+                    kAgcDcbDrawIndexMultiInstancedGetSizeNid, 36},
+    FixedSizeExport{"sceAgcDcbDrawIndexAutoGetSize",
+                    kAgcDcbDrawIndexAutoGetSizeNid, 12},
+    FixedSizeExport{"sceAgcDcbDrawIndexOffsetGetSize",
+                    kAgcDcbDrawIndexOffsetGetSizeNid, 20},
+    FixedSizeExport{"sceAgcDcbDispatchIndirectGetSize",
+                    kAgcDcbDispatchIndirectGetSizeNid, 12},
+    FixedSizeExport{"sceAgcDcbJumpGetSize", kAgcDcbJumpGetSizeNid, 16},
+    FixedSizeExport{"sceAgcDcbRewindGetSize", kAgcDcbRewindGetSizeNid, 8},
+};
 
 }  // namespace
 
@@ -96,6 +175,44 @@ ExportRegistryStatus RegisterAgcExports(ExportRegistry& registry,
         } else {
           SetSignedResult(context, kGen5ErrorMemoryFault);
         }
+        return HleContextStatus::kOk;
+      });
+
+  for (const auto& definition : kPacketExports) {
+    Add(exports, definition.name, definition.nid,
+        [runtime, definition](HleCallContext& context) {
+          std::array<std::uint64_t, 9> arguments{};
+          for (std::size_t index = 0; index < definition.argument_count;
+               ++index) {
+            arguments[index] = context.Argument(index).value_or(0);
+          }
+          return ReturnPacket(
+              context,
+              runtime->WriteAgcPacket(
+                  definition.type,
+                  std::span<const std::uint64_t>(arguments.data(),
+                                                 definition.argument_count)));
+        });
+  }
+  for (const auto& definition : kFixedSizeExports) {
+    Add(exports, definition.name, definition.nid,
+        [definition](HleCallContext& context) {
+          context.SetReturn(definition.bytes);
+          return HleContextStatus::kOk;
+        });
+  }
+  Add(exports, "sceAgcDcbWriteDataGetSize", kAgcDcbWriteDataGetSizeNid,
+      [](HleCallContext& context) {
+        const auto dword_count = static_cast<std::uint32_t>(
+            context.Argument(0).value_or(0));
+        context.SetReturn(static_cast<std::uint32_t>(dword_count * 4U + 16U));
+        return HleContextStatus::kOk;
+      });
+  Add(exports, "sceAgcDcbWaitOnAddressGetSize",
+      kAgcDcbWaitOnAddressGetSizeNid, [](HleCallContext& context) {
+        const auto size = static_cast<std::uint32_t>(
+            context.Argument(0).value_or(0));
+        context.SetReturn(size == 0 ? 56U : (size == 1 ? 64U : 0U));
         return HleContextStatus::kOk;
       });
 

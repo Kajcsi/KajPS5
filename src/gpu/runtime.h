@@ -36,6 +36,28 @@ enum class GpuRuntimeStatus {
   kResourceLimit,
 };
 
+enum class AgcPacketType {
+  kSetShRegisterDirect,
+  kSetCxRegisterDirect,
+  kSetUcRegisterDirect,
+  kSetIndexSize,
+  kSetIndexBuffer,
+  kSetIndexCount,
+  kSetNumInstances,
+  kDrawIndex,
+  kDrawIndexMultiInstanced,
+  kDrawIndexAuto,
+  kDrawIndexOffset,
+  kSetBaseIndirectArgs,
+  kDispatchIndirect,
+  kJump,
+  kRewind,
+  kSetPredication,
+  kWriteData,
+  kGetLodStats,
+  kWaitRegMem,
+};
+
 struct GpuPacketResult {
   GpuRuntimeStatus status = GpuRuntimeStatus::kOk;
   std::uint64_t address = 0;
@@ -64,6 +86,8 @@ class GpuRuntime final {
       std::uint64_t command_buffer, std::uint32_t group_count_x,
       std::uint32_t group_count_y, std::uint32_t group_count_z,
       std::uint32_t modifier);
+  [[nodiscard]] GpuPacketResult WriteAgcPacket(
+      AgcPacketType type, std::span<const std::uint64_t> arguments);
   [[nodiscard]] GpuPacketSizeResult GetPacketSize(
       std::uint64_t packet_address) const noexcept;
   [[nodiscard]] GpuRuntimeStatus SetPacketPredication(

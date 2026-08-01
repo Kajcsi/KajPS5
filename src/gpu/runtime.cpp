@@ -7,7 +7,9 @@
 
 #include "gpu/runtime.h"
 
+#include <algorithm>
 #include <array>
+#include <initializer_list>
 #include <limits>
 #include <new>
 #include <vector>
@@ -21,7 +23,27 @@ constexpr std::uint32_t kPm4Type3 = 0xc0000000U;
 constexpr std::uint32_t kPm4LengthMask = 0x3fffU;
 constexpr std::uint32_t kPm4RegisterMask = 0x3fU;
 constexpr std::uint32_t kPm4NopOpcode = 0x10U;
+constexpr std::uint32_t kPm4SetBaseOpcode = 0x11U;
+constexpr std::uint32_t kPm4IndexBufferSizeOpcode = 0x13U;
 constexpr std::uint32_t kPm4DispatchDirectOpcode = 0x15U;
+constexpr std::uint32_t kPm4DispatchIndirectOpcode = 0x16U;
+constexpr std::uint32_t kPm4SetPredicationOpcode = 0x20U;
+constexpr std::uint32_t kPm4IndexBaseOpcode = 0x26U;
+constexpr std::uint32_t kPm4DrawIndexOpcode = 0x27U;
+constexpr std::uint32_t kPm4DrawIndexAutoOpcode = 0x2dU;
+constexpr std::uint32_t kPm4NumInstancesOpcode = 0x2fU;
+constexpr std::uint32_t kPm4DrawIndexOffsetOpcode = 0x35U;
+constexpr std::uint32_t kPm4WriteDataOpcode = 0x37U;
+constexpr std::uint32_t kPm4IndirectBufferOpcode = 0x3fU;
+constexpr std::uint32_t kPm4RewindOpcode = 0x59U;
+constexpr std::uint32_t kPm4SetContextRegisterOpcode = 0x69U;
+constexpr std::uint32_t kPm4SetShRegisterOpcode = 0x76U;
+constexpr std::uint32_t kPm4SetUconfigRegisterOpcode = 0x79U;
+constexpr std::uint32_t kPm4SetUconfigRegisterIndexOpcode = 0x7aU;
+constexpr std::uint32_t kPm4GetLodStatsOpcode = 0x8eU;
+constexpr std::uint32_t kPm4WaitMemory32Register = 0x0aU;
+constexpr std::uint32_t kPm4WaitMemory64Register = 0x16U;
+constexpr std::uint32_t kVgtIndexTypeRegister = 0x243U;
 constexpr std::uint32_t kDirectDispatchModifierMask = 0xa038U;
 constexpr std::uint32_t kDirectDispatchRequiredBits = 0x41U;
 
@@ -41,6 +63,32 @@ std::uint32_t MakePm4Header(std::uint32_t dword_count,
          (((dword_count - 2U) & kPm4LengthMask) << 16U) |
          ((opcode & 0xffU) << 8U) |
          ((packet_register & kPm4RegisterMask) << 2U);
+}
+
+std::uint32_t DrawIndexInitiator(std::uint64_t modifier) noexcept {
+  return (modifier & (1ULL << 32U)) != 0
+             ? 0
+             : (static_cast<std::uint32_t>(modifier) >> 3U) & 0x20U;
+}
+
+std::uint32_t WaitPoll(std::uint32_t poll_cycles) noexcept {
+  return std::min(poll_cycles >> 4U, 0xffffU);
+}
+
+std::uint32_t Wait32Control(std::uint32_t compare_function,
+                            std::uint32_t operation,
+                            std::uint32_t cache_policy) noexcept {
+  return 0x10U | (compare_function & 0x7U) |
+         ((operation & 0x3U) << 8U) | ((operation & 0xcU) << 4U) |
+         ((cache_policy & 0x3U) << 25U);
+}
+
+std::uint32_t Wait64Control(std::uint32_t compare_function,
+                            std::uint32_t operation,
+                            std::uint32_t cache_policy) noexcept {
+  return 0x10U | (compare_function & 0x7U) |
+         ((operation & 0x1U) << 8U) | ((operation & 0x6U) << 5U) |
+         ((cache_policy & 0x3U) << 25U);
 }
 
 std::uint32_t Read32(std::span<const std::byte> bytes) noexcept {
@@ -189,6 +237,235 @@ GpuPacketResult GpuRuntime::WriteDispatch(
       (modifier & kDirectDispatchModifierMask) |
           kDirectDispatchRequiredBits};
   return AppendPacket(command_buffer, packet);
+}
+
+GpuPacketResult GpuRuntime::WriteAgcPacket(
+    AgcPacketType type, std::span<const std::uint64_t> arguments) {
+  if (arguments.empty()) {
+    return {GpuRuntimeStatus::kInvalidArgument};
+  }
+  const auto argument = [arguments](std::size_t index) noexcept {
+    return index < arguments.size() ? arguments[index] : 0;
+  };
+  const auto command_buffer = argument(0);
+  const auto append = [this, command_buffer](
+                          std::initializer_list<std::uint32_t> words) {
+    return AppendPacket(
+        command_buffer,
+        std::span<const std::uint32_t>(words.begin(), words.size()));
+  };
+
+  try {
+    if (type == AgcPacketType::kSetShRegisterDirect ||
+        type == AgcPacketType::kSetCxRegisterDirect ||
+        type == AgcPacketType::kSetUcRegisterDirect) {
+      const auto packed_register = argument(1);
+      auto opcode = kPm4SetShRegisterOpcode;
+      if (type == AgcPacketType::kSetCxRegisterDirect) {
+        opcode = kPm4SetContextRegisterOpcode;
+      } else if (type == AgcPacketType::kSetUcRegisterDirect) {
+        opcode = kPm4SetUconfigRegisterOpcode;
+      }
+      return append({MakePm4Header(3, opcode, 0),
+                     static_cast<std::uint32_t>(packed_register) & 0xffffU,
+                     static_cast<std::uint32_t>(packed_register >> 32U)});
+    }
+    if (type == AgcPacketType::kSetIndexSize) {
+      const auto index_size = static_cast<std::uint32_t>(argument(1));
+      const auto cache_policy = static_cast<std::uint32_t>(argument(2));
+      return append(
+          {MakePm4Header(3, kPm4SetUconfigRegisterIndexOpcode, 0),
+           0x20000000U | kVgtIndexTypeRegister,
+           0x400U | (index_size & 0x3U) | ((cache_policy & 0x3U) << 6U)});
+    }
+    if (type == AgcPacketType::kSetIndexBuffer) {
+      const auto address = argument(1);
+      if ((address & 1U) != 0) {
+        return {GpuRuntimeStatus::kInvalidArgument};
+      }
+      return append({MakePm4Header(3, kPm4IndexBaseOpcode, 0),
+                     static_cast<std::uint32_t>(address),
+                     static_cast<std::uint32_t>(address >> 32U)});
+    }
+    if (type == AgcPacketType::kSetIndexCount) {
+      return append({MakePm4Header(2, kPm4IndexBufferSizeOpcode, 0),
+                     static_cast<std::uint32_t>(argument(1))});
+    }
+    if (type == AgcPacketType::kSetNumInstances) {
+      return append({MakePm4Header(2, kPm4NumInstancesOpcode, 0),
+                     static_cast<std::uint32_t>(argument(1))});
+    }
+    if (type == AgcPacketType::kDrawIndex) {
+      const auto count = static_cast<std::uint32_t>(argument(1));
+      const auto address = argument(2);
+      const auto modifier = argument(3);
+      if (address == 0 || (address & 1U) != 0) {
+        return {GpuRuntimeStatus::kInvalidArgument};
+      }
+      return append({MakePm4Header(6, kPm4DrawIndexOpcode, 0),
+                     count == 0 ? 1U : count,
+                     static_cast<std::uint32_t>(address),
+                     static_cast<std::uint32_t>(address >> 32U), count,
+                     DrawIndexInitiator(modifier)});
+    }
+    if (type == AgcPacketType::kDrawIndexMultiInstanced) {
+      const auto count = static_cast<std::uint32_t>(argument(1));
+      const auto index_address = argument(2);
+      const auto object_address = argument(3);
+      const auto instance_count = static_cast<std::uint32_t>(argument(4));
+      if (index_address == 0 || object_address == 0 ||
+          (index_address & 1U) != 0) {
+        return {GpuRuntimeStatus::kInvalidArgument};
+      }
+      return append(
+          {MakePm4Header(9, 0x3aU, 0), count,
+           static_cast<std::uint32_t>(index_address),
+           static_cast<std::uint32_t>(index_address >> 32U),
+           instance_count == 0 ? 1U : instance_count,
+           static_cast<std::uint32_t>(object_address),
+           static_cast<std::uint32_t>(object_address >> 32U), instance_count,
+           DrawIndexInitiator(argument(5)) | 0x80U});
+    }
+    if (type == AgcPacketType::kDrawIndexAuto) {
+      return append({MakePm4Header(3, kPm4DrawIndexAutoOpcode, 0),
+                     static_cast<std::uint32_t>(argument(1)),
+                     DrawIndexInitiator(argument(2)) | 0x2U});
+    }
+    if (type == AgcPacketType::kDrawIndexOffset) {
+      const auto count = static_cast<std::uint32_t>(argument(2));
+      return append({MakePm4Header(5, kPm4DrawIndexOffsetOpcode, 0),
+                     count == 0 ? 1U : count,
+                     static_cast<std::uint32_t>(argument(1)), count,
+                     DrawIndexInitiator(argument(3))});
+    }
+    if (type == AgcPacketType::kSetBaseIndirectArgs) {
+      const auto shader_type = static_cast<std::uint32_t>(argument(1));
+      const auto address = argument(2);
+      return append(
+          {MakePm4Header(4, kPm4SetBaseOpcode, 0) | (shader_type << 1U), 1U,
+           static_cast<std::uint32_t>(address) & ~0x7U,
+           static_cast<std::uint32_t>(address >> 32U)});
+    }
+    if (type == AgcPacketType::kDispatchIndirect) {
+      const auto flags = static_cast<std::uint32_t>(argument(2));
+      return append({MakePm4Header(3, kPm4DispatchIndirectOpcode, 0),
+                     static_cast<std::uint32_t>(argument(1)),
+                     (flags & kDirectDispatchModifierMask) |
+                         kDirectDispatchRequiredBits});
+    }
+    if (type == AgcPacketType::kJump) {
+      const auto mode = static_cast<std::uint32_t>(argument(1));
+      const auto cache_policy = static_cast<std::uint32_t>(argument(2));
+      const auto target = argument(3);
+      const auto size = static_cast<std::uint32_t>(argument(4));
+      return append(
+          {MakePm4Header(4, kPm4IndirectBufferOpcode, 0),
+           static_cast<std::uint32_t>(target) & ~0x3U,
+           static_cast<std::uint32_t>(target >> 32U),
+           0x0f200000U | ((cache_policy & 0x3U) << 28U) |
+               ((mode & 0x1U) << 20U) | (size & 0xfffffU)});
+    }
+    if (type == AgcPacketType::kRewind) {
+      return append({MakePm4Header(2, kPm4RewindOpcode, 0),
+                     (static_cast<std::uint32_t>(argument(1)) & 1U) << 31U});
+    }
+    if (type == AgcPacketType::kSetPredication) {
+      const auto condition = static_cast<std::uint32_t>(argument(1));
+      const auto operation = static_cast<std::uint32_t>(argument(2));
+      const auto wait_operation = static_cast<std::uint32_t>(argument(3));
+      const auto address = argument(4);
+      return append(
+          {MakePm4Header(4, kPm4SetPredicationOpcode, 0),
+           ((condition & 1U) << 8U) | ((wait_operation & 1U) << 12U) |
+               ((operation & 7U) << 16U),
+           static_cast<std::uint32_t>(address) & ~0xfU,
+           static_cast<std::uint32_t>(address >> 32U)});
+    }
+    if (type == AgcPacketType::kWriteData) {
+      const auto data_address = argument(4);
+      const auto dword_count = static_cast<std::uint32_t>(argument(5));
+      if (data_address == 0 || dword_count > 0x3ffdU) {
+        return {GpuRuntimeStatus::kInvalidArgument};
+      }
+      const auto byte_count =
+          static_cast<std::size_t>(dword_count) * sizeof(std::uint32_t);
+      std::vector<std::byte> data(byte_count);
+      if (byte_count != 0 && !memory_.Read(data_address, data)) {
+        return {GpuRuntimeStatus::kMemoryFault};
+      }
+      std::vector<std::uint32_t> packet(4 + dword_count);
+      const auto destination = static_cast<std::uint32_t>(argument(1));
+      const auto cache_policy = static_cast<std::uint32_t>(argument(2));
+      const auto increment = static_cast<std::uint32_t>(argument(6));
+      const auto write_confirm = destination == 0
+                                     ? 0U
+                                     : static_cast<std::uint32_t>(argument(7)) &
+                                           1U;
+      packet[0] = MakePm4Header(4 + dword_count, kPm4WriteDataOpcode, 0);
+      packet[1] = ((destination & 1U) << 30U) |
+                  ((destination & 0x1eU) << 7U) |
+                  ((increment & 1U) << 16U) | (write_confirm << 20U) |
+                  ((cache_policy & 3U) << 25U);
+      packet[2] = static_cast<std::uint32_t>(argument(3)) & ~0x3U;
+      packet[3] = static_cast<std::uint32_t>(argument(3) >> 32U);
+      for (std::size_t index = 0; index < dword_count; ++index) {
+        packet[4 + index] = Read32(
+            std::span<const std::byte>(data).subspan(index * 4U, 4U));
+      }
+      return AppendPacket(command_buffer, packet);
+    }
+    if (type == AgcPacketType::kGetLodStats) {
+      const auto address = argument(2);
+      const auto cache_policy = static_cast<std::uint32_t>(argument(1));
+      const auto reset_count = static_cast<std::uint32_t>(argument(4));
+      const auto force_reset = static_cast<std::uint32_t>(argument(5));
+      const auto report_and_reset = static_cast<std::uint32_t>(argument(6));
+      const auto interval = static_cast<std::uint32_t>(argument(7));
+      return append(
+          {MakePm4Header(5, kPm4GetLodStatsOpcode, 0),
+           static_cast<std::uint32_t>(argument(3)),
+           static_cast<std::uint32_t>(address) & 0xffffffc0U,
+           static_cast<std::uint32_t>(address >> 32U),
+           ((cache_policy & 3U) << 28U) |
+               ((report_and_reset & 1U) << 19U) |
+               ((force_reset & 1U) << 18U) |
+               ((reset_count & 0xffU) << 10U) | ((interval & 0xffU) << 2U)});
+    }
+    if (type == AgcPacketType::kWaitRegMem) {
+      const auto size = static_cast<std::uint32_t>(argument(1));
+      const auto compare = static_cast<std::uint32_t>(argument(2));
+      const auto operation = static_cast<std::uint32_t>(argument(3));
+      const auto cache_policy = static_cast<std::uint32_t>(argument(4));
+      const auto address = argument(5);
+      const auto reference = argument(6);
+      const auto mask = argument(7);
+      const auto poll = WaitPoll(static_cast<std::uint32_t>(argument(8)));
+      if (size > 1 || compare > 7 || operation > 4 || cache_policy > 3) {
+        return {GpuRuntimeStatus::kInvalidArgument};
+      }
+      if (size == 0) {
+        return append(
+            {MakePm4Header(7, kPm4NopOpcode, kPm4WaitMemory32Register),
+             static_cast<std::uint32_t>(address) & ~0x3U,
+             static_cast<std::uint32_t>(address >> 32U) & 0x3ffffU,
+             static_cast<std::uint32_t>(mask),
+             static_cast<std::uint32_t>(reference),
+             Wait32Control(compare, operation, cache_policy), poll});
+      }
+      return append(
+          {MakePm4Header(9, kPm4NopOpcode, kPm4WaitMemory64Register),
+           static_cast<std::uint32_t>(address) & ~0x7U,
+           static_cast<std::uint32_t>(address >> 32U) & 0x3ffffU,
+           static_cast<std::uint32_t>(mask),
+           static_cast<std::uint32_t>(mask >> 32U),
+           static_cast<std::uint32_t>(reference),
+           static_cast<std::uint32_t>(reference >> 32U),
+           Wait64Control(compare, operation, cache_policy), poll});
+    }
+  } catch (const std::bad_alloc&) {
+    return {GpuRuntimeStatus::kResourceLimit};
+  }
+  return {GpuRuntimeStatus::kInvalidArgument};
 }
 
 GpuPacketSizeResult GpuRuntime::GetPacketSize(
