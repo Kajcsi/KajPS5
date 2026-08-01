@@ -43,6 +43,9 @@ fallback, initializer discovery, and handling of already-dumped payloads.
 Dynamic startup and shutdown tags and arrays follow KytyPS5's runtime-linker
 model. The lifecycle planner combines KytyPS5's direct module hooks with
 SharpEmu's checked array discovery and duplicate suppression.
+The checked Variant II layout in `src/loader/static_tls_layout.*` adapts
+KytyPS5's per-module TLS ownership and SharpEmu's aligned static-offset
+calculation, duplicate registration checks, and bounded startup reservation.
 The relocation planner adapts SharpEmu's checked formulas and write widths for
 PC-relative, 32-bit, symbol-size, and `RELATIVE64` relocations. A narrow value
 must fit its signed or unsigned target before the planner writes guest memory.

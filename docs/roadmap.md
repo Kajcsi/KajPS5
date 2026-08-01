@@ -63,6 +63,7 @@
 - [x] Add deterministic dependency order for supplied module initializers.
 - [x] Resolve versioned exports between supplied PS5 modules.
 - [x] Apply checked TLS module-ID relocations after TLS registration.
+- [x] Build a checked, bounded Variant II static TLS module layout.
 - [x] Add a platform-neutral checked HLE call context.
 - [x] Add deterministic library-scoped HLE handler dispatch.
 - [x] Relocate known runtime data imports to checked guest memory.
