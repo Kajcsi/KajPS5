@@ -1,4 +1,5 @@
 // Copyright (C) 2026 KajPS5 contributors
+// Architecture reference: KytyPS5
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #pragma once
@@ -41,10 +42,21 @@ class GuestMemory final {
       std::uint64_t base_address, std::size_t size,
       GuestMemoryProtection initial_protection =
           GuestMemoryProtection::kRead | GuestMemoryProtection::kWrite);
+  ~GuestMemory();
+
+  GuestMemory(const GuestMemory&) = delete;
+  GuestMemory& operator=(const GuestMemory&) = delete;
+
+  [[nodiscard]] static std::unique_ptr<GuestMemory> CreateHostMapped(
+      std::size_t size,
+      GuestMemoryProtection initial_protection =
+          GuestMemoryProtection::kNone) noexcept;
 
   [[nodiscard]] std::uint64_t base_address() const noexcept;
   [[nodiscard]] std::uint64_t end_address() const noexcept;
   [[nodiscard]] std::uint64_t size() const noexcept;
+  [[nodiscard]] bool host_mapped() const noexcept;
+  [[nodiscard]] std::uint64_t mapping_granularity() const noexcept;
 
   [[nodiscard]] bool Contains(std::uint64_t address,
                               std::uint64_t length) const noexcept;
@@ -87,6 +99,9 @@ class GuestMemory final {
                                     std::byte value) noexcept;
 
  private:
+  GuestMemory(std::byte* host_mapping, std::size_t size,
+              std::size_t mapping_granularity) noexcept;
+
   struct SharedMapping {
     std::uint64_t address = 0;
     std::uint64_t size = 0;
@@ -109,7 +124,10 @@ class GuestMemory final {
   void CoalesceRegions();
 
   std::uint64_t base_address_ = 0;
+  std::size_t storage_size_ = 0;
+  std::size_t mapping_granularity_ = 1;
   std::vector<std::byte> bytes_;
+  std::byte* host_mapping_ = nullptr;
   std::vector<GuestMemoryRegion> regions_;
   std::vector<SharedMapping> shared_mappings_;
 };

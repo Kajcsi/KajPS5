@@ -73,14 +73,27 @@ NativeExecutionResult NativeLeafExecutor::Execute(
   if (!memory.CanExecute(entry_point, code_size)) {
     return {NativeExecutionStatus::kGuestCodeNotExecutable, 0};
   }
+
+#if !defined(_M_X64) && !defined(__x86_64__)
+  return {NativeExecutionStatus::kUnsupportedHost, 0};
+#else
+  if (memory.host_mapped()) {
+    auto* const guest_entry = reinterpret_cast<void*>(
+        static_cast<std::uintptr_t>(entry_point));
+#if defined(_WIN32) && defined(_M_X64)
+    return ExecuteThroughWindowsAbiBridge(guest_entry);
+#else
+    using LeafFunction = std::uint64_t (*)();
+    const auto function = reinterpret_cast<LeafFunction>(guest_entry);
+    return {NativeExecutionStatus::kOk, function()};
+#endif
+  }
+
   if (!memory.CanAccess(entry_point, code_size,
                         memory::GuestMemoryProtection::kRead)) {
     return {NativeExecutionStatus::kGuestCodeNotReadable, 0};
   }
 
-#if !defined(_M_X64) && !defined(__x86_64__)
-  return {NativeExecutionStatus::kUnsupportedHost, 0};
-#else
   std::vector<std::byte> code(code_size);
   if (!memory.Read(entry_point, code)) {
     return {NativeExecutionStatus::kGuestCodeNotReadable, 0};

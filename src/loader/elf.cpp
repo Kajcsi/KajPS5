@@ -1218,6 +1218,12 @@ ElfLoadResult LoadParsedElf64(std::span<const std::byte> image,
                                ElfParseResult parsed,
                                memory::GuestMemory& memory,
                                std::uint64_t load_bias) {
+  struct PlannedLoadRange {
+    std::size_t header_index = 0;
+    std::uint64_t address = 0;
+    std::uint64_t size = 0;
+  };
+
   ElfLoadResult result;
   result.error = parsed.error;
   result.metadata = std::move(parsed.metadata);
@@ -1225,7 +1231,10 @@ ElfLoadResult LoadParsedElf64(std::span<const std::byte> image,
     return result;
   }
 
-  for (const auto& header : result.metadata.program_headers) {
+  std::vector<PlannedLoadRange> planned_ranges;
+  for (std::size_t header_index = 0;
+       header_index < result.metadata.program_headers.size(); ++header_index) {
+    const auto& header = result.metadata.program_headers[header_index];
     if (header.type != kProgramTypeLoad || header.memory_size == 0) {
       continue;
     }
@@ -1235,7 +1244,22 @@ ElfLoadResult LoadParsedElf64(std::span<const std::byte> image,
       return result;
     }
     const auto load_address = load_bias + header.virtual_address;
-    if (!memory.Contains(load_address, header.memory_size)) {
+    auto mapping_size = header.memory_size;
+    const auto granularity = memory.mapping_granularity();
+    if (granularity == 0 ||
+        (granularity & (granularity - 1)) != 0 ||
+        load_address % granularity != 0) {
+      result.error = ElfError::kGuestMappingConflict;
+      return result;
+    }
+    if (mapping_size > std::numeric_limits<std::uint64_t>::max() -
+                           (granularity - 1)) {
+      result.error = ElfError::kSegmentAddressRangeOverflow;
+      return result;
+    }
+    mapping_size =
+        (mapping_size + granularity - 1) & ~(granularity - 1);
+    if (!memory.Contains(load_address, mapping_size)) {
       result.error = ElfError::kGuestRangeOutOfRange;
       return result;
     }
@@ -1243,6 +1267,15 @@ ElfLoadResult LoadParsedElf64(std::span<const std::byte> image,
       result.error = ElfError::kGuestMappingConflict;
       return result;
     }
+    const auto mapping_end = load_address + mapping_size;
+    for (const auto& range : planned_ranges) {
+      if (load_address < range.address + range.size &&
+          range.address < mapping_end) {
+        result.error = ElfError::kGuestMappingConflict;
+        return result;
+      }
+    }
+    planned_ranges.push_back({header_index, load_address, mapping_size});
     const auto zero_size = header.memory_size - header.file_size;
     if (result.loaded_file_bytes >
             std::numeric_limits<std::uint64_t>::max() - header.file_size ||
@@ -1256,40 +1289,42 @@ ElfLoadResult LoadParsedElf64(std::span<const std::byte> image,
     ++result.loaded_segment_count;
   }
 
-  for (const auto& header : result.metadata.program_headers) {
-    if (header.type != kProgramTypeLoad || header.memory_size == 0) {
-      continue;
-    }
-
-    const auto load_address = load_bias + header.virtual_address;
-    if (!memory.Map(load_address, header.memory_size,
-                     ProtectionFromFlags(header.flags))) {
+  std::size_t mapped_count = 0;
+  for (const auto& range : planned_ranges) {
+    const auto& header = result.metadata.program_headers[range.header_index];
+    if (!memory.Map(range.address, range.size,
+                    ProtectionFromFlags(header.flags))) {
+      while (mapped_count != 0) {
+        --mapped_count;
+        const auto& mapped = planned_ranges[mapped_count];
+        (void)memory.Unmap(mapped.address, mapped.size);
+      }
       result.error = ElfError::kGuestMappingConflict;
       return result;
     }
+    ++mapped_count;
   }
 
-  for (const auto& header : result.metadata.program_headers) {
-    if (header.type != kProgramTypeLoad || header.memory_size == 0) {
-      continue;
-    }
-
+  for (const auto& range : planned_ranges) {
+    const auto& header = result.metadata.program_headers[range.header_index];
+    auto initialized = true;
     if (header.file_size != 0) {
       const auto file_data = image.subspan(
           static_cast<std::size_t>(header.file_offset),
           static_cast<std::size_t>(header.file_size));
-      const auto load_address = load_bias + header.virtual_address;
-      if (!memory.Initialize(load_address, file_data)) {
-        result.error = ElfError::kGuestRangeOutOfRange;
-        return result;
-      }
+      initialized = memory.Initialize(range.address, file_data);
     }
 
     const auto zero_size = header.memory_size - header.file_size;
-    if (zero_size != 0 &&
-        !memory.InitializeFill(load_bias + header.virtual_address +
-                                   header.file_size,
-                               zero_size, std::byte{0})) {
+    if (initialized && zero_size != 0) {
+      initialized = memory.InitializeFill(
+          range.address + header.file_size, zero_size, std::byte{0});
+    }
+    if (!initialized) {
+      for (auto mapped = planned_ranges.rbegin();
+           mapped != planned_ranges.rend(); ++mapped) {
+        (void)memory.Unmap(mapped->address, mapped->size);
+      }
       result.error = ElfError::kGuestRangeOutOfRange;
       return result;
     }

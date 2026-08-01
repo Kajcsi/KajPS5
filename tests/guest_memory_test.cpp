@@ -247,6 +247,58 @@ int main() {
   Check(!mutable_regions.Unmap(0x3000, 0),
         "zero-length unmap succeeded");
 
+  auto host_mapped = GuestMemory::CreateHostMapped(0x10000);
+  Check(host_mapped && host_mapped->host_mapped(),
+        "host-mapped guest memory allocation failed");
+  if (host_mapped) {
+    const auto host_base = host_mapped->base_address();
+    const auto host_read_write = GuestMemoryProtection::kRead |
+                                 GuestMemoryProtection::kWrite;
+    Check(host_mapped->Map(host_base, 0x1000,
+                           GuestMemoryProtection::kRead |
+                               GuestMemoryProtection::kExecute),
+          "host-mapped executable range did not map");
+    const auto host_region = host_mapped->QueryRegion(host_base);
+    const auto host_page_size = host_region ? host_region->size : 0;
+    Check(host_page_size >= 0x1000 &&
+              (host_page_size & (host_page_size - 1)) == 0 &&
+              host_mapped->mapping_granularity() == host_page_size,
+          "host-mapped range did not expand to a host page");
+    Check(host_mapped->FindUnmappedRange(host_base + 1, 1, 1) ==
+              host_base + host_page_size,
+          "host-mapped free-range search ignored page granularity");
+    Check(host_mapped->Initialize(host_base, input),
+          "host-mapped executable range did not initialize");
+    std::array<std::byte, input.size()> host_output{};
+    Check(host_mapped->Read(host_base, host_output) &&
+              host_output == input &&
+              !host_mapped->Write(host_base, rejected),
+          "host-mapped reads bypassed the logical protection model");
+    Check(host_mapped->Protect(host_base, 1,
+                               GuestMemoryProtection::kRead) &&
+              !host_mapped->Write(host_base, rejected) &&
+              host_mapped->Protect(host_base, host_page_size,
+                                   host_read_write) &&
+              host_mapped->Write(host_base, rejected) &&
+              host_mapped->Unmap(host_base, 1) &&
+              host_mapped->Map(host_base, 1, host_read_write),
+          "host-mapped page protection or reuse failed");
+    std::array<std::byte, 2> reused{};
+    Check(host_mapped->Read(host_base, reused) &&
+              reused == std::array<std::byte, 2>{},
+          "host-mapped reuse exposed released bytes");
+    const auto rejected_shared_backing =
+        std::make_shared<kajps5::memory::SharedMemoryBacking>(0x4000);
+    Check(!host_mapped->Map(host_base + 1, 0x1000,
+                            GuestMemoryProtection::kRead) &&
+              !host_mapped->Protect(host_base + 1, host_page_size,
+                                    GuestMemoryProtection::kRead) &&
+              !host_mapped->MapShared(host_base + 0x4000, 0x4000,
+                                      host_read_write,
+                                      rejected_shared_backing, 0),
+          "host-mapped memory accepted an unsafe mapping layout");
+  }
+
   auto shared_backing =
       std::make_shared<kajps5::memory::SharedMemoryBacking>(0xc000);
   GuestMemory shared(0x4000, 0x20000, GuestMemoryProtection::kNone);

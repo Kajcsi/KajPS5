@@ -2,6 +2,7 @@
 // Behavior reference: Copyright (C) 2026 SharpEmu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
@@ -107,6 +108,57 @@ int main() {
   }
   Check(result && result.return_value == 42,
         "public leaf entry did not return 42");
+
+  auto host_image = GuestMemory::CreateHostMapped(0x10000);
+  Check(host_image != nullptr, "host-mapped ELF memory allocation failed");
+  if (host_image) {
+    const auto load_bias = host_image->base_address() - kCodeAddress;
+    const auto host_loaded =
+        kajps5::loader::LoadElf64(image, *host_image, load_bias);
+    const auto host_result =
+        host_loaded
+            ? executor.Execute(
+                  *host_image,
+                  host_loaded.metadata.entry_point + load_bias, 6)
+            : kajps5::cpu::NativeExecutionResult{
+                  NativeExecutionStatus::kGuestCodeNotExecutable, 0};
+    Check(host_loaded && host_result && host_result.return_value == 42,
+          "biased ELF did not execute from coherent host-mapped memory");
+  }
+
+  auto coherent_memory = GuestMemory::CreateHostMapped(0x10000);
+  Check(coherent_memory != nullptr,
+        "coherent code and data memory allocation failed");
+  if (coherent_memory) {
+    const auto code_address = coherent_memory->base_address();
+    const auto data_address = code_address + 0x4000;
+    const auto data_protection = GuestMemoryProtection::kRead |
+                                 GuestMemoryProtection::kWrite;
+    Check(coherent_memory->Map(code_address, 0x1000,
+                               GuestMemoryProtection::kExecute) &&
+              coherent_memory->Map(data_address, 0x1000, data_protection),
+          "coherent code and data ranges did not map");
+    std::vector<std::byte> coherent_code = {
+        std::byte{0x48}, std::byte{0xb8}, std::byte{0}, std::byte{0},
+        std::byte{0},    std::byte{0},    std::byte{0}, std::byte{0},
+        std::byte{0},    std::byte{0},    std::byte{0xc7}, std::byte{0x00},
+        std::byte{0x2a}, std::byte{0},    std::byte{0}, std::byte{0},
+        std::byte{0x8b}, std::byte{0x00}, std::byte{0xc3}};
+    Write64(coherent_code, 2, data_address);
+    std::array<std::byte, 4> coherent_data{};
+    const auto coherent_result =
+        coherent_memory->Initialize(code_address, coherent_code)
+            ? executor.Execute(*coherent_memory, code_address,
+                               coherent_code.size())
+            : kajps5::cpu::NativeExecutionResult{
+                  NativeExecutionStatus::kHostProtectionFailed, 0};
+    Check(coherent_result && coherent_result.return_value == 42 &&
+              coherent_memory->Read(data_address, coherent_data) &&
+              coherent_data ==
+                  std::array<std::byte, 4>{std::byte{0x2a}, std::byte{0},
+                                           std::byte{0}, std::byte{0}},
+          "native guest code and HLE memory did not share one backing");
+  }
   Check(executor.Execute(memory, kCodeAddress, 0).status ==
             NativeExecutionStatus::kInvalidArgument,
         "zero code size was accepted");

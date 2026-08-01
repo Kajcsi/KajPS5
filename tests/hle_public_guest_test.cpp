@@ -329,6 +329,45 @@ int main() {
             !dispatch.vector_return_written[1] && !dispatch.host_exception &&
             dispatch.library == "libkajps5_test",
         "native trampoline did not preserve the HLE dispatch result");
+
+  auto host_memory = GuestMemory::CreateHostMapped(0x10000);
+  Check(host_memory != nullptr,
+        "host-mapped public HLE memory allocation failed");
+  if (host_memory) {
+    const auto load_bias = host_memory->base_address() - kProgramAddress;
+    const auto host_loaded =
+        kajps5::loader::LoadElf64(image, *host_memory, load_bias);
+    NativeHleTrampoline host_trampoline(
+        *host_memory, exports, "answer", {"libkajps5_test"}, 2);
+    ImportRegistry host_imports;
+    Check(host_loaded &&
+              host_trampoline.status() == NativeHleTrampolineStatus::kOk &&
+              host_imports.Register("libkajps5_test", "answer",
+                                    host_trampoline.address()) ==
+                  ImportRegistryStatus::kOk,
+          "host-mapped HLE setup failed");
+    const auto host_linked =
+        host_loaded
+            ? kajps5::loader::ApplyRelocations(
+                  host_loaded.metadata, *host_memory, host_imports, load_bias)
+            : kajps5::loader::RelocationResult{};
+    const auto host_executed =
+        host_loaded
+            ? executor.Execute(
+                  *host_memory,
+                  host_loaded.metadata.entry_point + load_bias,
+                  kProgramSize)
+            : kajps5::cpu::NativeExecutionResult{
+                  kajps5::cpu::NativeExecutionStatus::kGuestCodeNotExecutable,
+                  0};
+    const auto host_dispatch = host_trampoline.last_dispatch();
+    Check(host_linked && host_linked.resolved_import_count == 1 &&
+              host_executed &&
+              host_executed.return_value == (360ULL ^ kVectorReturnBits) &&
+              host_dispatch.handler_status == HleContextStatus::kOk &&
+              host_dispatch.return_written && !host_dispatch.host_exception,
+          "host-mapped guest did not call the checked HLE runtime");
+  }
   Check(kajps5::cpu::NativeHleTrampolineStatusName(
             NativeHleTrampolineStatus::kHostProtectionFailed) ==
             "host-protection-failed",

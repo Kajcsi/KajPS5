@@ -18,9 +18,10 @@ then a small implementation in the same C++ core.
 
 The current core includes:
 
-- A guest address space with whole-range access checks and transactional map,
-  protection, and unmap operations. Released bytes are cleared before the
-  range can be reused.
+- A guest address space with whole-range access checks and checked map,
+  protection, and unmap operations. Failed range validation leaves mappings
+  unchanged. Released bytes are cleared before reuse. A host-mapped backing
+  keeps controlled native guest execution and HLE access on the same bytes.
 - An executable loader that checks bare ELF64 and recognized SELF/FSELF
   containers, program headers, standard and PS5 dynamic-link metadata, x86-64
   `RELA` relocations, and symbols before it changes guest memory. Relocation
@@ -56,7 +57,8 @@ The current core includes:
   guest-memory heap, and caller-owned mspaces.
 - A small native HLE trampoline that carries register and bounded stack
   arguments, including XMM values, from public guest code into the checked C++
-  call context.
+  call context. A biased public ELF can run directly from host-mapped guest
+  memory and call that trampoline without a copied code buffer.
 - Small public and generated test fixtures, including an ELF that loads
   without running guest code and controlled x86-64 leaf programs used only by
   tests.

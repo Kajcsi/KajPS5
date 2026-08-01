@@ -237,6 +237,18 @@ int main() {
   Check(!multi_memory.Read(0x1100, gap_byte),
         "write-only ELF segment was readable");
 
+  auto host_multi_memory = GuestMemory::CreateHostMapped(0x10000);
+  Check(host_multi_memory != nullptr,
+        "host-mapped ELF preflight allocation failed");
+  if (host_multi_memory) {
+    const auto host_bias = host_multi_memory->base_address() - 0x1000;
+    const auto host_multi_loaded =
+        LoadElf64(multi_segment_image, *host_multi_memory, host_bias);
+    Check(host_multi_loaded.error == ElfError::kGuestMappingConflict &&
+              host_multi_memory->regions().empty(),
+          "host page conflict changed memory before load failure");
+  }
+
   auto bad_magic = image;
   bad_magic[1] = std::byte{'X'};
   CheckError(std::move(bad_magic), ElfError::kInvalidMagic,

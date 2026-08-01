@@ -1,14 +1,27 @@
 // Copyright (C) 2026 KajPS5 contributors
+// Architecture reference: KytyPS5
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "core/memory/guest_memory.h"
 
 #include <algorithm>
+#include <cstring>
 #include <limits>
+#include <new>
 #include <stdexcept>
 #include <utility>
 
 #include "core/memory/shared_memory_backing.h"
+
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <Windows.h>
+#elif defined(__unix__) || defined(__APPLE__)
+#include <sys/mman.h>
+#include <unistd.h>
+#endif
 
 namespace kajps5::memory {
 namespace {
@@ -24,6 +37,119 @@ bool IsValidProtection(GuestMemoryProtection protection) noexcept {
   return (static_cast<std::uint8_t>(protection) & ~kAllProtectionBits) == 0;
 }
 
+bool HasProtection(GuestMemoryProtection value,
+                   GuestMemoryProtection required) noexcept {
+  return (static_cast<std::uint8_t>(value) &
+          static_cast<std::uint8_t>(required)) != 0;
+}
+
+bool AlignLengthToPage(std::uint64_t length, std::size_t page_size,
+                       std::uint64_t& aligned_length) noexcept {
+  if (length == 0 || page_size == 0) {
+    return false;
+  }
+  const auto mask = static_cast<std::uint64_t>(page_size - 1);
+  if ((page_size & (page_size - 1)) != 0 ||
+      length > std::numeric_limits<std::uint64_t>::max() - mask) {
+    return false;
+  }
+  aligned_length = (length + mask) & ~mask;
+  return true;
+}
+
+std::size_t HostPageSize() noexcept {
+#if defined(_WIN32)
+  SYSTEM_INFO information{};
+  GetSystemInfo(&information);
+  return information.dwPageSize;
+#elif defined(__unix__) || defined(__APPLE__)
+  const auto page_size = sysconf(_SC_PAGESIZE);
+  return page_size > 0 ? static_cast<std::size_t>(page_size) : 0;
+#else
+  return 0;
+#endif
+}
+
+void* AllocateHostMapping(std::size_t size) noexcept {
+#if defined(_WIN32)
+  return VirtualAlloc(nullptr, size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+#elif defined(__unix__) || defined(__APPLE__)
+  auto* mapping = mmap(nullptr, size, PROT_READ | PROT_WRITE,
+                       MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  return mapping == MAP_FAILED ? nullptr : mapping;
+#else
+  (void)size;
+  return nullptr;
+#endif
+}
+
+bool ProtectHostMapping(void* address, std::size_t size,
+                        GuestMemoryProtection protection) noexcept {
+  if (address == nullptr || size == 0) {
+    return false;
+  }
+#if defined(_WIN32)
+  const auto read = HasProtection(protection, GuestMemoryProtection::kRead);
+  const auto write = HasProtection(protection, GuestMemoryProtection::kWrite);
+  const auto execute =
+      HasProtection(protection, GuestMemoryProtection::kExecute);
+  DWORD native = PAGE_NOACCESS;
+  if (execute && write) {
+    native = PAGE_EXECUTE_READWRITE;
+  } else if (execute && read) {
+    native = PAGE_EXECUTE_READ;
+  } else if (execute) {
+    native = PAGE_EXECUTE;
+  } else if (write) {
+    native = PAGE_READWRITE;
+  } else if (read) {
+    native = PAGE_READONLY;
+  }
+  DWORD previous = 0;
+  if (VirtualProtect(address, size, native, &previous) == 0) {
+    return false;
+  }
+  return !execute ||
+         FlushInstructionCache(GetCurrentProcess(), address, size) != 0;
+#elif defined(__unix__) || defined(__APPLE__)
+  int native = PROT_NONE;
+  if (HasProtection(protection, GuestMemoryProtection::kRead)) {
+    native |= PROT_READ;
+  }
+  if (HasProtection(protection, GuestMemoryProtection::kWrite)) {
+    native |= PROT_WRITE;
+  }
+  if (HasProtection(protection, GuestMemoryProtection::kExecute)) {
+    native |= PROT_EXEC;
+  }
+  if (mprotect(address, size, native) != 0) {
+    return false;
+  }
+  if ((native & PROT_EXEC) != 0) {
+    auto* begin = static_cast<char*>(address);
+    __builtin___clear_cache(begin, begin + size);
+  }
+  return true;
+#else
+  (void)protection;
+  return false;
+#endif
+}
+
+void FreeHostMapping(void* address, std::size_t size) noexcept {
+  if (address == nullptr) {
+    return;
+  }
+#if defined(_WIN32)
+  (void)size;
+  (void)VirtualFree(address, 0, MEM_RELEASE);
+#elif defined(__unix__) || defined(__APPLE__)
+  (void)munmap(address, size);
+#else
+  (void)size;
+#endif
+}
+
 std::size_t ValidateSize(std::uint64_t base_address, std::size_t size) {
   const auto size64 = static_cast<std::uint64_t>(size);
   if (size64 > std::numeric_limits<std::uint64_t>::max() - base_address) {
@@ -36,13 +162,59 @@ std::size_t ValidateSize(std::uint64_t base_address, std::size_t size) {
 
 GuestMemory::GuestMemory(std::uint64_t base_address, std::size_t size,
                          GuestMemoryProtection initial_protection)
-    : base_address_(base_address), bytes_(ValidateSize(base_address, size)) {
+    : base_address_(base_address),
+      storage_size_(size),
+      bytes_(ValidateSize(base_address, size)) {
   if (!IsValidProtection(initial_protection)) {
     throw std::invalid_argument("Guest memory protection is invalid.");
   }
   if (!bytes_.empty() && initial_protection != GuestMemoryProtection::kNone) {
     regions_.push_back({base_address_, this->size(), initial_protection});
   }
+}
+
+GuestMemory::GuestMemory(std::byte* host_mapping, std::size_t size,
+                         std::size_t mapping_granularity) noexcept
+    : base_address_(static_cast<std::uint64_t>(
+          reinterpret_cast<std::uintptr_t>(host_mapping))),
+      storage_size_(size),
+      mapping_granularity_(mapping_granularity),
+      host_mapping_(host_mapping) {}
+
+GuestMemory::~GuestMemory() {
+  FreeHostMapping(host_mapping_, storage_size_);
+}
+
+std::unique_ptr<GuestMemory> GuestMemory::CreateHostMapped(
+    std::size_t size,
+    GuestMemoryProtection initial_protection) noexcept {
+  const auto page_size = HostPageSize();
+  if (size == 0 || !IsValidProtection(initial_protection) ||
+      page_size == 0 || (page_size & (page_size - 1)) != 0 ||
+      size % page_size != 0) {
+    return nullptr;
+  }
+  auto* const mapping = static_cast<std::byte*>(AllocateHostMapping(size));
+  if (mapping == nullptr ||
+      size > std::numeric_limits<std::uint64_t>::max() -
+                 static_cast<std::uint64_t>(
+                     reinterpret_cast<std::uintptr_t>(mapping)) ||
+      !ProtectHostMapping(mapping, size, GuestMemoryProtection::kNone)) {
+    FreeHostMapping(mapping, size);
+    return nullptr;
+  }
+  auto result = std::unique_ptr<GuestMemory>(
+      new (std::nothrow) GuestMemory(mapping, size, page_size));
+  if (!result) {
+    FreeHostMapping(mapping, size);
+    return nullptr;
+  }
+  if (initial_protection != GuestMemoryProtection::kNone &&
+      !result->Map(result->base_address(), result->size(),
+                   initial_protection)) {
+    return nullptr;
+  }
+  return result;
 }
 
 std::uint64_t GuestMemory::base_address() const noexcept {
@@ -54,7 +226,15 @@ std::uint64_t GuestMemory::end_address() const noexcept {
 }
 
 std::uint64_t GuestMemory::size() const noexcept {
-  return static_cast<std::uint64_t>(bytes_.size());
+  return static_cast<std::uint64_t>(storage_size_);
+}
+
+bool GuestMemory::host_mapped() const noexcept {
+  return host_mapping_ != nullptr;
+}
+
+std::uint64_t GuestMemory::mapping_granularity() const noexcept {
+  return static_cast<std::uint64_t>(mapping_granularity_);
 }
 
 bool GuestMemory::Contains(std::uint64_t address,
@@ -73,7 +253,18 @@ bool GuestMemory::Contains(std::uint64_t address,
 
 bool GuestMemory::CanMap(std::uint64_t address,
                          std::uint64_t length) const noexcept {
-  if (length == 0 || !Contains(address, length)) {
+  if (length == 0) {
+    return false;
+  }
+  if (host_mapped()) {
+    const auto granularity = mapping_granularity();
+    if (granularity == 0 || address % granularity != 0 ||
+        !AlignLengthToPage(length, static_cast<std::size_t>(granularity),
+                           length)) {
+      return false;
+    }
+  }
+  if (!Contains(address, length)) {
     return false;
   }
 
@@ -98,6 +289,14 @@ std::optional<std::uint64_t> GuestMemory::FindUnmappedRange(
   if (length == 0 || alignment == 0 ||
       (alignment & (alignment - 1)) != 0) {
     return std::nullopt;
+  }
+  if (host_mapped()) {
+    const auto granularity = mapping_granularity();
+    if (!AlignLengthToPage(length,
+                           static_cast<std::size_t>(granularity), length)) {
+      return std::nullopt;
+    }
+    alignment = std::max(alignment, granularity);
   }
 
   const auto align_up = [alignment](std::uint64_t address)
@@ -132,7 +331,25 @@ std::optional<std::uint64_t> GuestMemory::FindUnmappedRange(
 
 bool GuestMemory::Map(std::uint64_t address, std::uint64_t length,
                       GuestMemoryProtection protection) {
-  if (!IsValidProtection(protection) || !CanMap(address, length)) {
+  if (!IsValidProtection(protection) || length == 0) {
+    return false;
+  }
+
+  auto mapped_length = length;
+  if (host_mapped()) {
+    const auto page_size = mapping_granularity_;
+    if (page_size == 0 || address % page_size != 0 ||
+        !AlignLengthToPage(length, page_size, mapped_length)) {
+      return false;
+    }
+  }
+  if (!CanMap(address, mapped_length)) {
+    return false;
+  }
+  if (host_mapped() &&
+      !ProtectHostMapping(host_mapping_ + OffsetOf(address),
+                          static_cast<std::size_t>(mapped_length),
+                          protection)) {
     return false;
   }
 
@@ -141,7 +358,16 @@ bool GuestMemory::Map(std::uint64_t address, std::uint64_t length,
       [](const GuestMemoryRegion& region, std::uint64_t candidate) {
         return region.address < candidate;
       });
-  regions_.insert(insertion, {address, length, protection});
+  try {
+    regions_.insert(insertion, {address, mapped_length, protection});
+  } catch (...) {
+    if (host_mapped()) {
+      (void)ProtectHostMapping(host_mapping_ + OffsetOf(address),
+                               static_cast<std::size_t>(mapped_length),
+                               GuestMemoryProtection::kNone);
+    }
+    return false;
+  }
   CoalesceRegions();
   return true;
 }
@@ -151,7 +377,8 @@ bool GuestMemory::MapShared(
     GuestMemoryProtection protection,
     std::shared_ptr<SharedMemoryBacking> backing,
     std::uint64_t backing_offset) {
-  if (!backing || !backing->Contains(backing_offset, length) ||
+  if (host_mapped() || !backing ||
+      !backing->Contains(backing_offset, length) ||
       !IsValidProtection(protection) || !CanMap(address, length)) {
     return false;
   }
@@ -182,12 +409,23 @@ bool GuestMemory::MapShared(
 
 bool GuestMemory::Protect(std::uint64_t address, std::uint64_t length,
                           GuestMemoryProtection protection) {
-  if (length == 0 || !IsValidProtection(protection) ||
-      !IsMapped(address, length)) {
+  if (length == 0 || !IsValidProtection(protection)) {
     return false;
   }
 
-  const auto range_end = address + length;
+  auto protected_length = length;
+  if (host_mapped()) {
+    const auto page_size = mapping_granularity_;
+    if (page_size == 0 || address % page_size != 0 ||
+        !AlignLengthToPage(length, page_size, protected_length)) {
+      return false;
+    }
+  }
+  if (!IsMapped(address, protected_length)) {
+    return false;
+  }
+
+  const auto range_end = address + protected_length;
   std::vector<GuestMemoryRegion> updated;
   updated.reserve(regions_.size() + 2);
   for (const auto& region : regions_) {
@@ -211,17 +449,35 @@ bool GuestMemory::Protect(std::uint64_t address, std::uint64_t length,
     }
   }
 
+  if (host_mapped() &&
+      !ProtectHostMapping(host_mapping_ + OffsetOf(address),
+                           static_cast<std::size_t>(protected_length),
+                           protection)) {
+    return false;
+  }
   regions_ = std::move(updated);
   CoalesceRegions();
   return true;
 }
 
 bool GuestMemory::Unmap(std::uint64_t address, std::uint64_t length) {
-  if (length == 0 || !IsMapped(address, length)) {
+  if (length == 0) {
     return false;
   }
 
-  const auto range_end = address + length;
+  auto unmapped_length = length;
+  if (host_mapped()) {
+    const auto page_size = mapping_granularity_;
+    if (page_size == 0 || address % page_size != 0 ||
+        !AlignLengthToPage(length, page_size, unmapped_length)) {
+      return false;
+    }
+  }
+  if (!IsMapped(address, unmapped_length)) {
+    return false;
+  }
+
+  const auto range_end = address + unmapped_length;
   auto updated_shared_mappings = shared_mappings_;
   for (std::size_t index = 0; index < updated_shared_mappings.size();) {
     auto& mapping = updated_shared_mappings[index];
@@ -283,8 +539,35 @@ bool GuestMemory::Unmap(std::uint64_t address, std::uint64_t length) {
   }
 
   const auto offset = OffsetOf(address);
-  std::fill_n(bytes_.begin() + static_cast<std::ptrdiff_t>(offset),
-              static_cast<std::size_t>(length), std::byte{0});
+  if (host_mapped()) {
+    auto* const target = host_mapping_ + offset;
+    const auto native_length = static_cast<std::size_t>(unmapped_length);
+    const auto writable = GuestMemoryProtection::kRead |
+                          GuestMemoryProtection::kWrite;
+    if (!ProtectHostMapping(target, native_length, writable)) {
+      return false;
+    }
+    std::memset(target, 0, native_length);
+    if (!ProtectHostMapping(target, native_length,
+                            GuestMemoryProtection::kNone)) {
+      for (const auto& region : regions_) {
+        const auto overlap_start = std::max(address, region.address);
+        const auto overlap_end =
+            std::min(address + unmapped_length,
+                     region.address + region.size);
+        if (overlap_start < overlap_end) {
+          (void)ProtectHostMapping(
+              host_mapping_ + OffsetOf(overlap_start),
+              static_cast<std::size_t>(overlap_end - overlap_start),
+              region.protection);
+        }
+      }
+      return false;
+    }
+  } else {
+    std::fill_n(bytes_.begin() + static_cast<std::ptrdiff_t>(offset),
+                 static_cast<std::size_t>(length), std::byte{0});
+  }
   regions_ = std::move(updated);
   shared_mappings_ = std::move(updated_shared_mappings);
   CoalesceRegions();
@@ -386,7 +669,28 @@ bool GuestMemory::Initialize(
   if (!IsMapped(address, source.size())) {
     return false;
   }
-  return WriteBytes(address, source);
+  if (source.empty() || !host_mapped()) {
+    return WriteBytes(address, source);
+  }
+  const auto region_index = FindContainingRegion(address);
+  if (region_index == regions_.size()) {
+    return false;
+  }
+  const auto& region = regions_[region_index];
+  if (source.size() > region.address + region.size - address) {
+    return false;
+  }
+  const auto writable = GuestMemoryProtection::kRead |
+                        GuestMemoryProtection::kWrite;
+  auto* const region_mapping = host_mapping_ + OffsetOf(region.address);
+  if (!ProtectHostMapping(region_mapping,
+                          static_cast<std::size_t>(region.size), writable)) {
+    return false;
+  }
+  std::memcpy(host_mapping_ + OffsetOf(address), source.data(), source.size());
+  return ProtectHostMapping(region_mapping,
+                            static_cast<std::size_t>(region.size),
+                            region.protection);
 }
 
 bool GuestMemory::InitializeFill(std::uint64_t address,
@@ -395,7 +699,30 @@ bool GuestMemory::InitializeFill(std::uint64_t address,
   if (!IsMapped(address, length)) {
     return false;
   }
-  return FillBytes(address, length, value);
+  if (length == 0 || !host_mapped()) {
+    return FillBytes(address, length, value);
+  }
+  const auto region_index = FindContainingRegion(address);
+  if (region_index == regions_.size()) {
+    return false;
+  }
+  const auto& region = regions_[region_index];
+  if (length > region.address + region.size - address) {
+    return false;
+  }
+  const auto writable = GuestMemoryProtection::kRead |
+                        GuestMemoryProtection::kWrite;
+  auto* const region_mapping = host_mapping_ + OffsetOf(region.address);
+  if (!ProtectHostMapping(region_mapping,
+                          static_cast<std::size_t>(region.size), writable)) {
+    return false;
+  }
+  std::memset(host_mapping_ + OffsetOf(address),
+              std::to_integer<unsigned char>(value),
+              static_cast<std::size_t>(length));
+  return ProtectHostMapping(region_mapping,
+                            static_cast<std::size_t>(region.size),
+                            region.protection);
 }
 
 bool GuestMemory::ReadBytes(
@@ -431,8 +758,12 @@ bool GuestMemory::ReadBytes(
           chunk, static_cast<std::size_t>(next->address - current));
     }
     const auto offset = OffsetOf(current);
-    std::copy_n(bytes_.begin() + static_cast<std::ptrdiff_t>(offset), chunk,
-                destination.begin() + static_cast<std::ptrdiff_t>(copied));
+    if (host_mapped()) {
+      std::memcpy(destination.data() + copied, host_mapping_ + offset, chunk);
+    } else {
+      std::copy_n(bytes_.begin() + static_cast<std::ptrdiff_t>(offset), chunk,
+                  destination.begin() + static_cast<std::ptrdiff_t>(copied));
+    }
     copied += chunk;
   }
   return true;
@@ -471,8 +802,12 @@ bool GuestMemory::WriteBytes(
           chunk, static_cast<std::size_t>(next->address - current));
     }
     const auto offset = OffsetOf(current);
-    std::copy_n(source.begin() + static_cast<std::ptrdiff_t>(copied), chunk,
-                bytes_.begin() + static_cast<std::ptrdiff_t>(offset));
+    if (host_mapped()) {
+      std::memcpy(host_mapping_ + offset, source.data() + copied, chunk);
+    } else {
+      std::copy_n(source.begin() + static_cast<std::ptrdiff_t>(copied), chunk,
+                  bytes_.begin() + static_cast<std::ptrdiff_t>(offset));
+    }
     copied += chunk;
   }
   return true;
@@ -507,8 +842,14 @@ bool GuestMemory::FillBytes(std::uint64_t address, std::uint64_t length,
       chunk = std::min(chunk, next->address - current);
     }
     const auto offset = OffsetOf(current);
-    std::fill_n(bytes_.begin() + static_cast<std::ptrdiff_t>(offset),
-                static_cast<std::size_t>(chunk), value);
+    if (host_mapped()) {
+      std::memset(host_mapping_ + offset,
+                  std::to_integer<unsigned char>(value),
+                  static_cast<std::size_t>(chunk));
+    } else {
+      std::fill_n(bytes_.begin() + static_cast<std::ptrdiff_t>(offset),
+                  static_cast<std::size_t>(chunk), value);
+    }
     filled += chunk;
   }
   return true;
