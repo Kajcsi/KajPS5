@@ -90,6 +90,10 @@ adapted paths change.
   DCB and owner-scoped ACB submission. SharpEmu supplies independent evidence
   for descriptor checks, queue separation, and resuming earlier blocked work
   before later work.
+- SharpEmu's separate AGC-wrapper and standard PM4 `WRITE_DATA` control layouts
+  are preserved. Memory destinations now apply ordered, checked writes. A
+  focused regression proves that reserved low-byte noise in a standard packet
+  does not change its destination selector.
 
 When KajPS5 imports code, identify the upstream file and commit, keep its
 copyright and license notice, and update `THIRD_PARTY_NOTICES.md` in the same

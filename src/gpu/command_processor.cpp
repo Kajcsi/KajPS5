@@ -57,6 +57,7 @@ constexpr std::uint32_t kPm4GetLodStats = 0x8eU;
 constexpr std::uint32_t kPm4SetContextRegisterIndirect = 0x9fU;
 
 constexpr std::uint32_t kPm4WaitMemory32Register = 0x0aU;
+constexpr std::uint32_t kPm4WriteDataRegister = 0x15U;
 constexpr std::uint32_t kPm4ShaderRegistersIndirect = 0x11U;
 constexpr std::uint32_t kPm4ContextRegistersIndirect = 0x12U;
 constexpr std::uint32_t kPm4UserConfigRegistersIndirect = 0x13U;
@@ -93,6 +94,14 @@ std::uint64_t Read64(std::span<const std::byte> bytes) noexcept {
              << (index * 8U);
   }
   return value;
+}
+
+void Write32(std::span<std::byte> bytes, std::size_t offset,
+             std::uint32_t value) noexcept {
+  for (std::size_t index = 0; index < sizeof(value); ++index) {
+    bytes[offset + index] =
+        static_cast<std::byte>((value >> (index * 8U)) & 0xffU);
+  }
 }
 
 bool Add(std::uint64_t left, std::uint64_t right,
@@ -148,10 +157,13 @@ GpuCommandStatus Stop(DecodeContext& context, GpuCommandStatus status,
 GpuCommandStatus Emit(DecodeContext& context,
                       const GpuAction& action) noexcept {
   if (context.cursor.result.submitted_actions >=
-          context.cursor.limits.max_actions ||
-      !context.sink.Submit(action)) {
+      context.cursor.limits.max_actions) {
     return Stop(context, GpuCommandStatus::kResourceLimit,
                 action.packet_address, action.opcode);
+  }
+  const auto sink_status = context.sink.Submit(action);
+  if (sink_status != GpuCommandStatus::kComplete) {
+    return Stop(context, sink_status, action.packet_address, action.opcode);
   }
   ++context.cursor.result.submitted_actions;
   return GpuCommandStatus::kComplete;
@@ -291,6 +303,33 @@ GpuCommandStatus ApplyIndirectRegisters(
     }
   }
   return GpuCommandStatus::kComplete;
+}
+
+GpuCommandStatus ProcessWriteData(
+    DecodeContext& context, std::uint64_t packet_address,
+    std::uint32_t packet_dwords, std::uint32_t opcode,
+    std::uint32_t packet_register,
+    std::span<const std::uint32_t> packet) {
+  if (packet_dwords < 4) {
+    return Stop(context, GpuCommandStatus::kMalformedPacket,
+                packet_address, opcode);
+  }
+  const auto destination = static_cast<std::uint64_t>(packet[2]) |
+                           (static_cast<std::uint64_t>(packet[3]) << 32U);
+  const auto data_count = packet_dwords - 4U;
+  auto action = MakeAction(
+      GpuActionType::kWriteData, packet_address, packet_dwords, opcode,
+      packet_register,
+      {destination, packet[1], data_count,
+       data_count > 0 ? packet[4] : 0,
+       data_count > 1 ? packet[5] : 0});
+  try {
+    action.payload.assign(packet.begin() + 4U, packet.end());
+  } catch (...) {
+    return Stop(context, GpuCommandStatus::kResourceLimit,
+                packet_address, opcode);
+  }
+  return Emit(context, action);
 }
 
 GpuCommandStatus ProcessWait(DecodeContext& context,
@@ -527,6 +566,10 @@ GpuCommandStatus ProcessFrames(DecodeContext& context) {
       status = ApplyIndirectRegisters(
           context, space, packet_address, packet_dwords, opcode,
           packet_register, table_address, packet[1]);
+    } else if (opcode == kPm4Nop &&
+               packet_register == kPm4WriteDataRegister) {
+      status = ProcessWriteData(context, packet_address, packet_dwords,
+                                opcode, packet_register, packet);
     } else if (opcode == kPm4SetContextRegister ||
                opcode == kPm4SetShRegister ||
                opcode == kPm4SetUcRegister ||
@@ -649,19 +692,8 @@ GpuCommandStatus ProcessFrames(DecodeContext& context) {
           GpuActionType::kPredication, packet_address, packet_dwords, opcode,
           packet_register, {predicate_address, packet[1]}));
     } else if (opcode == kPm4WriteData) {
-      if (packet_dwords < 4) {
-        return Stop(context, GpuCommandStatus::kMalformedPacket,
-                    packet_address, opcode);
-      }
-      const auto destination = static_cast<std::uint64_t>(packet[2]) |
-                               (static_cast<std::uint64_t>(packet[3]) << 32U);
-      const auto data_count = packet_dwords - 4U;
-      status = Emit(context, MakeAction(
-          GpuActionType::kWriteData, packet_address, packet_dwords, opcode,
-          packet_register,
-          {destination, packet[1], data_count,
-           data_count > 0 ? packet[4] : 0,
-           data_count > 1 ? packet[5] : 0}));
+      status = ProcessWriteData(context, packet_address, packet_dwords,
+                                opcode, packet_register, packet);
     } else if (opcode == kPm4IndirectBuffer) {
       if (packet_dwords == 4) {
         const auto target = static_cast<std::uint64_t>(packet[1] & ~3U) |
@@ -747,16 +779,17 @@ GpuActionTrace::GpuActionTrace(std::size_t capacity) noexcept
   }
 }
 
-bool GpuActionTrace::Submit(const GpuAction& action) noexcept {
+GpuCommandStatus GpuActionTrace::Submit(
+    const GpuAction& action) noexcept {
   if (actions_.size() >= capacity_) {
-    return false;
+    return GpuCommandStatus::kResourceLimit;
   }
   try {
     actions_.push_back(action);
   } catch (...) {
-    return false;
+    return GpuCommandStatus::kResourceLimit;
   }
-  return true;
+  return GpuCommandStatus::kComplete;
 }
 
 std::span<const GpuAction> GpuActionTrace::actions() const noexcept {
@@ -774,22 +807,27 @@ GpuActionRing::GpuActionRing(std::size_t capacity) noexcept
   }
 }
 
-bool GpuActionRing::Submit(const GpuAction& action) noexcept {
+GpuCommandStatus GpuActionRing::Submit(
+    const GpuAction& action) noexcept {
   if (capacity_ == 0) {
-    return false;
+    return GpuCommandStatus::kResourceLimit;
   }
   if (actions_.size() < capacity_) {
     try {
       actions_.push_back(action);
     } catch (...) {
-      return false;
+      return GpuCommandStatus::kResourceLimit;
     }
-    return true;
+    return GpuCommandStatus::kComplete;
   }
-  actions_[next_] = action;
+  try {
+    actions_[next_] = action;
+  } catch (...) {
+    return GpuCommandStatus::kResourceLimit;
+  }
   next_ = (next_ + 1U) % capacity_;
   ++dropped_count_;
-  return true;
+  return GpuCommandStatus::kComplete;
 }
 
 std::size_t GpuActionRing::size() const noexcept { return actions_.size(); }
@@ -798,21 +836,84 @@ std::uint64_t GpuActionRing::dropped_count() const noexcept {
   return dropped_count_;
 }
 
-std::optional<GpuAction> GpuActionRing::At(
-    std::size_t index) const noexcept {
+const GpuAction* GpuActionRing::At(std::size_t index) const noexcept {
   if (index >= actions_.size()) {
-    return std::nullopt;
+    return nullptr;
   }
   const auto physical = actions_.size() < capacity_
                             ? index
                             : (next_ + index) % capacity_;
-  return actions_[physical];
+  return &actions_[physical];
 }
 
 void GpuActionRing::Clear() noexcept {
   actions_.clear();
   next_ = 0;
   dropped_count_ = 0;
+}
+
+GpuMemorySubmissionSink::GpuMemorySubmissionSink(
+    memory::GuestMemory& memory, GpuSubmissionSink& downstream) noexcept
+    : memory_(memory), downstream_(downstream) {}
+
+GpuCommandStatus GpuMemorySubmissionSink::Submit(
+    const GpuAction& action) noexcept {
+  if (action.type != GpuActionType::kWriteData) {
+    return downstream_.Submit(action);
+  }
+  if (action.value_count < 3 ||
+      action.payload.size() != action.values[2]) {
+    return GpuCommandStatus::kMalformedPacket;
+  }
+
+  const auto destination_address = action.values[0];
+  const auto control = static_cast<std::uint32_t>(action.values[1]);
+  const auto standard_packet = action.opcode == kPm4WriteData;
+  const auto agc_packet = action.opcode == kPm4Nop &&
+                          action.packet_register == kPm4WriteDataRegister;
+  if (!standard_packet && !agc_packet) {
+    return GpuCommandStatus::kMalformedPacket;
+  }
+  const auto destination = standard_packet ? (control >> 8U) & 0xfU
+                                           : control & 0xffU;
+  if (destination != 1U && destination != 2U && destination != 4U &&
+      destination != 5U) {
+    return downstream_.Submit(action);
+  }
+  if (destination_address == 0 || (destination_address & 3U) != 0) {
+    return GpuCommandStatus::kMalformedPacket;
+  }
+  const auto downstream_status = downstream_.Submit(action);
+  if (downstream_status != GpuCommandStatus::kComplete) {
+    return downstream_status;
+  }
+  if (action.payload.empty()) {
+    return GpuCommandStatus::kComplete;
+  }
+
+  const auto increment_address = standard_packet
+                                     ? (control & (1U << 16U)) == 0
+                                     : ((control >> 16U) & 0xffU) == 0;
+  if (!increment_address) {
+    std::array<std::byte, sizeof(std::uint32_t)> bytes{};
+    Write32(bytes, 0, action.payload.back());
+    return memory_.Write(destination_address, bytes)
+               ? GpuCommandStatus::kComplete
+               : GpuCommandStatus::kMemoryFault;
+  }
+
+  std::vector<std::byte> bytes;
+  try {
+    bytes.resize(action.payload.size() * sizeof(std::uint32_t));
+  } catch (...) {
+    return GpuCommandStatus::kResourceLimit;
+  }
+  for (std::size_t index = 0; index < action.payload.size(); ++index) {
+    Write32(bytes, index * sizeof(std::uint32_t), action.payload[index]);
+  }
+  return memory_.Write(destination_address, bytes)
+             ? GpuCommandStatus::kComplete
+             : GpuCommandStatus::kMemoryFault;
 }
 
 GpuCommandResult GpuRuntime::ProcessCommandBuffer(

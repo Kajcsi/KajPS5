@@ -33,7 +33,6 @@ constexpr std::uint32_t kPm4DrawIndexOpcode = 0x27U;
 constexpr std::uint32_t kPm4DrawIndexAutoOpcode = 0x2dU;
 constexpr std::uint32_t kPm4NumInstancesOpcode = 0x2fU;
 constexpr std::uint32_t kPm4DrawIndexOffsetOpcode = 0x35U;
-constexpr std::uint32_t kPm4WriteDataOpcode = 0x37U;
 constexpr std::uint32_t kPm4IndirectBufferOpcode = 0x3fU;
 constexpr std::uint32_t kPm4RewindOpcode = 0x59U;
 constexpr std::uint32_t kPm4SetContextRegisterOpcode = 0x69U;
@@ -43,6 +42,7 @@ constexpr std::uint32_t kPm4SetUconfigRegisterIndexOpcode = 0x7aU;
 constexpr std::uint32_t kPm4GetLodStatsOpcode = 0x8eU;
 constexpr std::uint32_t kPm4WaitMemory32Register = 0x0aU;
 constexpr std::uint32_t kPm4WaitMemory64Register = 0x16U;
+constexpr std::uint32_t kPm4WriteDataRegister = 0x15U;
 constexpr std::uint32_t kVgtIndexTypeRegister = 0x243U;
 constexpr std::uint32_t kDirectDispatchModifierMask = 0xa038U;
 constexpr std::uint32_t kDirectDispatchRequiredBits = 0x41U;
@@ -133,8 +133,10 @@ GpuRuntime::GpuRuntime(memory::GuestMemory& memory,
     : memory_(memory),
       submission_queue_(*this),
       submission_history_(4096),
-      submission_sink_(submission_sink != nullptr ? submission_sink
-                                                  : &submission_history_) {}
+      submission_effects_(memory,
+                          submission_sink != nullptr ? *submission_sink
+                                                     : submission_history_),
+      submission_sink_(&submission_effects_) {}
 
 GpuPacketResult GpuRuntime::AppendPacket(
     std::uint64_t command_buffer, std::span<const std::uint32_t> packet) {
@@ -407,11 +409,13 @@ GpuPacketResult GpuRuntime::WriteAgcPacket(
                                      ? 0U
                                      : static_cast<std::uint32_t>(argument(7)) &
                                            1U;
-      packet[0] = MakePm4Header(4 + dword_count, kPm4WriteDataOpcode, 0);
-      packet[1] = ((destination & 1U) << 30U) |
-                  ((destination & 0x1eU) << 7U) |
-                  ((increment & 1U) << 16U) | (write_confirm << 20U) |
-                  ((cache_policy & 3U) << 25U);
+      packet[0] =
+          MakePm4Header(4 + dword_count, kPm4NopOpcode,
+                        kPm4WriteDataRegister);
+      packet[1] = (destination & 0xffU) |
+                  ((cache_policy & 0xffU) << 8U) |
+                  ((increment & 0xffU) << 16U) |
+                  ((write_confirm & 0xffU) << 24U);
       packet[2] = static_cast<std::uint32_t>(argument(3)) & ~0x3U;
       packet[3] = static_cast<std::uint32_t>(argument(3) >> 32U);
       for (std::size_t index = 0; index < dword_count; ++index) {

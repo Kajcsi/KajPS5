@@ -61,19 +61,21 @@ class SignallingSink final : public kajps5::gpu::GpuSubmissionSink {
                  std::uint64_t label) noexcept
       : memory_(memory), label_(label) {}
 
-  [[nodiscard]] bool Submit(
+  [[nodiscard]] kajps5::gpu::GpuCommandStatus Submit(
       const kajps5::gpu::GpuAction& action) noexcept override {
     try {
       actions_.push_back(action.type);
     } catch (...) {
-      return false;
+      return kajps5::gpu::GpuCommandStatus::kResourceLimit;
     }
     if (action.type == kajps5::gpu::GpuActionType::kDispatch &&
         !signalled_) {
       signalled_ = true;
-      return Store32(memory_, label_, 0x77U);
+      return Store32(memory_, label_, 0x77U)
+                 ? kajps5::gpu::GpuCommandStatus::kComplete
+                 : kajps5::gpu::GpuCommandStatus::kMemoryFault;
     }
-    return true;
+    return kajps5::gpu::GpuCommandStatus::kComplete;
   }
 
   [[nodiscard]] std::span<const kajps5::gpu::GpuActionType> actions()

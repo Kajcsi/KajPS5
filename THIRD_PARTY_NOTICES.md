@@ -472,6 +472,16 @@ KytyPS5 `src/libs/agc.cpp` and `src/libs/libGraphicsDriver.cpp` at commit
 graphics and owner-scoped compute queues, and wait-resume tests also re-express
 SharpEmu `src/SharpEmu.Libs/Agc/AgcExports.cs` at commit
 `5ee7cd1dfafdeb0ce0e458a365692df4b2e1c445`.
+
+The AGC NOP-wrapper `WRITE_DATA` encoding, the separate standard PM4 control
+decoder, and the checked ordered guest-memory effect in
+`src/gpu/runtime.cpp` and `src/gpu/command_processor.*` re-express SharpEmu
+`src/SharpEmu.Libs/Agc/AgcExports.cs` at commit
+`5ee7cd1dfafdeb0ce0e458a365692df4b2e1c445`. The standard-control regression
+keeps its low reserved byte deliberately nonzero. The memory-target behavior
+also follows KytyPS5 `src/graphics/guest_gpu/graphicsRun.cpp` at commit
+`a65d17a5d689257a35644e01e9d15539361f0bf0`, but retains KajPS5 checked guest
+access instead of using raw pointers.
 The SharpEmu reference file states:
 
 `Copyright (C) 2026 SharpEmu Emulator Project`

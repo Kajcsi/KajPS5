@@ -257,8 +257,8 @@ int main() {
         "write-data packet call failed");
   std::array<std::byte, 24> write_packet{};
   Check(memory.Read(kWritePacket, write_packet) &&
-            Read32(write_packet, 0) == 0xc0043700U &&
-            Read32(write_packet, 4) == 0x02110100U &&
+            Read32(write_packet, 0) == 0xc0041054U &&
+            Read32(write_packet, 4) == 0x01010102U &&
             Read32(write_packet, 8) == 0x45678980U &&
             Read32(write_packet, 12) == 3 &&
             Read32(write_packet, 16) == 0x55667788U &&
@@ -345,6 +345,7 @@ int main() {
   constexpr std::uint64_t kDriverPacket = kBase + 0x300;
   constexpr std::uint64_t kDriverCommands = kBase + 0x1c00;
   constexpr std::uint64_t kDriverWaitCommands = kBase + 0x1d00;
+  constexpr std::uint64_t kDriverWriteWaitCommands = kBase + 0x1e00;
   constexpr std::uint64_t kDriverLabel = kBase + 0x1f00;
   const std::array driver_commands = {
       Pm4(5, 0x15), 2U, 3U, 4U, 0x41U,
@@ -372,7 +373,7 @@ int main() {
             ReturnValue(context) == 0 &&
             gpu_runtime.submissions().PendingSubmissionCount() == 1 &&
             gpu_runtime.submission_history().size() == 1 &&
-            gpu_runtime.submission_history().At(0).has_value() &&
+            gpu_runtime.submission_history().At(0) != nullptr &&
             gpu_runtime.submission_history().At(0)->type ==
                 kajps5::gpu::GpuActionType::kWaitMemory,
         "DCB submit did not retain its blocked queue position");
@@ -403,6 +404,41 @@ int main() {
             gpu_runtime.submission_history().At(3)->type ==
                 kajps5::gpu::GpuActionType::kDispatch,
         "ACB submit did not use its owned compute queue");
+
+  const std::array driver_write_wait_commands = {
+      Pm4(5, 0x10, 0x15), 5U | (2U << 8U) | (1U << 24U),
+      static_cast<std::uint32_t>(kDriverLabel),
+      static_cast<std::uint32_t>(kDriverLabel >> 32U), 0x88U,
+      Pm4(7, 0x10, 0x0a), static_cast<std::uint32_t>(kDriverLabel),
+      static_cast<std::uint32_t>(kDriverLabel >> 32U), 0xffU, 0x88U,
+      0x13U, 1U,
+      Pm4(3, 0x2d), 11U, 2U,
+  };
+  WriteDwords(memory, kDriverWriteWaitCommands,
+              driver_write_wait_commands);
+  Check(context.WriteUInt32(kDriverLabel, 0) == HleContextStatus::kOk,
+        "driver write label reset failed");
+  Write64(driver_packet, 0, kDriverWriteWaitCommands);
+  Write32(driver_packet, 8,
+          static_cast<std::uint32_t>(driver_write_wait_commands.size()));
+  Check(memory.Write(kDriverPacket, driver_packet),
+        "write-wait driver packet setup failed");
+  SetArguments(context, submit_dcb_arguments);
+  std::uint32_t written_label = 0;
+  Check(registry.Dispatch(kajps5::hle::kAgcDriverSubmitDcbNid, context) &&
+            ReturnValue(context) == 0 &&
+            context.ReadUInt32(kDriverLabel, written_label) ==
+                HleContextStatus::kOk &&
+            written_label == 0x88U &&
+            gpu_runtime.submissions().PendingSubmissionCount() == 0 &&
+            gpu_runtime.submission_history().size() == 7 &&
+            gpu_runtime.submission_history().At(4)->type ==
+                kajps5::gpu::GpuActionType::kWriteData &&
+            gpu_runtime.submission_history().At(5)->type ==
+                kajps5::gpu::GpuActionType::kWaitMemory &&
+            gpu_runtime.submission_history().At(6)->type ==
+                kajps5::gpu::GpuActionType::kDraw,
+        "ordered write-data did not satisfy the following GPU wait");
 
   const std::array invalid_submit_arguments = {std::uint64_t{0}};
   SetArguments(context, invalid_submit_arguments);

@@ -134,6 +134,7 @@ class GpuRuntime final {
   std::unordered_map<std::uint32_t, std::uint32_t> user_config_registers_;
   GpuSubmissionQueue submission_queue_;
   GpuActionRing submission_history_;
+  GpuMemorySubmissionSink submission_effects_;
   GpuSubmissionSink* submission_sink_ = nullptr;
 };
 

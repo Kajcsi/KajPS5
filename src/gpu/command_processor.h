@@ -14,6 +14,10 @@
 #include <span>
 #include <vector>
 
+namespace kajps5::memory {
+class GuestMemory;
+}
+
 namespace kajps5::gpu {
 
 enum class GpuCommandStatus {
@@ -58,20 +62,23 @@ struct GpuAction {
   std::uint32_t packet_register = 0;
   std::array<std::uint64_t, 8> values{};
   std::size_t value_count = 0;
+  std::vector<std::uint32_t> payload;
 };
 
 class GpuSubmissionSink {
  public:
   virtual ~GpuSubmissionSink() = default;
   // Submission is synchronous. A sink must not call the same GpuRuntime.
-  [[nodiscard]] virtual bool Submit(const GpuAction& action) noexcept = 0;
+  [[nodiscard]] virtual GpuCommandStatus Submit(
+      const GpuAction& action) noexcept = 0;
 };
 
 class GpuActionTrace final : public GpuSubmissionSink {
  public:
   explicit GpuActionTrace(std::size_t capacity = 4096) noexcept;
 
-  [[nodiscard]] bool Submit(const GpuAction& action) noexcept override;
+  [[nodiscard]] GpuCommandStatus Submit(
+      const GpuAction& action) noexcept override;
   [[nodiscard]] std::span<const GpuAction> actions() const noexcept;
   void Clear() noexcept;
 
@@ -84,11 +91,11 @@ class GpuActionRing final : public GpuSubmissionSink {
  public:
   explicit GpuActionRing(std::size_t capacity = 4096) noexcept;
 
-  [[nodiscard]] bool Submit(const GpuAction& action) noexcept override;
+  [[nodiscard]] GpuCommandStatus Submit(
+      const GpuAction& action) noexcept override;
   [[nodiscard]] std::size_t size() const noexcept;
   [[nodiscard]] std::uint64_t dropped_count() const noexcept;
-  [[nodiscard]] std::optional<GpuAction> At(
-      std::size_t index) const noexcept;
+  [[nodiscard]] const GpuAction* At(std::size_t index) const noexcept;
   void Clear() noexcept;
 
  private:
@@ -96,6 +103,19 @@ class GpuActionRing final : public GpuSubmissionSink {
   std::size_t next_ = 0;
   std::uint64_t dropped_count_ = 0;
   std::vector<GpuAction> actions_;
+};
+
+class GpuMemorySubmissionSink final : public GpuSubmissionSink {
+ public:
+  GpuMemorySubmissionSink(memory::GuestMemory& memory,
+                          GpuSubmissionSink& downstream) noexcept;
+
+  [[nodiscard]] GpuCommandStatus Submit(
+      const GpuAction& action) noexcept override;
+
+ private:
+  memory::GuestMemory& memory_;
+  GpuSubmissionSink& downstream_;
 };
 
 struct GpuCommandLimits {

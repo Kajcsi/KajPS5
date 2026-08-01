@@ -39,6 +39,17 @@ void Write32(std::span<std::byte> bytes, std::size_t offset,
   }
 }
 
+std::uint32_t Read32(std::span<const std::byte> bytes,
+                     std::size_t offset = 0) {
+  std::uint32_t value = 0;
+  for (std::size_t index = 0; index < 4; ++index) {
+    value |= static_cast<std::uint32_t>(
+                 std::to_integer<unsigned char>(bytes[offset + index]))
+             << (index * 8U);
+  }
+  return value;
+}
+
 void WriteDwords(kajps5::memory::GuestMemory& memory, std::uint64_t address,
                  std::span<const std::uint32_t> words) {
   std::vector<std::byte> bytes(words.size() * 4U);
@@ -62,6 +73,7 @@ int main() {
   using kajps5::gpu::GpuActionRing;
   using kajps5::gpu::GpuActionType;
   using kajps5::gpu::GpuCommandStatus;
+  using kajps5::gpu::GpuMemorySubmissionSink;
   using kajps5::gpu::GpuRegisterSpace;
   using kajps5::gpu::GpuRuntime;
   using kajps5::memory::GuestMemory;
@@ -107,7 +119,7 @@ int main() {
       Pm4(4, 0x3f), static_cast<std::uint32_t>(kNested),
       static_cast<std::uint32_t>(kNested >> 32U),
       0x0f200000U | static_cast<std::uint32_t>(nested.size()),
-      Pm4(6, 0x37), 0x00100000U,
+      Pm4(6, 0x37), 0xa5U | (5U << 8U) | (1U << 20U) | (2U << 25U),
       static_cast<std::uint32_t>(kWriteDestination),
       static_cast<std::uint32_t>(kWriteDestination >> 32U), 0x11223344U,
       0xaabbccddU,
@@ -116,8 +128,9 @@ int main() {
   WriteDwords(memory, kMain, main_commands);
 
   GpuActionTrace trace(64);
+  GpuMemorySubmissionSink memory_sink(memory, trace);
   const auto result = runtime.ProcessCommandBuffer(
-      kMain, static_cast<std::uint32_t>(main_commands.size()), trace);
+      kMain, static_cast<std::uint32_t>(main_commands.size()), memory_sink);
   Check(result.status == GpuCommandStatus::kComplete,
         "valid command stream did not complete");
   Check(result.processed_dwords == main_commands.size() + nested.size(),
@@ -153,6 +166,11 @@ int main() {
             trace.actions()[11].values[2] == 2U &&
             trace.actions()[11].values[3] == 0x11223344U,
         "write-data action is incorrect");
+  std::array<std::byte, 8> written_data{};
+  Check(memory.Read(kWriteDestination, written_data) &&
+            Read32(written_data, 0) == 0x11223344U &&
+            Read32(written_data, 4) == 0xaabbccddU,
+        "standard write-data control did not update guest memory");
   Check(runtime.ReadRegister(GpuRegisterSpace::kContext, 0x8e) == 0xfU &&
             runtime.ReadRegister(GpuRegisterSpace::kShader, 0xc8) ==
                 0x00448582U,
@@ -309,14 +327,17 @@ int main() {
   GpuActionRing ring(2);
   kajps5::gpu::GpuAction ring_action;
   ring_action.type = GpuActionType::kNop;
-  Check(ring.Submit(ring_action), "action ring rejected its first action");
+  Check(ring.Submit(ring_action) == GpuCommandStatus::kComplete,
+        "action ring rejected its first action");
   ring_action.type = GpuActionType::kDraw;
-  Check(ring.Submit(ring_action), "action ring rejected its second action");
+  Check(ring.Submit(ring_action) == GpuCommandStatus::kComplete,
+        "action ring rejected its second action");
   ring_action.type = GpuActionType::kDispatch;
-  Check(ring.Submit(ring_action) && ring.size() == 2 &&
-            ring.dropped_count() == 1 && ring.At(0).has_value() &&
+  Check(ring.Submit(ring_action) == GpuCommandStatus::kComplete &&
+            ring.size() == 2 && ring.dropped_count() == 1 &&
+            ring.At(0) != nullptr &&
             ring.At(0)->type == GpuActionType::kDraw &&
-            ring.At(1).has_value() &&
+            ring.At(1) != nullptr &&
             ring.At(1)->type == GpuActionType::kDispatch,
         "action ring did not retain the newest bounded history");
   return 0;

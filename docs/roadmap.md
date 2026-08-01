@@ -138,6 +138,8 @@
 - [x] Decode bounded synthetic PM4 streams through checked guest memory.
 - [x] Preserve blocked DCB and ACB submissions in owned graphics and compute
       queues without replaying completed actions.
+- [x] Apply ordered memory-target `WRITE_DATA` effects through checked guest
+      memory so they can release GPU waits.
 - Create a Vulkan device and a validation test.
 - Add shader and resource tests before game tests.
 - Add an audio queue test with stable timing.
