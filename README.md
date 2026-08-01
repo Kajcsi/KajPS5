@@ -40,7 +40,9 @@ The current core includes:
   guest memory.
 - Versioned PS5 NID linking between supplied modules and library-scoped HLE
   dispatch, with bounded diagnostics for unresolved symbols, deterministic
-  dependency order, and checked guest register and memory access.
+  dependency order, and checked guest register and memory access. Adjacent
+  `.prx` and `.sprx` files are read and parsed as one bounded batch before any
+  module is mapped.
 - Typed kernel handles and one cooperative scheduler for ready, running,
   blocked, and exited guest threads. Initial pthread support includes guest
   attributes, bounded thread-local keys, per-thread values, identity, equality,

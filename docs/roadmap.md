@@ -117,6 +117,8 @@
 - [x] Build and own native HLE trampolines for all resolved executable imports.
 - [x] Mount a read-only host title folder under a confined guest path and list
       adjacent module files in stable order.
+- [x] Discover and parse bounded adjacent `.prx` and `.sprx` files as one
+      all-or-nothing module batch.
 - Expand thread, event, file, and time coverage as their HLE bridges grow.
 - Compare small, repeatable traces with both upstream projects.
 

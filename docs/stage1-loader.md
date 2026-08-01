@@ -147,12 +147,17 @@ target to be executable. Pre-initializers keep array order. Initializers use
 order before `DT_FINI`. The planner has a 65,536-call limit and returns no
 partial plan after an error. It still does not execute guest functions.
 
-The module planner accepts already-parsed module descriptions. It matches file
+Adjacent module intake lists `.prx` and `.sprx` files in `/app0/sce_module`
+and `/app0/sce_modules` through the checked file service. It skips core runtime
+images, bounds each file and the complete batch, and parses every image before
+it returns any module. A malformed image leaves no partial batch.
+
+The module planner accepts those parsed module descriptions. It matches file
 and shared-object names without case sensitivity, starts available dependencies
 first, reports missing dependencies once, and preserves input order for a
-remaining cycle. It does not scan directories or assume that firmware is
-available. A caller can combine legally supplied modules with the same HLE
-registry used for unresolved system libraries.
+remaining cycle. It does not assume that firmware is available. A caller can
+combine legally supplied modules with the same HLE registry used for unresolved
+system libraries.
 
 The module export registry follows KytyPS5's split between imported and
 exported symbols. It indexes nonzero global or weak function, object, and

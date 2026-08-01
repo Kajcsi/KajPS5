@@ -46,6 +46,7 @@ add_library(kajps5_core STATIC
   loader/layered_import_resolver.cpp
   loader/lifecycle_plan.cpp
   loader/module_export_registry.cpp
+  loader/module_loader.cpp
   loader/module_plan.cpp
   loader/relocation_trace.cpp
   loader/relocator.cpp

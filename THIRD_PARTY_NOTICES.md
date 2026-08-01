@@ -400,6 +400,18 @@ tests adapt behavior from SharpEmu `src/SharpEmu.Core/IFileSystem.cs`,
 single C++ file-service owner and exposes only read access. No upstream
 file-service source was copied.
 
+Adjacent module discovery in `src/loader/module_loader.*` and
+`tests/module_loader_test.cpp` adapts KytyPS5's `.prx` and `.sprx` selection,
+core-runtime exclusion, and `sce_module` and `sce_modules` search from
+`src/loader/runtimeLinker.cpp` at commit
+`a65d17a5d689257a35644e01e9d15539361f0bf0`. Its stable enumeration, bounded
+complete reads, and checked parse-before-use boundary also adapt SharpEmu
+`src/SharpEmu.Core/Runtime/SharpEmuRuntime.cs` and
+`src/SharpEmu.Core/Loader/SelfLoader.cs` at commit
+`7c9740fee8a633e17b145c6bc6d794e41d46c73f`. KajPS5 uses its existing C++
+file service, ELF parser, and module planner. No upstream loader source was
+copied.
+
 The SharpEmu reference files state:
 
 `Copyright (C) 2026 SharpEmu Emulator Project`
