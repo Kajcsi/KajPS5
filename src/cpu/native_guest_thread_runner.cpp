@@ -162,6 +162,9 @@ NativeGuestThreadRunResult NativeGuestThreadRunner::RunNext() {
   if (execution_context_.active() || execution_context_.suspended()) {
     return {NativeGuestThreadRunStatus::kExecutionLaneBusy};
   }
+  if (const auto preparation_failure = PrepareReadyPthreads()) {
+    return *preparation_failure;
+  }
 
   const auto selected = scheduler_.SelectNext();
   if (!selected) {
@@ -255,6 +258,30 @@ bool NativeGuestThreadRunner::ReleaseThread(
   return released;
 }
 
+std::optional<NativeGuestThreadRunResult>
+NativeGuestThreadRunner::PrepareReadyPthreads() {
+  for (const auto& thread : scheduler_.SnapshotAll()) {
+    if (thread.state != kernel::GuestThreadState::kReady ||
+        threads_.contains(thread.handle) ||
+        !pthreads_.GetThread(thread.handle)) {
+      continue;
+    }
+
+    const auto allocation =
+        AllocateAndRegisterThread(thread.handle, memory_.base_address());
+    if (!allocation) {
+      return NativeGuestThreadRunResult{
+          NativeGuestThreadRunStatus::kThreadStackRegistrationFailed,
+          thread.handle,
+          {},
+          0,
+          allocation.status,
+      };
+    }
+  }
+  return std::nullopt;
+}
+
 NativeGuestThreadRunResult NativeGuestThreadRunner::RunUntilIdle(
     std::size_t maximum_slices) {
   NativeGuestThreadRunResult last;
@@ -324,6 +351,8 @@ std::string_view NativeGuestThreadRunStatusName(
       return "execution-lane-busy";
     case NativeGuestThreadRunStatus::kThreadNotRegistered:
       return "thread-not-registered";
+    case NativeGuestThreadRunStatus::kThreadStackRegistrationFailed:
+      return "thread-stack-registration-failed";
     case NativeGuestThreadRunStatus::kThreadStateInvalid:
       return "thread-state-invalid";
     case NativeGuestThreadRunStatus::kContinuationCaptureFailed:

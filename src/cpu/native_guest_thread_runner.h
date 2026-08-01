@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string_view>
 
 #include "cpu/native_guest_executor.h"
@@ -56,6 +57,7 @@ enum class NativeGuestThreadRunStatus {
   kThreadYielded,
   kExecutionLaneBusy,
   kThreadNotRegistered,
+  kThreadStackRegistrationFailed,
   kThreadStateInvalid,
   kContinuationCaptureFailed,
   kSchedulerUpdateFailed,
@@ -68,6 +70,8 @@ struct NativeGuestThreadRunResult {
   kernel::KernelHandle thread = kernel::kInvalidKernelHandle;
   NativeGuestExecutionResult execution;
   std::size_t slices = 0;
+  NativeGuestThreadRegistrationStatus registration_status =
+      NativeGuestThreadRegistrationStatus::kOk;
 };
 
 class NativeGuestThreadRunner final {
@@ -104,6 +108,8 @@ class NativeGuestThreadRunner final {
 
   [[nodiscard]] bool ReleaseThread(
       std::map<kernel::KernelHandle, ThreadState>::iterator thread) noexcept;
+  [[nodiscard]] std::optional<NativeGuestThreadRunResult>
+  PrepareReadyPthreads();
 
   memory::GuestMemory& memory_;
   kernel::GuestScheduler& scheduler_;

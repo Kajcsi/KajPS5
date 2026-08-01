@@ -286,18 +286,46 @@ int main() {
   Check(automatic_exit.status == NativeGuestThreadRunStatus::kThreadExited &&
             automatic_snapshot && automatic_snapshot->exit_value == 0x55 &&
             !memory->IsMapped(allocation.guard_address,
-                              allocation.guard_size + allocation.stack_size) &&
-            pthreads.DestroyAttribute(stack_attribute.handle) ==
-                kajps5::kernel::KernelStatus::kOk,
+                              allocation.guard_size + allocation.stack_size),
         "automatic guest stack was not released after thread exit");
 
+  const auto automatic_range = memory->FindUnmappedRange(
+      base, memory->mapping_granularity() + stack_size,
+      memory->mapping_granularity());
+  const auto self_prepared = pthreads.CreateThread(
+      "self-prepared", stack_attribute.handle, yield_code, 0x66);
+  const auto self_prepared_yield = runner.RunNext();
+  const auto self_prepared_guard =
+      automatic_range ? memory->QueryRegion(*automatic_range) : std::nullopt;
+  Check(self_prepared && automatic_range &&
+            self_prepared_yield.status ==
+                NativeGuestThreadRunStatus::kThreadYielded &&
+            self_prepared_yield.thread == self_prepared.handle &&
+            runner.registered_thread_count() == 1 && self_prepared_guard &&
+            self_prepared_guard->protection == GuestMemoryProtection::kNone,
+        "ready pthread did not receive an automatic guarded stack");
+  const auto self_prepared_exit = runner.RunNext();
+  const auto self_prepared_snapshot = scheduler.Snapshot(self_prepared.handle);
+  Check(
+      self_prepared_exit.status == NativeGuestThreadRunStatus::kThreadExited &&
+          self_prepared_snapshot &&
+          self_prepared_snapshot->exit_value == 0x76 &&
+          runner.registered_thread_count() == 0 &&
+          !memory->IsMapped(*automatic_range,
+                            memory->mapping_granularity() + stack_size) &&
+          pthreads.DestroyAttribute(stack_attribute.handle) ==
+              kajps5::kernel::KernelStatus::kOk,
+      "automatic pthread stack was not released after resumed exit");
+
   const auto oversized = pthreads.CreateThread("oversized", 0, peer_code, 0);
-  const auto oversized_allocation =
-      runner.AllocateAndRegisterThread(oversized.handle, base);
+  const auto oversized_allocation = runner.RunNext();
   const auto oversized_snapshot = scheduler.Snapshot(oversized.handle);
   Check(oversized &&
-            oversized_allocation.status == NativeGuestThreadRegistrationStatus::
-                                               kGuestStackAllocationFailed &&
+            oversized_allocation.status ==
+                NativeGuestThreadRunStatus::kThreadStackRegistrationFailed &&
+            oversized_allocation.registration_status ==
+                NativeGuestThreadRegistrationStatus::
+                    kGuestStackAllocationFailed &&
             oversized_snapshot &&
             oversized_snapshot->state ==
                 kajps5::kernel::GuestThreadState::kReady &&
@@ -305,7 +333,7 @@ int main() {
         "failed guest stack allocation changed scheduler state");
 
   const auto unregistered =
-      pthreads.CreateThread("unregistered", 0, peer_code, 0);
+      scheduler.CreateThread("unregistered", 700, peer_code, 0);
   const auto missing = runner.RunNext();
   const auto missing_snapshot = scheduler.Snapshot(unregistered.handle);
   Check(
@@ -313,7 +341,7 @@ int main() {
           missing.status == NativeGuestThreadRunStatus::kThreadNotRegistered &&
           missing_snapshot &&
           missing_snapshot->state == kajps5::kernel::GuestThreadState::kReady &&
-          pthreads.DiscardReadyThread(unregistered.handle),
+          scheduler.DiscardReadyThread(unregistered.handle),
       "unregistered thread was not returned to the ready queue");
 
   return 0;
