@@ -28,6 +28,8 @@ enum class RelocationStatus {
   kEmptyImportSymbol,
   kInvalidResolvedAddress,
   kMissingTlsModuleId,
+  kMissingTlsStaticOffset,
+  kInvalidTlsSymbol,
   kRelocationValueOverflow,
 };
 
@@ -65,11 +67,12 @@ class ImportResolver {
 
 [[nodiscard]] RelocationResult ApplyRelativeRelocations(
     const ElfMetadata& metadata, memory::GuestMemory& memory,
-    std::uint64_t load_bias = 0, std::uint64_t tls_module_id = 0);
+    std::uint64_t load_bias = 0, std::uint64_t tls_module_id = 0,
+    std::uint64_t tls_static_offset = 0);
 [[nodiscard]] RelocationResult ApplyRelocations(
     const ElfMetadata& metadata, memory::GuestMemory& memory,
     const ImportResolver& resolver, std::uint64_t load_bias = 0,
-    std::uint64_t tls_module_id = 0);
+    std::uint64_t tls_module_id = 0, std::uint64_t tls_static_offset = 0);
 [[nodiscard]] std::string_view RelocationStatusName(
     RelocationStatus status) noexcept;
 

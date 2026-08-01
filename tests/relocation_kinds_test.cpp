@@ -73,26 +73,50 @@ int main() {
   Check(applied && applied.applied_count == 7 &&
             applied.unresolved_import_count == 0,
         "supported symbol relocations were not applied");
-  Check(ReadValue(memory, 0x1000, 4) == 0x7fc,
-        "PC32 did not write S + A - P");
-  Check(ReadValue(memory, 0x1008, 4) == 0x7fc,
-        "PLT32 did not write S + A - P");
+  Check(ReadValue(memory, 0x1000, 4) == 0x7fc, "PC32 did not write S + A - P");
+  Check(ReadValue(memory, 0x1008, 4) == 0x7fc, "PLT32 did not write S + A - P");
   Check(ReadValue(memory, 0x1010, 4) == 0x1803,
         "unsigned 32-bit relocation wrote the wrong value");
   Check(ReadValue(memory, 0x1018, 4) == 0xfffffff9,
         "signed 32-bit relocation wrote the wrong value");
-  Check(ReadValue(memory, 0x1020, 8) == 0x7d8,
-        "PC64 did not write S + A - P");
-  Check(ReadValue(memory, 0x1028, 4) == 0x1236,
-        "SIZE32 did not write Z + A");
-  Check(ReadValue(memory, 0x1030, 8) == 0x1238,
-        "SIZE64 did not write Z + A");
+  Check(ReadValue(memory, 0x1020, 8) == 0x7d8, "PC64 did not write S + A - P");
+  Check(ReadValue(memory, 0x1028, 4) == 0x1236, "SIZE32 did not write Z + A");
+  Check(ReadValue(memory, 0x1030, 8) == 0x1238, "SIZE64 did not write Z + A");
   Check(ReadValue(memory, 0x1004, 4) == 0xaaaaaaaa &&
             ReadValue(memory, 0x100c, 4) == 0xaaaaaaaa &&
             ReadValue(memory, 0x1014, 4) == 0xaaaaaaaa &&
             ReadValue(memory, 0x101c, 4) == 0xaaaaaaaa &&
             ReadValue(memory, 0x102c, 4) == 0xaaaaaaaa,
         "a 32-bit relocation overwrote adjacent bytes");
+
+  auto tls = MakeDefinedSymbolMetadata();
+  tls.dynamic_info.symbols[1].value = 0x10;
+  tls.dynamic_info.relocations = {
+      {0x48, (std::uint64_t{1} << 32U) | 17U, 4},
+      {0x50, (std::uint64_t{1} << 32U) | 18U, 4},
+  };
+  const auto tls_applied =
+      ApplyRelativeRelocations(tls, memory, 0x1000, 1, 0x40);
+  Check(tls_applied && tls_applied.applied_count == 2 &&
+            ReadValue(memory, 0x1048, 8) == 0x14 &&
+            ReadValue(memory, 0x1050, 8) == std::uint64_t{0xffffffffffffffd4},
+        "Variant II TLS offsets were not applied");
+
+  auto missing_tls = tls;
+  missing_tls.dynamic_info.relocations.erase(
+      missing_tls.dynamic_info.relocations.begin());
+  Check(ApplyRelativeRelocations(missing_tls, memory, 0x1000, 1).status ==
+            RelocationStatus::kMissingTlsStaticOffset,
+        "TPOFF64 accepted a missing static TLS offset");
+  Check(ApplyRelativeRelocations(tls, memory, 0x1000).status ==
+            RelocationStatus::kMissingTlsModuleId,
+        "TLS offset relocation accepted a missing module ID");
+  auto undefined_tls = tls;
+  undefined_tls.dynamic_info.symbols[1].section_index = 0;
+  Check(
+      ApplyRelativeRelocations(undefined_tls, memory, 0x1000, 1, 0x40).status ==
+          RelocationStatus::kInvalidTlsSymbol,
+      "TLS offset relocation accepted an undefined symbol");
 
   kajps5::loader::ElfMetadata relative64;
   relative64.dynamic_info.relocations.push_back({0x40, 38U, -4});
@@ -101,8 +125,7 @@ int main() {
   Check(relative64_applied && relative64_applied.applied_count == 1 &&
             ReadValue(memory, 0x1040, 8) == 0xffc,
         "RELATIVE64 did not write B + A");
-  relative64.dynamic_info.relocations[0].info =
-      (std::uint64_t{1} << 32U) | 38U;
+  relative64.dynamic_info.relocations[0].info = (std::uint64_t{1} << 32U) | 38U;
   Check(ApplyRelativeRelocations(relative64, memory, 0x1000).status ==
             RelocationStatus::kInvalidRelativeSymbol,
         "RELATIVE64 accepted a symbol");
@@ -121,15 +144,13 @@ int main() {
   Check(overflow_result.status == RelocationStatus::kRelocationValueOverflow,
         "unsigned 32-bit overflow was accepted");
   Check(transactional_memory.Read(0x2000, unchanged) &&
-            unchanged == std::array{
-                             std::byte{0xaa}, std::byte{0xaa},
-                             std::byte{0xaa}, std::byte{0xaa},
-                             std::byte{0xaa}, std::byte{0xaa},
-                             std::byte{0xaa}, std::byte{0xaa},
-                             std::byte{0xaa}, std::byte{0xaa},
-                             std::byte{0xaa}, std::byte{0xaa},
-                             std::byte{0xaa}, std::byte{0xaa},
-                             std::byte{0xaa}, std::byte{0xaa}},
+            unchanged ==
+                std::array{std::byte{0xaa}, std::byte{0xaa}, std::byte{0xaa},
+                           std::byte{0xaa}, std::byte{0xaa}, std::byte{0xaa},
+                           std::byte{0xaa}, std::byte{0xaa}, std::byte{0xaa},
+                           std::byte{0xaa}, std::byte{0xaa}, std::byte{0xaa},
+                           std::byte{0xaa}, std::byte{0xaa}, std::byte{0xaa},
+                           std::byte{0xaa}},
         "overflow changed guest memory");
 
   auto signed_overflow = MakeDefinedSymbolMetadata();
@@ -137,7 +158,7 @@ int main() {
   signed_overflow.dynamic_info.relocations.push_back(
       {0x1000, (std::uint64_t{1} << 32U) | 11U, 0});
   Check(ApplyRelativeRelocations(signed_overflow, transactional_memory, 0x1000)
-            .status == RelocationStatus::kRelocationValueOverflow,
+                .status == RelocationStatus::kRelocationValueOverflow,
         "signed 32-bit overflow was accepted");
 
   auto size_overflow = MakeDefinedSymbolMetadata();
@@ -145,7 +166,7 @@ int main() {
   size_overflow.dynamic_info.relocations.push_back(
       {0, (std::uint64_t{1} << 32U) | 32U, 0});
   Check(ApplyRelativeRelocations(size_overflow, transactional_memory, 0x2000)
-            .status == RelocationStatus::kRelocationValueOverflow,
+                .status == RelocationStatus::kRelocationValueOverflow,
         "SIZE32 overflow was accepted");
 
   kajps5::loader::ElfMetadata narrow_target;
@@ -156,14 +177,14 @@ int main() {
         "a valid four-byte relocation target was rejected");
   narrow_target.dynamic_info.relocations[0].info = 1U;
   Check(ApplyRelativeRelocations(narrow_target, four_byte_memory, 0x3000)
-            .status == RelocationStatus::kTargetNotMapped,
+                .status == RelocationStatus::kTargetNotMapped,
         "an incomplete eight-byte relocation target was accepted");
 
   auto invalid_symbol = MakeDefinedSymbolMetadata();
   invalid_symbol.dynamic_info.relocations.push_back(
       {0, (std::uint64_t{2} << 32U) | 2U, 0});
   Check(ApplyRelativeRelocations(invalid_symbol, transactional_memory, 0x2000)
-            .status == RelocationStatus::kInvalidSymbolIndex,
+                .status == RelocationStatus::kInvalidSymbolIndex,
         "an invalid PC-relative symbol index was accepted");
 
   Check(kajps5::loader::RelocationStatusName(

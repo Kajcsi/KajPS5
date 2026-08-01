@@ -33,6 +33,7 @@
 #include "loader/lifecycle_plan.h"
 #include "loader/relocation_trace.h"
 #include "loader/relocator.h"
+#include "loader/static_tls_layout.h"
 
 namespace {
 
@@ -140,11 +141,9 @@ int TraceExecutableFile(const char* path) {
               << "load.guest_size=" << range.size << '\n'
               << "load.segments=" << loaded.loaded_segment_count << '\n'
               << "load.file_bytes=" << loaded.loaded_file_bytes << '\n'
-              << "load.zero_filled_bytes=" << loaded.zero_filled_bytes
-              << '\n';
+              << "load.zero_filled_bytes=" << loaded.zero_filled_bytes << '\n';
 
-    const auto launch =
-        kajps5::loader::AnalyzeLaunchMetadata(loaded.metadata);
+    const auto launch = kajps5::loader::AnalyzeLaunchMetadata(loaded.metadata);
     std::cout << kajps5::loader::FormatLaunchMetadataTrace(launch);
     if (!launch) {
       std::cerr << "Executable launch metadata check failed: "
@@ -168,18 +167,16 @@ int TraceExecutableFile(const char* path) {
 
     kajps5::kernel::KernelRuntime kernel_runtime;
     kajps5::hle::ExportRegistry hle_exports;
-    const auto export_status = kajps5::hle::RegisterKernelExports(
-        hle_exports, kernel_runtime);
+    const auto export_status =
+        kajps5::hle::RegisterKernelExports(hle_exports, kernel_runtime);
     if (export_status != kajps5::hle::ExportRegistryStatus::kOk) {
       std::cerr << "HLE coverage check failed: export registration returned "
-                << kajps5::hle::ExportRegistryStatusName(export_status)
-                << '\n';
+                << kajps5::hle::ExportRegistryStatusName(export_status) << '\n';
       return 7;
     }
     const auto libc_export_status = kajps5::hle::RegisterLibcExports(
         hle_exports, kernel_runtime.cxa_guards(),
-        kernel_runtime.process_lifecycle(), kernel_runtime.libc_heap(),
-        memory);
+        kernel_runtime.process_lifecycle(), kernel_runtime.libc_heap(), memory);
     if (libc_export_status != kajps5::hle::ExportRegistryStatus::kOk) {
       std::cerr << "HLE coverage check failed: libc export registration "
                    "returned "
@@ -190,8 +187,7 @@ int TraceExecutableFile(const char* path) {
     const auto libc_thread_export_status =
         kajps5::hle::RegisterLibcThreadExports(hle_exports,
                                                kernel_runtime.pthreads());
-    if (libc_thread_export_status !=
-        kajps5::hle::ExportRegistryStatus::kOk) {
+    if (libc_thread_export_status != kajps5::hle::ExportRegistryStatus::kOk) {
       std::cerr << "HLE coverage check failed: libc thread export "
                    "registration returned "
                 << kajps5::hle::ExportRegistryStatusName(
@@ -219,8 +215,8 @@ int TraceExecutableFile(const char* path) {
     }
 
     kajps5::cpu::NativeGuestExecutionContext execution_context;
-    kajps5::cpu::NativeHleImportTable hle_functions(
-        memory, hle_exports, &execution_context);
+    kajps5::cpu::NativeHleImportTable hle_functions(memory, hle_exports,
+                                                    &execution_context);
     const auto function_status = hle_functions.Build(
         loaded.metadata, kajps5::hle::kMaximumCapturedHleStackArguments);
     std::cout << "hle.trampolines.status="
@@ -233,8 +229,8 @@ int TraceExecutableFile(const char* path) {
               << function_status.resolved_import_count << '\n'
               << "hle.trampolines.unresolved_imports="
               << function_status.unresolved_import_count << '\n'
-              << "hle.trampolines.created="
-              << function_status.trampoline_count << '\n';
+              << "hle.trampolines.created=" << function_status.trampoline_count
+              << '\n';
     if (!function_status) {
       std::cerr << "HLE trampoline setup failed: "
                 << kajps5::cpu::NativeHleImportTableStatusName(
@@ -243,11 +239,35 @@ int TraceExecutableFile(const char* path) {
       return 7;
     }
 
-    const auto tls_module_id = launch.metadata.tls.has_value() ? 1U : 0U;
+    kajps5::loader::StaticTlsLayout tls_layout;
+    std::uint64_t tls_module_id = 0;
+    std::uint64_t tls_static_offset = 0;
+    if (launch.metadata.tls) {
+      const auto& tls = *launch.metadata.tls;
+      const auto registered = tls_layout.RegisterModule(
+          1, tls.memory_size, tls.alignment, tls.image_address);
+      std::cout << "tls.layout.status="
+                << kajps5::loader::StaticTlsLayoutStatusName(registered.status)
+                << '\n';
+      if (!registered) {
+        std::cerr << "Static TLS layout failed: "
+                  << kajps5::loader::StaticTlsLayoutStatusName(
+                         registered.status)
+                  << '\n';
+        return 4;
+      }
+      tls_module_id = registered.module.module_id;
+      tls_static_offset = registered.module.static_offset;
+      std::cout << "tls.layout.module_id=" << tls_module_id << '\n'
+                << "tls.layout.static_offset=" << tls_static_offset << '\n'
+                << "tls.layout.total_size=" << tls_layout.total_size() << '\n';
+    } else {
+      std::cout << "tls.layout.status=skipped-no-tls\n";
+    }
     const kajps5::loader::LayeredImportResolver imports(hle_functions,
                                                         hle_data);
     const auto relocated = kajps5::loader::ApplyRelocations(
-        loaded.metadata, memory, imports, 0, tls_module_id);
+        loaded.metadata, memory, imports, 0, tls_module_id, tls_static_offset);
     std::cout << kajps5::loader::FormatRelocationTrace(relocated);
     if (!relocated) {
       std::cerr << "Executable relocation check failed: "
@@ -290,8 +310,7 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  std::cout << kajps5::ProjectName() << ' ' << kajps5::ProjectVersion()
-            << '\n'
+  std::cout << kajps5::ProjectName() << ' ' << kajps5::ProjectVersion() << '\n'
             << kajps5::ProjectStatus() << '\n';
   return 0;
 }

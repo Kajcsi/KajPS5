@@ -62,10 +62,11 @@ writes use `S + A - P`; size writes use `Z + A`; and relative writes use
 unsigned overflow stops the full pass before any write. Absolute relocations
 use defined symbols, resolved imports, or zero for an unresolved weak symbol.
 `R_X86_64_DTPMOD64` writes a checked nonzero TLS module ID after TLS
-registration. TLS-offset relocations remain unsupported until the runtime has
-a static TLS layout. Missing TLS identity, invalid relative symbols, target
-overflow, and unmapped writes also fail. The HLE layer resolves symbol
-relocations by ordered needed-library name. Relocation traces encode untrusted
+registration. `R_X86_64_DTPOFF64` writes a checked module-relative symbol
+offset. `R_X86_64_TPOFF64` writes the Variant II offset from the thread pointer
+after static TLS layout. Missing TLS identity or layout, invalid TLS or relative
+symbols, target overflow, and unmapped writes also fail. The HLE layer resolves
+symbol relocations by ordered needed-library name. Relocation traces encode untrusted
 names as hex, report a rejected numeric relocation type, and show at most 32
 records with 128 input bytes per name.
 
