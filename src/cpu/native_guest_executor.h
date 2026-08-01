@@ -150,6 +150,11 @@ class NativeGuestExecutor final {
       std::uint64_t stack_address, std::uint64_t stack_size,
       std::uint64_t parameters_address, std::uint64_t exit_handler_address,
       NativeGuestExecutionContext* execution_context = nullptr) const;
+  [[nodiscard]] NativeGuestExecutionResult ExecuteThread(
+      memory::GuestMemory& memory, std::uint64_t entry_point,
+      std::uint64_t stack_address, std::uint64_t stack_size,
+      std::uint64_t argument,
+      NativeGuestExecutionContext* execution_context = nullptr) const;
   [[nodiscard]] NativeGuestExecutionResult Resume(
       memory::GuestMemory& memory,
       NativeGuestExecutionContext& execution_context) const;
@@ -161,10 +166,16 @@ class NativeGuestExecutor final {
       NativeGuestContinuation& continuation) const noexcept;
 
  private:
+  [[nodiscard]] NativeGuestExecutionResult ExecuteEntry(
+      memory::GuestMemory& memory, std::uint64_t entry_point,
+      std::uint64_t stack_address, std::uint64_t stack_size,
+      std::uint64_t first_argument, std::uint64_t second_argument,
+      bool require_readable_first_argument,
+      NativeGuestExecutionContext* execution_context) const;
   [[nodiscard]] static NativeGuestExecutionResult RunGuestEntry(
       memory::GuestMemory& memory, std::uint64_t entry_point,
       std::uint64_t stack_top, std::uint64_t root_frame,
-      std::uint64_t parameters_address, std::uint64_t exit_handler_address,
+      std::uint64_t first_argument, std::uint64_t second_argument,
       NativeGuestExecutionContext& execution_context);
   [[nodiscard]] static NativeGuestExecutionResult RunGuestContinuation(
       memory::GuestMemory& memory,

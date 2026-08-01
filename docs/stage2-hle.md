@@ -116,6 +116,8 @@ cover this full block, park, interleave, wake, retry, and resume sequence.
 Cooperative pthread yield uses the same saved continuation. It runs the next
 ready scheduler thread and resumes after the completed yield import without
 calling that handler a second time.
+Native pthread entries use their assigned guest stack and receive the thread
+argument in the System V `RDI` register.
 Portable fault containment and a multi-thread execution loop are still
 required before the command-line tool can run a title.
 

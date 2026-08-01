@@ -92,6 +92,7 @@ int main() {
   const auto instruction_fault_code_address = base + 0x220;
   const auto blocked_hle_code_address = base + 0x300;
   const auto yielded_hle_code_address = base + 0x500;
+  const auto thread_code_address = base + 0x600;
   const auto stack_address = base + 0x4000;
   const auto stack_size = std::uint64_t{0x4000};
   const auto parameters_address = stack_address + 0x100;
@@ -271,6 +272,8 @@ int main() {
       std::byte{0x00}, std::byte{0xc3}};
   const std::array<std::byte, 2> instruction_fault_entry = {std::byte{0x0f},
                                                             std::byte{0x0b}};
+  const std::array<std::byte, 4> thread_entry = {
+      std::byte{0x48}, std::byte{0x89}, std::byte{0xf8}, std::byte{0xc3}};
 
   Check(memory->Initialize(code_address, complete_entry) &&
             memory->Initialize(hle_code_address, hle_entry) &&
@@ -279,6 +282,7 @@ int main() {
                                instruction_fault_entry) &&
             memory->Initialize(blocked_hle_code_address, blocked_hle_entry) &&
             memory->Initialize(yielded_hle_code_address, yielded_hle_entry) &&
+            memory->Initialize(thread_code_address, thread_entry) &&
             memory->Protect(
                 code_address, 0x1000,
                 GuestMemoryProtection::kRead | GuestMemoryProtection::kExecute),
@@ -295,6 +299,13 @@ int main() {
             observed_stack % 16 == 8 &&
             ReadUInt64(*memory, parameters_address + 8) == exit_handler_address,
         "guest entry did not use the System V arguments and guest stack");
+
+  const auto thread_entry_result = executor.ExecuteThread(
+      *memory, thread_code_address, stack_address, stack_size,
+      0xcafebabedeadbeefULL, &execution_context);
+  Check(thread_entry_result.status == NativeGuestExecutionStatus::kOk &&
+            thread_entry_result.return_value == 0xcafebabedeadbeefULL,
+        "guest thread entry did not receive its System V argument");
 
   const auto hle =
       executor.Execute(*memory, hle_code_address, stack_address, stack_size,

@@ -312,6 +312,11 @@ yield request and return-to-host behavior in
 commit. KajPS5 records the completed HLE return and resumes it without a
 second dispatch. No upstream yield source or stub bytes were copied.
 
+The native pthread entry path follows KytyPS5's guest-stack and System V entry
+argument behavior in `src/kernel/pthread.cpp` at commit
+`a65d17a5d689257a35644e01e9d15539361f0bf0`. No upstream assembly or source
+was copied.
+
 The process-time handlers in `src/hle/kernel_clock_exports.cpp` and
 `tests/hle_kernel_clock_exports_test.cpp` adapt the matching process-time,
 counter, and frequency behavior from the pinned KytyPS5
