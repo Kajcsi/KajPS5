@@ -323,7 +323,10 @@ blocked, resumed, and exited state transitions also adapt SharpEmu's behavior in
 `src/SharpEmu.Core/Cpu/Native/DirectExecutionBackend.cs` at commit
 `7c9740fee8a633e17b145c6bc6d794e41d46c73f`. No upstream runner source was
 copied. The runner uses the same native lane for the KytyPS5-style process
-entry and pthread entry ABIs.
+entry and pthread entry ABIs. Its owned main stack and fixed three-pointer
+argument block follow KytyPS5 `src/loader/runtimeLinker.cpp` and SharpEmu
+`src/SharpEmu.Core/Cpu/CpuDispatcher.cs` at the pinned commits. SharpEmu's
+checked UTF-8 argument placement is adapted without its managed CPU runtime.
 
 The process-time handlers in `src/hle/kernel_clock_exports.cpp` and
 `tests/hle_kernel_clock_exports_test.cpp` adapt the matching process-time,

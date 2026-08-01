@@ -10,7 +10,9 @@
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "core/memory/guest_memory.h"
@@ -47,6 +49,20 @@ std::vector<std::byte> BuildImportEntry(std::uint64_t trampoline) {
                            std::byte{0x08}, std::byte{0x48}, std::byte{0x01},
                            std::byte{0xd8}, std::byte{0xc3}});
   return code;
+}
+
+bool MatchesCString(std::span<const std::byte> bytes,
+                    std::string_view expected) {
+  if (bytes.size() != expected.size() + 1 || bytes.back() != std::byte{0}) {
+    return false;
+  }
+  for (std::size_t index = 0; index < expected.size(); ++index) {
+    if (std::to_integer<unsigned char>(bytes[index]) !=
+        static_cast<unsigned char>(expected[index])) {
+      return false;
+    }
+  }
+  return true;
 }
 
 }  // namespace
@@ -347,6 +363,55 @@ int main() {
                     kGuestParametersNotReadable &&
             scheduler.DiscardReadyThread(invalid_process.handle),
         "process entry accepted an unreadable parameter block");
+
+  const auto owned_process =
+      scheduler.CreateThread("owned-process", 700, process_code, 0);
+  const std::array<std::string_view, 2> process_arguments = {"eboot.bin",
+                                                             "--public-test"};
+  const auto owned_process_allocation = runner.AllocateAndRegisterProcessThread(
+      owned_process.handle, base, process_arguments, 0x33, stack_size);
+  kajps5::cpu::NativeGuestEntryParameters owned_process_parameters;
+  std::array<std::byte, 10> first_argument{};
+  std::array<std::byte, 14> second_argument{};
+  const auto owned_process_guard =
+      memory->QueryRegion(owned_process_allocation.guard_address);
+  Check(owned_process && owned_process_allocation && owned_process_guard &&
+            owned_process_guard->protection == GuestMemoryProtection::kNone &&
+            memory->Read(owned_process_allocation.parameters_address,
+                         std::as_writable_bytes(
+                             std::span{&owned_process_parameters, 1})) &&
+            owned_process_parameters.argc == 2 &&
+            owned_process_parameters.argv[0] != 0 &&
+            owned_process_parameters.argv[1] != 0 &&
+            owned_process_parameters.argv[2] == 0 &&
+            memory->Read(owned_process_parameters.argv[0], first_argument) &&
+            memory->Read(owned_process_parameters.argv[1], second_argument) &&
+            MatchesCString(first_argument, "eboot.bin") &&
+            MatchesCString(second_argument, "--public-test"),
+        "owned process stack or entry arguments are invalid");
+  const auto owned_process_exit = runner.RunNext();
+  const auto owned_process_snapshot = scheduler.Snapshot(owned_process.handle);
+  Check(
+      owned_process_exit.status == NativeGuestThreadRunStatus::kThreadExited &&
+          owned_process_snapshot &&
+          owned_process_snapshot->exit_value ==
+              owned_process_allocation.parameters_address + 0x33 &&
+          !memory->IsMapped(owned_process_allocation.guard_address,
+                            owned_process_allocation.guard_size +
+                                owned_process_allocation.stack_size +
+                                memory->mapping_granularity()),
+      "owned process mapping was not released after exit");
+
+  const auto rejected_process =
+      scheduler.CreateThread("rejected-process", 700, process_code, 0);
+  Check(rejected_process &&
+            runner.AllocateAndRegisterProcessThread(
+                      rejected_process.handle, base,
+                      std::span<const std::string_view>{}, 0, stack_size)
+                    .status ==
+                NativeGuestThreadRegistrationStatus::kInvalidArgument &&
+            scheduler.DiscardReadyThread(rejected_process.handle),
+        "process allocation accepted an empty argument list");
 
   const auto oversized = pthreads.CreateThread("oversized", 0, peer_code, 0);
   const auto oversized_allocation = runner.RunNext();

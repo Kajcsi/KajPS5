@@ -10,6 +10,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string_view>
 
 #include "cpu/native_guest_executor.h"
@@ -21,6 +22,8 @@ class PthreadService;
 }  // namespace kajps5::kernel
 
 namespace kajps5::cpu {
+
+inline constexpr std::uint64_t kDefaultNativeGuestProcessStackSize = 0x200000;
 
 enum class NativeGuestThreadRegistrationStatus {
   kOk,
@@ -44,6 +47,7 @@ struct NativeGuestThreadAllocationResult {
   std::uint64_t stack_size = 0;
   std::uint64_t guard_address = 0;
   std::uint64_t guard_size = 0;
+  std::uint64_t parameters_address = 0;
 
   [[nodiscard]] explicit operator bool() const noexcept {
     return status == NativeGuestThreadRegistrationStatus::kOk;
@@ -95,6 +99,12 @@ class NativeGuestThreadRunner final {
       std::uint64_t exit_handler_address);
   [[nodiscard]] NativeGuestThreadAllocationResult AllocateAndRegisterThread(
       kernel::KernelHandle handle, std::uint64_t search_start);
+  [[nodiscard]] NativeGuestThreadAllocationResult
+  AllocateAndRegisterProcessThread(
+      kernel::KernelHandle handle, std::uint64_t search_start,
+      std::span<const std::string_view> arguments,
+      std::uint64_t exit_handler_address,
+      std::uint64_t stack_size = kDefaultNativeGuestProcessStackSize);
   [[nodiscard]] NativeGuestThreadRunResult RunNext();
   [[nodiscard]] NativeGuestThreadRunResult RunUntilIdle(
       std::size_t maximum_slices);

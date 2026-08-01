@@ -7,6 +7,7 @@
 
 #include <limits>
 #include <optional>
+#include <span>
 #include <utility>
 
 #include "kernel/guest_scheduler.h"
@@ -183,6 +184,102 @@ NativeGuestThreadRunner::AllocateAndRegisterThread(kernel::KernelHandle handle,
   state.allocation_address = *allocation;
   state.allocation_size = allocation_size;
   return {status, stack_address, *stack_size, *allocation, *guard_size};
+}
+
+NativeGuestThreadAllocationResult
+NativeGuestThreadRunner::AllocateAndRegisterProcessThread(
+    kernel::KernelHandle handle, std::uint64_t search_start,
+    std::span<const std::string_view> arguments,
+    std::uint64_t exit_handler_address, std::uint64_t requested_stack_size) {
+  if (!memory_.host_mapped()) {
+    return {NativeGuestThreadRegistrationStatus::kHostMappingRequired};
+  }
+  if (arguments.empty() ||
+      arguments.size() > NativeGuestEntryParameters{}.argv.size()) {
+    return {NativeGuestThreadRegistrationStatus::kInvalidArgument};
+  }
+
+  const auto granularity = memory_.mapping_granularity();
+  const auto stack_size = AlignUp(requested_stack_size, granularity);
+  if (!stack_size || *stack_size < kMinimumNativeGuestStackSize ||
+      granularity > std::numeric_limits<std::uint64_t>::max() / 2 ||
+      *stack_size >
+          std::numeric_limits<std::uint64_t>::max() - 2 * granularity) {
+    return {NativeGuestThreadRegistrationStatus::kInvalidArgument};
+  }
+
+  std::uint64_t required_parameter_bytes = sizeof(NativeGuestEntryParameters);
+  for (const auto argument : arguments) {
+    if (argument.empty() || argument.find('\0') != std::string_view::npos ||
+        argument.size() > std::numeric_limits<std::uint64_t>::max() - 16 ||
+        required_parameter_bytes >
+            std::numeric_limits<std::uint64_t>::max() - argument.size() - 16) {
+      return {NativeGuestThreadRegistrationStatus::kInvalidArgument};
+    }
+    required_parameter_bytes += argument.size() + 16;
+  }
+  if (required_parameter_bytes > granularity) {
+    return {NativeGuestThreadRegistrationStatus::kInvalidArgument};
+  }
+
+  const auto allocation_size = *stack_size + 2 * granularity;
+  const auto allocation =
+      memory_.FindUnmappedRange(search_start, allocation_size, granularity);
+  if (!allocation) {
+    return {NativeGuestThreadRegistrationStatus::kGuestStackAllocationFailed};
+  }
+
+  constexpr auto read_write = memory::GuestMemoryProtection::kRead |
+                              memory::GuestMemoryProtection::kWrite;
+  if (!memory_.Map(*allocation, allocation_size, read_write) ||
+      !memory_.Protect(*allocation, granularity,
+                       memory::GuestMemoryProtection::kNone) ||
+      !memory_.Fill(*allocation + granularity, allocation_size - granularity,
+                    std::byte{0})) {
+    if (memory_.IsMapped(*allocation, allocation_size)) {
+      (void)memory_.Unmap(*allocation, allocation_size);
+    }
+    return {NativeGuestThreadRegistrationStatus::kGuestStackAllocationFailed};
+  }
+
+  const auto stack_address = *allocation + granularity;
+  const auto parameter_page = stack_address + *stack_size;
+  auto cursor = parameter_page + granularity;
+  NativeGuestEntryParameters parameters;
+  parameters.argc = static_cast<std::int32_t>(arguments.size());
+  for (std::size_t index = arguments.size(); index-- != 0;) {
+    const auto argument = arguments[index];
+    cursor = (cursor - argument.size() - 1) & ~std::uint64_t{0xf};
+    if (cursor < parameter_page ||
+        !memory_.Write(cursor, std::as_bytes(std::span<const char>(
+                                   argument.data(), argument.size())))) {
+      (void)memory_.Unmap(*allocation, allocation_size);
+      return {NativeGuestThreadRegistrationStatus::kInvalidArgument};
+    }
+    parameters.argv[index] = cursor;
+  }
+  const auto parameters_address =
+      (cursor - sizeof(parameters)) & ~std::uint64_t{0xf};
+  if (parameters_address < parameter_page ||
+      !memory_.Write(parameters_address,
+                     std::as_bytes(std::span{&parameters, 1}))) {
+    (void)memory_.Unmap(*allocation, allocation_size);
+    return {NativeGuestThreadRegistrationStatus::kInvalidArgument};
+  }
+
+  const auto status =
+      RegisterProcessThread(handle, stack_address, *stack_size,
+                            parameters_address, exit_handler_address);
+  if (status != NativeGuestThreadRegistrationStatus::kOk) {
+    (void)memory_.Unmap(*allocation, allocation_size);
+    return {status};
+  }
+  auto& state = threads_.at(handle);
+  state.owns_stack = true;
+  state.allocation_address = *allocation;
+  state.allocation_size = allocation_size;
+  return {status,      stack_address, *stack_size,
+          *allocation, granularity,   parameters_address};
 }
 
 NativeGuestThreadRunResult NativeGuestThreadRunner::RunNext() {

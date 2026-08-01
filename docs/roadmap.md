@@ -99,6 +99,8 @@
       mappings after each thread exits.
 - [x] Prepare ready pthread stacks automatically before native execution.
 - [x] Run process and pthread entry ABIs through the same scheduler lane.
+- [x] Allocate the main guarded stack and checked inline arguments as one owned
+      process mapping.
 - [x] Build and own native HLE trampolines for all resolved executable imports.
 - Expand thread, event, file, and time coverage as their HLE bridges grow.
 - Compare small, repeatable traces with both upstream projects.
