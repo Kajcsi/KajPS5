@@ -39,6 +39,8 @@
       tests.
 - [x] Add checked semaphore counts and scheduler wait integration.
 - [x] Add typed user-event queues and scheduler wake integration.
+- [x] Add graphics event registrations, filter-based delivery, and generation
+      checks for reserved events.
 - [x] Add portable realtime, monotonic, and process-clock conversions.
 - [x] Add checked fixed and first-fit flexible-memory mappings.
 - [x] Add checked direct-memory range allocation and partial release.

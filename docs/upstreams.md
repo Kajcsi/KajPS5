@@ -98,6 +98,10 @@ adapted paths change.
   validation. SharpEmu supplies the independent standard `RELEASE_MEM` control
   decoder and counter-write behavior. Both packet forms use the same ordered,
   checked memory path in KajPS5.
+- KytyPS5 supplies the graphics event registration shape and filter value.
+  SharpEmu supplies independent filter-based wake behavior when a hardware
+  event type differs from the guest event identifier. KajPS5 also gives each
+  registration a private generation to reject already-reserved stale events.
 
 When KajPS5 imports code, identify the upstream file and commit, keep its
 copyright and license notice, and update `THIRD_PARTY_NOTICES.md` in the same

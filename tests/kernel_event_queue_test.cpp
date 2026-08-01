@@ -199,6 +199,53 @@ void TestEventQueueService() {
   Check(queues.Wait(delete_queue.handle, 1).status == KernelStatus::kNotFound,
         "deleted event queue remained valid for a new wait");
 
+  Check(queues.AddGraphicsEvent(created.handle, 0x20, 0xdeadbeefU) ==
+                KernelStatus::kOk &&
+            queues.TriggerGraphicsEvents(7) == 1,
+        "graphics event filter trigger failed");
+  polled = queues.Poll(created.handle, 2);
+  Check(polled && polled.events.size() == 1 &&
+            polled.events[0].ident == 0x20 &&
+            polled.events[0].filter == kEventFilterGraphics &&
+            polled.events[0].flags == 0 &&
+            polled.events[0].fflags == 1 &&
+            polled.events[0].data == 7 &&
+            polled.events[0].user_data == 0xdeadbeefU &&
+            queues.Poll(created.handle, 1).status == KernelStatus::kBusy &&
+            queues.DeleteGraphicsEvent(created.handle, 0x20) ==
+                KernelStatus::kOk,
+        "graphics event payload or reset behavior is incorrect");
+
+  const auto generation_queue = queues.Create("generation");
+  const auto generation_waiter =
+      runtime.scheduler().CreateThread("generation-waiter", 0);
+  Check(generation_queue && generation_waiter &&
+            queues.AddGraphicsEvent(generation_queue.handle, 0x30, 0x111U) ==
+                KernelStatus::kOk &&
+            runtime.scheduler().SelectNext() == generation_waiter.handle &&
+            queues.Wait(generation_queue.handle, 1).status ==
+                KernelStatus::kWouldBlock &&
+            queues.TriggerGraphicsEvents(8) == 1 &&
+            queues.DeleteGraphicsEvent(generation_queue.handle, 0x30) ==
+                KernelStatus::kOk &&
+            queues.AddGraphicsEvent(generation_queue.handle, 0x30, 0x222U) ==
+                KernelStatus::kOk &&
+            runtime.scheduler().SelectNext() == generation_waiter.handle &&
+            queues.Wait(generation_queue.handle, 1).status ==
+                KernelStatus::kWouldBlock,
+        "old graphics event survived listener re-registration");
+  Check(queues.TriggerGraphicsEvents(9) == 1 &&
+            runtime.scheduler().SelectNext() == generation_waiter.handle,
+        "new graphics event did not wake its waiter");
+  polled = queues.Wait(generation_queue.handle, 1);
+  Check(polled && polled.events.size() == 1 &&
+            polled.events[0].ident == 0x30 &&
+            polled.events[0].data == 9 &&
+            polled.events[0].user_data == 0x222U &&
+            runtime.scheduler().ExitCurrent(0) &&
+            queues.Delete(generation_queue.handle) == KernelStatus::kOk,
+        "re-registered graphics listener received the wrong event");
+
   Check(queues.Delete(created.handle) == KernelStatus::kOk &&
             queues.Delete(created.handle) == KernelStatus::kNotFound &&
             queues.AddUserEvent(created.handle, 1, false) ==

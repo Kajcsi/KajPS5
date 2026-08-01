@@ -99,6 +99,11 @@ The tests capture the behavior below.
   waiter before waking it, so another waiter cannot steal the event. A level
   event can wake each current waiter. Deleting a queue completes its blocked
   waiters with the kernel deleted-object result.
+- Graphics registrations use filter `-14`. A hardware event type wakes the
+  first graphics registration on each matching queue and keeps the registered
+  identifier and user data. Each registration has an internal generation, so
+  a reserved event from a deleted listener cannot reach a later listener that
+  reuses the same identifier.
 
 ## Time
 

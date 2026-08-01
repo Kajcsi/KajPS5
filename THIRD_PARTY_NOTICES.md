@@ -628,6 +628,17 @@ GPL-2.0-or-later. No upstream event-queue source was copied verbatim. Blocking
 wait dispatch remains deferred until the runtime can resume a saved guest
 continuation.
 
+Graphics-filter registration and delivery in `src/kernel/event_queue.*` and
+`tests/kernel_event_queue_test.cpp` adapt KytyPS5
+`src/kernel/eventQueue.cpp` and
+`src/graphics/host_gpu/renderer/sync.cpp` at commit
+`a65d17a5d689257a35644e01e9d15539361f0bf0`. Filter-based delivery when the
+hardware event type differs from the guest identifier re-expresses SharpEmu
+`src/SharpEmu.Libs/Kernel/KernelEventQueueCompatExports.cs` and
+`tests/SharpEmu.Libs.Tests/Agc/AgcEventQueueTests.cs` at commit
+`5ee7cd1dfafdeb0ce0e458a365692df4b2e1c445`. KajPS5's internal registration
+generation is original code that rejects stale reserved events.
+
 ## Contributor guidance
 
 The AI-use guidance in `CONTRIBUTING.md` reproduces the contributor rules from

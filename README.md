@@ -62,9 +62,9 @@ The current core includes:
   scheduler-backed mutexes and timed condition variables. Checked C++ static
   initialization guards and the complete C++ mutex ABI use the same guest
   scheduler.
-- Event flags, semaphores, user-event queues, portable clocks, guest memory
-  protection, flexible and direct-memory mappings, direct-memory range
-  allocation, and a read-only file namespace. Explicit host mounts are
+- Event flags, semaphores, user and graphics event queues, portable clocks,
+  guest memory protection, flexible and direct-memory mappings, direct-memory
+  range allocation, and a read-only file namespace. Explicit host mounts are
   confined to their guest roots and keep stable directory ordering. The
   matching `libkernel` handlers share the same services.
 - Checked JSON value construction and destruction through a bounded shadow
