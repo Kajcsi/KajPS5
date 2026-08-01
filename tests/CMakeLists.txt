@@ -101,6 +101,15 @@ kajps5_deploy_msvc_asan_runtime(kajps5_native_guest_executor_test)
 add_test(NAME kajps5_native_guest_executor
          COMMAND kajps5_native_guest_executor_test)
 
+add_executable(kajps5_native_guest_process_launcher_test
+               native_guest_process_launcher_test.cpp)
+target_link_libraries(kajps5_native_guest_process_launcher_test
+                      PRIVATE kajps5_core)
+kajps5_deploy_msvc_asan_runtime(kajps5_native_guest_process_launcher_test)
+
+add_test(NAME kajps5_native_guest_process_launcher
+         COMMAND kajps5_native_guest_process_launcher_test)
+
 add_executable(kajps5_native_guest_thread_runner_test
                native_guest_thread_runner_test.cpp)
 target_link_libraries(kajps5_native_guest_thread_runner_test

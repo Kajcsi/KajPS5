@@ -327,6 +327,9 @@ entry and pthread entry ABIs. Its owned main stack and fixed three-pointer
 argument block follow KytyPS5 `src/loader/runtimeLinker.cpp` and SharpEmu
 `src/SharpEmu.Core/Cpu/CpuDispatcher.cs` at the pinned commits. SharpEmu's
 checked UTF-8 argument placement is adapted without its managed CPU runtime.
+The process launcher connects checked loader metadata to that entry path and
+keeps SharpEmu's explicit startup failure boundary. It does not copy SharpEmu
+runtime code or add a second dispatcher.
 
 The process-time handlers in `src/hle/kernel_clock_exports.cpp` and
 `tests/hle_kernel_clock_exports_test.cpp` adapt the matching process-time,
