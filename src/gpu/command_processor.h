@@ -80,6 +80,24 @@ class GpuActionTrace final : public GpuSubmissionSink {
   std::vector<GpuAction> actions_;
 };
 
+class GpuActionRing final : public GpuSubmissionSink {
+ public:
+  explicit GpuActionRing(std::size_t capacity = 4096) noexcept;
+
+  [[nodiscard]] bool Submit(const GpuAction& action) noexcept override;
+  [[nodiscard]] std::size_t size() const noexcept;
+  [[nodiscard]] std::uint64_t dropped_count() const noexcept;
+  [[nodiscard]] std::optional<GpuAction> At(
+      std::size_t index) const noexcept;
+  void Clear() noexcept;
+
+ private:
+  std::size_t capacity_ = 0;
+  std::size_t next_ = 0;
+  std::uint64_t dropped_count_ = 0;
+  std::vector<GpuAction> actions_;
+};
+
 struct GpuCommandLimits {
   std::size_t max_actions = 4096;
   std::uint32_t max_indirect_depth = 8;

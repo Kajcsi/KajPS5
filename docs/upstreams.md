@@ -86,6 +86,10 @@ adapted paths change.
   re-expresses SharpEmu wait-resume behavior without importing another GPU or
   scheduler owner. All 61 tests pass in Debug, Release, and AddressSanitizer
   builds.
+- The first `libSceAgcDriver` bridge uses the KytyPS5 packet ABI and NIDs for
+  DCB and owner-scoped ACB submission. SharpEmu supplies independent evidence
+  for descriptor checks, queue separation, and resuming earlier blocked work
+  before later work.
 
 When KajPS5 imports code, identify the upstream file and commit, keep its
 copyright and license notice, and update `THIRD_PARTY_NOTICES.md` in the same

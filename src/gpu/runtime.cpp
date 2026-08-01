@@ -128,8 +128,13 @@ void Write64(std::span<std::byte> bytes, std::uint64_t value) noexcept {
 
 }  // namespace
 
-GpuRuntime::GpuRuntime(memory::GuestMemory& memory) noexcept
-    : memory_(memory), submission_queue_(*this) {}
+GpuRuntime::GpuRuntime(memory::GuestMemory& memory,
+                       GpuSubmissionSink* submission_sink) noexcept
+    : memory_(memory),
+      submission_queue_(*this),
+      submission_history_(4096),
+      submission_sink_(submission_sink != nullptr ? submission_sink
+                                                  : &submission_history_) {}
 
 GpuPacketResult GpuRuntime::AppendPacket(
     std::uint64_t command_buffer, std::span<const std::uint32_t> packet) {

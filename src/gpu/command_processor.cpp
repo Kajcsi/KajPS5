@@ -765,6 +765,56 @@ std::span<const GpuAction> GpuActionTrace::actions() const noexcept {
 
 void GpuActionTrace::Clear() noexcept { actions_.clear(); }
 
+GpuActionRing::GpuActionRing(std::size_t capacity) noexcept
+    : capacity_(capacity) {
+  try {
+    actions_.reserve(capacity_);
+  } catch (...) {
+    capacity_ = 0;
+  }
+}
+
+bool GpuActionRing::Submit(const GpuAction& action) noexcept {
+  if (capacity_ == 0) {
+    return false;
+  }
+  if (actions_.size() < capacity_) {
+    try {
+      actions_.push_back(action);
+    } catch (...) {
+      return false;
+    }
+    return true;
+  }
+  actions_[next_] = action;
+  next_ = (next_ + 1U) % capacity_;
+  ++dropped_count_;
+  return true;
+}
+
+std::size_t GpuActionRing::size() const noexcept { return actions_.size(); }
+
+std::uint64_t GpuActionRing::dropped_count() const noexcept {
+  return dropped_count_;
+}
+
+std::optional<GpuAction> GpuActionRing::At(
+    std::size_t index) const noexcept {
+  if (index >= actions_.size()) {
+    return std::nullopt;
+  }
+  const auto physical = actions_.size() < capacity_
+                            ? index
+                            : (next_ + index) % capacity_;
+  return actions_[physical];
+}
+
+void GpuActionRing::Clear() noexcept {
+  actions_.clear();
+  next_ = 0;
+  dropped_count_ = 0;
+}
+
 GpuCommandResult GpuRuntime::ProcessCommandBuffer(
     std::uint64_t address, std::uint32_t dword_count,
     GpuSubmissionSink& sink, GpuCommandLimits limits) {

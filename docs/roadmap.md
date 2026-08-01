@@ -135,8 +135,10 @@
       memory.
 - [x] Encode checked direct-register, index, draw, indirect-dispatch,
       control-flow, write-data, statistics, and wait packet families.
+- [x] Decode bounded synthetic PM4 streams through checked guest memory.
+- [x] Preserve blocked DCB and ACB submissions in owned graphics and compute
+      queues without replaying completed actions.
 - Create a Vulkan device and a validation test.
-- Decode a small public command-stream fixture.
 - Add shader and resource tests before game tests.
 - Add an audio queue test with stable timing.
 

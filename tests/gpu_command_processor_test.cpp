@@ -59,6 +59,7 @@ void WriteValue32(kajps5::memory::GuestMemory& memory,
 
 int main() {
   using kajps5::gpu::GpuActionTrace;
+  using kajps5::gpu::GpuActionRing;
   using kajps5::gpu::GpuActionType;
   using kajps5::gpu::GpuCommandStatus;
   using kajps5::gpu::GpuRegisterSpace;
@@ -304,5 +305,19 @@ int main() {
                             GpuCommandStatus::kUnsupportedPacket)) ==
             "unsupported-packet",
         "command status name is incorrect");
+
+  GpuActionRing ring(2);
+  kajps5::gpu::GpuAction ring_action;
+  ring_action.type = GpuActionType::kNop;
+  Check(ring.Submit(ring_action), "action ring rejected its first action");
+  ring_action.type = GpuActionType::kDraw;
+  Check(ring.Submit(ring_action), "action ring rejected its second action");
+  ring_action.type = GpuActionType::kDispatch;
+  Check(ring.Submit(ring_action) && ring.size() == 2 &&
+            ring.dropped_count() == 1 && ring.At(0).has_value() &&
+            ring.At(0)->type == GpuActionType::kDraw &&
+            ring.At(1).has_value() &&
+            ring.At(1)->type == GpuActionType::kDispatch,
+        "action ring did not retain the newest bounded history");
   return 0;
 }

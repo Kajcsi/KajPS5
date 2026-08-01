@@ -8,6 +8,7 @@
 #include <array>
 #include <bit>
 #include <cstdint>
+#include <limits>
 #include <utility>
 #include <vector>
 
@@ -31,6 +32,81 @@ void Add(std::vector<HleExportDefinition>& exports, const char* name,
          const char* nid, Handler handler) {
   exports.push_back({kAgcLibraryName, name, handler});
   exports.push_back({kAgcLibraryName, nid, handler});
+}
+
+template <typename Handler>
+void AddDriver(std::vector<HleExportDefinition>& exports, const char* name,
+               const char* nid, Handler handler) {
+  exports.push_back({kAgcDriverLibraryName, name, handler});
+  exports.push_back({kAgcDriverLibraryName, nid, handler});
+}
+
+HleContextStatus SubmitDriverCommandBuffer(
+    HleCallContext& context, gpu::GpuRuntime& runtime,
+    bool compute) {
+  const auto packet_address = context.Argument(compute ? 1 : 0).value_or(0);
+  if (packet_address == 0 ||
+      packet_address > std::numeric_limits<std::uint64_t>::max() - 12U) {
+    SetSignedResult(context, kGen5ErrorInvalidArgument);
+    return HleContextStatus::kOk;
+  }
+  std::uint64_t command_address = 0;
+  std::uint32_t dword_count = 0;
+  std::uint32_t flags = 0;
+  if (context.ReadUInt64(packet_address, command_address) !=
+          HleContextStatus::kOk ||
+      context.ReadUInt32(packet_address + 8U, dword_count) !=
+          HleContextStatus::kOk ||
+      context.ReadUInt32(packet_address + 12U, flags) !=
+          HleContextStatus::kOk) {
+    SetSignedResult(context, kGen5ErrorMemoryFault);
+    return HleContextStatus::kOk;
+  }
+  if (command_address == 0 || dword_count == 0 ||
+      (!compute && flags != 0)) {
+    SetSignedResult(context, kGen5ErrorInvalidArgument);
+    return HleContextStatus::kOk;
+  }
+
+  const auto queued = compute
+                          ? runtime.submissions().EnqueueCompute(
+                                static_cast<std::uint32_t>(
+                                    context.Argument(0).value_or(0)),
+                                command_address, dword_count)
+                          : runtime.submissions().EnqueueGraphics(
+                                command_address, dword_count);
+  if (!queued) {
+    if (queued.status == gpu::GpuEnqueueStatus::kMemoryFault) {
+      SetSignedResult(context, kGen5ErrorMemoryFault);
+      return HleContextStatus::kOk;
+    }
+    if (queued.status == gpu::GpuEnqueueStatus::kResourceLimit) {
+      context.SetReturn(0);
+      return HleContextStatus::kResourceLimit;
+    }
+    SetSignedResult(context, kGen5ErrorInvalidArgument);
+    return HleContextStatus::kOk;
+  }
+
+  const auto drained = runtime.DrainSubmissions();
+  context.SetReturn(0);
+  if (!drained.first_failure.has_value()) {
+    return HleContextStatus::kOk;
+  }
+  switch (drained.first_failure->status) {
+    case gpu::GpuCommandStatus::kMemoryFault:
+      return HleContextStatus::kMemoryFault;
+    case gpu::GpuCommandStatus::kResourceLimit:
+      return HleContextStatus::kResourceLimit;
+    case gpu::GpuCommandStatus::kComplete:
+    case gpu::GpuCommandStatus::kBlocked:
+      return HleContextStatus::kOk;
+    case gpu::GpuCommandStatus::kInvalidArgument:
+    case gpu::GpuCommandStatus::kMalformedPacket:
+    case gpu::GpuCommandStatus::kUnsupportedPacket:
+      return HleContextStatus::kFatalGuestError;
+  }
+  return HleContextStatus::kFatalGuestError;
 }
 
 HleContextStatus ReturnPacket(HleCallContext& context,
@@ -215,6 +291,14 @@ ExportRegistryStatus RegisterAgcExports(ExportRegistry& registry,
         context.SetReturn(size == 0 ? 56U : (size == 1 ? 64U : 0U));
         return HleContextStatus::kOk;
       });
+  AddDriver(exports, "sceAgcDriverSubmitDcb", kAgcDriverSubmitDcbNid,
+            [runtime](HleCallContext& context) {
+              return SubmitDriverCommandBuffer(context, *runtime, false);
+            });
+  AddDriver(exports, "sceAgcDriverSubmitAcb", kAgcDriverSubmitAcbNid,
+            [runtime](HleCallContext& context) {
+              return SubmitDriverCommandBuffer(context, *runtime, true);
+            });
 
   return registry.RegisterBatch(std::move(exports));
 }

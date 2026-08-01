@@ -464,6 +464,14 @@ fixed-point cross-queue drain, and no-replay tests re-express SharpEmu
 `5ee7cd1dfafdeb0ce0e458a365692df4b2e1c445`. The KajPS5 destination source
 files use `GPL-2.0-only`, matching KytyPS5. The behavior tests use
 `GPL-2.0-or-later`.
+
+The `sceAgcDriverSubmitDcb` and `sceAgcDriverSubmitAcb` handlers in
+`src/hle/agc_exports.*` adapt the packet layout, NIDs, and queue split from
+KytyPS5 `src/libs/agc.cpp` and `src/libs/libGraphicsDriver.cpp` at commit
+`a65d17a5d689257a35644e01e9d15539361f0bf0`. Their descriptor validation,
+graphics and owner-scoped compute queues, and wait-resume tests also re-express
+SharpEmu `src/SharpEmu.Libs/Agc/AgcExports.cs` at commit
+`5ee7cd1dfafdeb0ce0e458a365692df4b2e1c445`.
 The SharpEmu reference file states:
 
 `Copyright (C) 2026 SharpEmu Emulator Project`

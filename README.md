@@ -46,6 +46,12 @@ The current core includes:
   modules separate checked placements and stable module IDs. It registers all
   exports and TLS layouts before relocation, then combines module startup and
   shutdown calls with the main title lifecycle.
+- One GPU runtime owns checked AGC packet construction, bounded PM4 decoding,
+  persistent register state, and separate FIFO graphics and compute queues.
+  Driver DCB and ACB submissions keep an exact nested cursor when a guest-memory
+  wait blocks. Later submissions resume that work without repeating completed
+  draws. A bounded action history is the current test sink; Vulkan execution is
+  not implemented yet.
 - Typed kernel handles and one cooperative scheduler for ready, running,
   blocked, and exited guest threads. Initial pthread support includes guest
   attributes, bounded thread-local keys, per-thread values, identity, equality,
@@ -95,7 +101,7 @@ The current core includes:
   x86-64 programs used only by tests.
 
 KajPS5 still lacks complete guest instruction compatibility, executable static
-TLS setup, SELF decryption, graphics, audio, and game compatibility. The
+TLS setup, SELF decryption, Vulkan rendering, audio, and game compatibility. The
 repository contains no games, firmware, keys, proprietary modules, or
 encrypted executables.
 

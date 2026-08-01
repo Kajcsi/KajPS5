@@ -11,6 +11,7 @@
 #include <iostream>
 #include <span>
 #include <string_view>
+#include <vector>
 
 #include "core/memory/guest_memory.h"
 #include "gpu/runtime.h"
@@ -49,6 +50,12 @@ std::uint64_t ReturnValue(const kajps5::hle::HleCallContext& context) {
   return context.GetRegister(kajps5::hle::HleRegister::kRax).value_or(0);
 }
 
+std::uint32_t Pm4(std::uint32_t dwords, std::uint32_t opcode,
+                  std::uint32_t packet_register = 0) {
+  return 0xc0000000U | (((dwords - 2U) & 0x3fffU) << 16U) |
+         ((opcode & 0xffU) << 8U) | ((packet_register & 0x3fU) << 2U);
+}
+
 void Write32(std::span<std::byte> bytes, std::size_t offset,
              std::uint32_t value) {
   for (std::size_t index = 0; index < sizeof(value); ++index) {
@@ -85,12 +92,23 @@ std::uint64_t Read64(std::span<const std::byte> bytes, std::size_t offset) {
   return value;
 }
 
+void WriteDwords(kajps5::memory::GuestMemory& memory,
+                 std::uint64_t address,
+                 std::span<const std::uint32_t> words) {
+  std::vector<std::byte> bytes(words.size() * sizeof(std::uint32_t));
+  for (std::size_t index = 0; index < words.size(); ++index) {
+    Write32(bytes, index * sizeof(std::uint32_t), words[index]);
+  }
+  Check(memory.Write(address, bytes), "driver command write failed");
+}
+
 }  // namespace
 
 int main() {
   using kajps5::hle::ExportRegistry;
   using kajps5::hle::ExportRegistryStatus;
   using kajps5::hle::HleCallContext;
+  using kajps5::hle::HleContextStatus;
   using kajps5::memory::GuestMemory;
   using kajps5::memory::GuestMemoryProtection;
 
@@ -323,5 +341,83 @@ int main() {
                                         static_cast<std::int64_t>(
                                             kInvalidArgument)),
         "invalid packet pointer returned the wrong error");
+
+  constexpr std::uint64_t kDriverPacket = kBase + 0x300;
+  constexpr std::uint64_t kDriverCommands = kBase + 0x1c00;
+  constexpr std::uint64_t kDriverWaitCommands = kBase + 0x1d00;
+  constexpr std::uint64_t kDriverLabel = kBase + 0x1f00;
+  const std::array driver_commands = {
+      Pm4(5, 0x15), 2U, 3U, 4U, 0x41U,
+  };
+  const std::array driver_wait_commands = {
+      Pm4(7, 0x10, 0x0a), static_cast<std::uint32_t>(kDriverLabel),
+      static_cast<std::uint32_t>(kDriverLabel >> 32U), 0xffU, 0x66U,
+      0x13U, 1U,
+      Pm4(3, 0x2d), 7U, 2U,
+  };
+  WriteDwords(memory, kDriverCommands, driver_commands);
+  WriteDwords(memory, kDriverWaitCommands, driver_wait_commands);
+  Check(context.WriteUInt32(kDriverLabel, 0) == HleContextStatus::kOk,
+        "driver wait label setup failed");
+
+  std::array<std::byte, 16> driver_packet{};
+  Write64(driver_packet, 0, kDriverWaitCommands);
+  Write32(driver_packet, 8,
+          static_cast<std::uint32_t>(driver_wait_commands.size()));
+  Check(memory.Write(kDriverPacket, driver_packet),
+        "driver packet setup failed");
+  const std::array submit_dcb_arguments = {kDriverPacket};
+  SetArguments(context, submit_dcb_arguments);
+  Check(registry.Dispatch(kajps5::hle::kAgcDriverSubmitDcbNid, context) &&
+            ReturnValue(context) == 0 &&
+            gpu_runtime.submissions().PendingSubmissionCount() == 1 &&
+            gpu_runtime.submission_history().size() == 1 &&
+            gpu_runtime.submission_history().At(0).has_value() &&
+            gpu_runtime.submission_history().At(0)->type ==
+                kajps5::gpu::GpuActionType::kWaitMemory,
+        "DCB submit did not retain its blocked queue position");
+
+  Check(context.WriteUInt32(kDriverLabel, 0x66U) == HleContextStatus::kOk,
+        "driver wait label update failed");
+  Write64(driver_packet, 0, kDriverCommands);
+  Write32(driver_packet, 8,
+          static_cast<std::uint32_t>(driver_commands.size()));
+  Check(memory.Write(kDriverPacket, driver_packet),
+        "second driver packet setup failed");
+  SetArguments(context, submit_dcb_arguments);
+  Check(registry.Dispatch(kajps5::hle::kAgcDriverSubmitDcbNid, context) &&
+            ReturnValue(context) == 0 &&
+            gpu_runtime.submissions().PendingSubmissionCount() == 0 &&
+            gpu_runtime.submission_history().size() == 3 &&
+            gpu_runtime.submission_history().At(1)->type ==
+                kajps5::gpu::GpuActionType::kDraw &&
+            gpu_runtime.submission_history().At(2)->type ==
+                kajps5::gpu::GpuActionType::kDispatch,
+        "later DCB submit did not resume earlier work before new work");
+
+  const std::array submit_acb_arguments = {std::uint64_t{7}, kDriverPacket};
+  SetArguments(context, submit_acb_arguments);
+  Check(registry.Dispatch(kajps5::hle::kAgcDriverSubmitAcbNid, context) &&
+            ReturnValue(context) == 0 &&
+            gpu_runtime.submission_history().size() == 4 &&
+            gpu_runtime.submission_history().At(3)->type ==
+                kajps5::gpu::GpuActionType::kDispatch,
+        "ACB submit did not use its owned compute queue");
+
+  const std::array invalid_submit_arguments = {std::uint64_t{0}};
+  SetArguments(context, invalid_submit_arguments);
+  Check(registry.Dispatch(kajps5::hle::kAgcDriverSubmitDcbNid, context) &&
+            ReturnValue(context) == static_cast<std::uint64_t>(
+                                        static_cast<std::int64_t>(
+                                            kInvalidArgument)),
+        "null driver packet returned the wrong error");
+  constexpr auto kMemoryFault = std::bit_cast<std::int32_t>(0x80020101U);
+  const std::array faulting_submit_arguments = {kBase + 0x2ff8};
+  SetArguments(context, faulting_submit_arguments);
+  Check(registry.Dispatch(kajps5::hle::kAgcDriverSubmitDcbNid, context) &&
+            ReturnValue(context) == static_cast<std::uint64_t>(
+                                        static_cast<std::int64_t>(
+                                            kMemoryFault)),
+        "faulting driver packet returned the wrong error");
   return 0;
 }

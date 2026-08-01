@@ -82,7 +82,10 @@ struct GpuPacketSizeResult {
 
 class GpuRuntime final {
  public:
-  explicit GpuRuntime(memory::GuestMemory& memory) noexcept;
+  // A non-null sink must outlive this runtime and must not call it recursively.
+  explicit GpuRuntime(
+      memory::GuestMemory& memory,
+      GpuSubmissionSink* submission_sink = nullptr) noexcept;
 
   [[nodiscard]] GpuPacketResult WriteNop(std::uint64_t command_buffer,
                                          std::uint32_t dword_count);
@@ -113,6 +116,12 @@ class GpuRuntime final {
   [[nodiscard]] const GpuSubmissionQueue& submissions() const noexcept {
     return submission_queue_;
   }
+  [[nodiscard]] GpuQueueDrainResult DrainSubmissions() {
+    return submission_queue_.Drain(*submission_sink_);
+  }
+  [[nodiscard]] const GpuActionRing& submission_history() const noexcept {
+    return submission_history_;
+  }
 
  private:
   [[nodiscard]] GpuPacketResult AppendPacket(
@@ -124,6 +133,8 @@ class GpuRuntime final {
   std::unordered_map<std::uint32_t, std::uint32_t> shader_registers_;
   std::unordered_map<std::uint32_t, std::uint32_t> user_config_registers_;
   GpuSubmissionQueue submission_queue_;
+  GpuActionRing submission_history_;
+  GpuSubmissionSink* submission_sink_ = nullptr;
 };
 
 [[nodiscard]] const char* GpuRuntimeStatusName(

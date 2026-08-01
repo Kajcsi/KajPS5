@@ -16,6 +16,7 @@ class GpuRuntime;
 namespace kajps5::hle {
 
 inline constexpr auto kAgcLibraryName = "libSceAgc";
+inline constexpr auto kAgcDriverLibraryName = "libSceAgcDriver";
 inline constexpr auto kAgcCbNopNid = "LtTouSCZjHM";
 inline constexpr auto kAgcCbNopGetSizeNid = "t7PlZ9nt5Lc";
 inline constexpr auto kAgcCbDispatchNid = "k3GhuSNmBLU";
@@ -53,7 +54,9 @@ inline constexpr auto kAgcDcbWriteDataGetSizeNid = "p9tI+yTvx68";
 inline constexpr auto kAgcDcbGetLodStatsNid = "vuSXe69VILM";
 inline constexpr auto kAgcDcbWaitRegMemNid = "VmW0Tdpy420";
 inline constexpr auto kAgcDcbWaitOnAddressGetSizeNid = "43WJ08sSugE";
-inline constexpr std::size_t kRegisteredAgcFunctionCount = 36;
+inline constexpr auto kAgcDriverSubmitDcbNid = "UglJIZjGssM";
+inline constexpr auto kAgcDriverSubmitAcbNid = "gSRnr79F8tQ";
+inline constexpr std::size_t kRegisteredAgcFunctionCount = 38;
 
 [[nodiscard]] ExportRegistryStatus RegisterAgcExports(
     ExportRegistry& registry, gpu::GpuRuntime& gpu_runtime);
