@@ -32,6 +32,8 @@ one owner for graphics state.
 - `loader`: Load ELF and SELF metadata into a checked guest address space.
 - `kernel`: Own handles, threads, events, files, and system call dispatch.
 - `cpu`: Execute guest x86-64 code and handle guest exceptions.
+- `runtime`: Compose loading, initialization, scheduled execution, and orderly
+  shutdown without creating another scheduler or executor.
 - `gpu`: Decode guest commands and submit validated work to Vulkan.
 - `services`: Implement service calls as evidence and tests require them.
 - `trace`: Record stable events for comparison with upstream behavior.

@@ -50,6 +50,7 @@ add_library(kajps5_core STATIC
   loader/relocator.cpp
   loader/sce_symbol.cpp
   loader/static_tls_layout.cpp
+  runtime/title_session.cpp
 )
 
 target_include_directories(kajps5_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

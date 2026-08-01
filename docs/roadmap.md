@@ -111,6 +111,8 @@
       lane.
 - [x] Run checked preinitializers and initializers in order before main-thread
       creation, with explicit blocked and failure states.
+- [x] Compose initializers, main, exit callbacks, and finalizers in one checked
+      title session and scheduler lane.
 - [x] Build and own native HLE trampolines for all resolved executable imports.
 - Expand thread, event, file, and time coverage as their HLE bridges grow.
 - Compare small, repeatable traces with both upstream projects.
