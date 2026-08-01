@@ -432,6 +432,26 @@ KytyPS5 sources and by SharpEmu
 `7c9740fee8a633e17b145c6bc6d794e41d46c73f`. SharpEmu supplies independent
 bounds, reserved-space, packed-register ABI, stack arguments, packet words,
 modifier rules, and invalid-pointer behavior.
+
+The checked PM4 processor in `src/gpu/command_processor.*` closely adapts
+KytyPS5 `src/graphics/guest_gpu/command_processor/pm4Dispatch.cpp`,
+`src/graphics/guest_gpu/command_processor/pm4Handlers.cpp`, and
+`src/graphics/guest_gpu/graphicsRun.cpp` at commit
+`a65d17a5d689257a35644e01e9d15539361f0bf0`. It converts the upstream raw
+pointer dispatch into checked guest reads, one persistent KajPS5 GPU state,
+bounded indirect-buffer traversal, explicit parse results, and an injected
+submission sink. These destination files use `GPL-2.0-only`, matching
+KytyPS5.
+
+The persistent context and shader register tests in
+`tests/gpu_command_processor_test.cpp` re-express SharpEmu
+`tests/SharpEmu.Libs.Tests/Agc/AgcContextRegisterTests.cs` and
+`tests/SharpEmu.Libs.Tests/Agc/AgcShaderStageRegisterTests.cs` at commit
+`ea9be7484f7679e3d0f060ee4722e480d755623a`. The bounded wait, malformed
+packet, and indirect traversal cases also use behavior from SharpEmu
+`src/SharpEmu.Libs/Agc/AgcExports.cs` and
+`src/SharpEmu.Libs/Agc/GpuWaitRegistry.cs` at commit
+`5ee7cd1dfafdeb0ce0e458a365692df4b2e1c445`.
 The SharpEmu reference file states:
 
 `Copyright (C) 2026 SharpEmu Emulator Project`

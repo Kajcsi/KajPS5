@@ -317,6 +317,14 @@ kajps5_deploy_msvc_asan_runtime(kajps5_hle_agc_exports_test)
 
 add_test(NAME kajps5_hle_agc_exports COMMAND kajps5_hle_agc_exports_test)
 
+add_executable(kajps5_gpu_command_processor_test
+               gpu_command_processor_test.cpp)
+target_link_libraries(kajps5_gpu_command_processor_test PRIVATE kajps5_core)
+kajps5_deploy_msvc_asan_runtime(kajps5_gpu_command_processor_test)
+
+add_test(NAME kajps5_gpu_command_processor
+         COMMAND kajps5_gpu_command_processor_test)
+
 add_executable(kajps5_relocation_trace_test relocation_trace_test.cpp)
 target_link_libraries(kajps5_relocation_trace_test PRIVATE kajps5_core)
 kajps5_deploy_msvc_asan_runtime(kajps5_relocation_trace_test)

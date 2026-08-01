@@ -9,6 +9,7 @@ add_library(kajps5_core STATIC
   cpu/native_hle_import_table.cpp
   cpu/native_hle_trampoline.cpp
   cpu/native_leaf_executor.cpp
+  gpu/command_processor.cpp
   gpu/runtime.cpp
   hle/agc_exports.cpp
   hle/ampr_exports.cpp

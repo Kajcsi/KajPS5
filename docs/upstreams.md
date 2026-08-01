@@ -5,7 +5,7 @@ KajPS5 uses these independent projects as references:
 | Project | Role | Language | License | Pinned commit |
 | --- | --- | --- | --- | --- |
 | [KytyPS5](https://github.com/KytyPS5/KytyPS5) | Primary native architecture reference | C++ | GPL-2.0-only, with original Kyty portions under MIT | `a65d17a5d689257a35644e01e9d15539361f0bf0` |
-| [SharpEmu](https://github.com/sharpemu/sharpemu) | Behavior and test reference | C# | GPL-2.0-or-later | `7c9740fee8a633e17b145c6bc6d794e41d46c73f` |
+| [SharpEmu](https://github.com/sharpemu/sharpemu) | Behavior and test reference | C# | GPL-2.0-or-later | `5ee7cd1dfafdeb0ce0e458a365692df4b2e1c445` |
 
 The AGC command-buffer core closely adapts selected KytyPS5 algorithms. Other
 current integrations use upstream behavior as evidence. Exact provenance is
@@ -67,6 +67,19 @@ adapted paths change.
   Its `libfmod` surface is third-party-facing and needs separate provenance.
   These scopes remain SharpEmu coverage targets where title evidence requires
   them.
+- SharpEmu moved from `7c9740fee8a633e17b145c6bc6d794e41d46c73f`
+  to `5ee7cd1dfafdeb0ce0e458a365692df4b2e1c445`. The review covered all four
+  intervening commits. The M6-relevant change was
+  `ea9be7484f7679e3d0f060ee4722e480d755623a`, including
+  `src/SharpEmu.Libs/Agc/AgcExports.cs` and the new context-register and
+  shader-register tests. It confirms that direct and indirect register writes
+  share persistent keys across submissions. The review also recorded the
+  shader and Vulkan corrections in
+  `a8fa9c96dce5fe7e3424f811cab8e15790a11339` for M7 and M8. The two GUI-only
+  commits do not affect the current runtime milestone.
+- Validation: the new checked PM4 processor and all 60 KajPS5 tests passed in
+  Debug, Release, and AddressSanitizer builds. Gitleaks, actionlint, commit
+  email, and repository privacy checks also passed.
 
 When KajPS5 imports code, identify the upstream file and commit, keep its
 copyright and license notice, and update `THIRD_PARTY_NOTICES.md` in the same

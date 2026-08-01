@@ -1,0 +1,265 @@
+// Copyright (C) 2026 KajPS5 contributors
+// Architecture and packet reference: KytyPS5
+// Behavior and test reference: Copyright (C) 2026 SharpEmu Emulator Project
+// SPDX-License-Identifier: GPL-2.0-or-later
+
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <cstdlib>
+#include <iostream>
+#include <span>
+#include <string_view>
+#include <vector>
+
+#include "core/memory/guest_memory.h"
+#include "gpu/command_processor.h"
+#include "gpu/runtime.h"
+
+namespace {
+
+void Check(bool condition, std::string_view message) {
+  if (!condition) {
+    std::cerr << "gpu_command_processor_test: " << message << '\n';
+    std::exit(1);
+  }
+}
+
+std::uint32_t Pm4(std::uint32_t dwords, std::uint32_t opcode,
+                  std::uint32_t packet_register = 0) {
+  return 0xc0000000U | (((dwords - 2U) & 0x3fffU) << 16U) |
+         ((opcode & 0xffU) << 8U) | ((packet_register & 0x3fU) << 2U);
+}
+
+void Write32(std::span<std::byte> bytes, std::size_t offset,
+             std::uint32_t value) {
+  for (std::size_t index = 0; index < 4; ++index) {
+    bytes[offset + index] =
+        static_cast<std::byte>((value >> (index * 8U)) & 0xffU);
+  }
+}
+
+void WriteDwords(kajps5::memory::GuestMemory& memory, std::uint64_t address,
+                 std::span<const std::uint32_t> words) {
+  std::vector<std::byte> bytes(words.size() * 4U);
+  for (std::size_t index = 0; index < words.size(); ++index) {
+    Write32(bytes, index * 4U, words[index]);
+  }
+  Check(memory.Write(address, bytes), "guest command write failed");
+}
+
+void WriteValue32(kajps5::memory::GuestMemory& memory,
+                  std::uint64_t address, std::uint32_t value) {
+  std::array<std::byte, 4> bytes{};
+  Write32(bytes, 0, value);
+  Check(memory.Write(address, bytes), "guest value write failed");
+}
+
+}  // namespace
+
+int main() {
+  using kajps5::gpu::GpuActionTrace;
+  using kajps5::gpu::GpuActionType;
+  using kajps5::gpu::GpuCommandStatus;
+  using kajps5::gpu::GpuRegisterSpace;
+  using kajps5::gpu::GpuRuntime;
+  using kajps5::memory::GuestMemory;
+  using kajps5::memory::GuestMemoryProtection;
+
+  constexpr std::uint64_t kBase = 0x600000;
+  constexpr std::uint64_t kMain = kBase + 0x1000;
+  constexpr std::uint64_t kNested = kBase + 0x2000;
+  constexpr std::uint64_t kRegisterTable = kBase + 0x3000;
+  constexpr std::uint64_t kWaitLabel = kBase + 0x4000;
+  constexpr std::uint64_t kIndexBuffer = kBase + 0x5000;
+  constexpr std::uint64_t kWriteDestination = kBase + 0x6000;
+  GuestMemory memory(
+      kBase, 0x8000,
+      GuestMemoryProtection::kRead | GuestMemoryProtection::kWrite);
+  GpuRuntime runtime(memory);
+
+  const std::array register_table = {0x8eU, 0x0000000fU};
+  WriteDwords(memory, kRegisterTable, register_table);
+  WriteValue32(memory, kWaitLabel, 0x55U);
+
+  const std::array nested = {
+      Pm4(5, 0x15), 2U, 3U, 4U, 0x41U,
+      0x80000000U,
+  };
+  WriteDwords(memory, kNested, nested);
+
+  const std::array main_commands = {
+      Pm4(3, 0x69), 0x8eU, 0x00000007U,
+      Pm4(3, 0x76), 0xc8U, 0x00448582U,
+      Pm4(4, 0x10, 0x12), 1U,
+      static_cast<std::uint32_t>(kRegisterTable),
+      static_cast<std::uint32_t>(kRegisterTable >> 32U),
+      Pm4(3, 0x26), static_cast<std::uint32_t>(kIndexBuffer),
+      static_cast<std::uint32_t>(kIndexBuffer >> 32U),
+      Pm4(2, 0x13), 9U,
+      Pm4(2, 0x2f), 2U,
+      Pm4(6, 0x27), 9U, static_cast<std::uint32_t>(kIndexBuffer),
+      static_cast<std::uint32_t>(kIndexBuffer >> 32U), 9U, 0U,
+      Pm4(7, 0x10, 0x0a), static_cast<std::uint32_t>(kWaitLabel),
+      static_cast<std::uint32_t>(kWaitLabel >> 32U), 0xffU, 0x55U, 0x13U,
+      1U,
+      Pm4(4, 0x3f), static_cast<std::uint32_t>(kNested),
+      static_cast<std::uint32_t>(kNested >> 32U),
+      0x0f200000U | static_cast<std::uint32_t>(nested.size()),
+      Pm4(6, 0x37), 0x00100000U,
+      static_cast<std::uint32_t>(kWriteDestination),
+      static_cast<std::uint32_t>(kWriteDestination >> 32U), 0x11223344U,
+      0xaabbccddU,
+  };
+  static_assert(main_commands.size() == 40);
+  WriteDwords(memory, kMain, main_commands);
+
+  GpuActionTrace trace(64);
+  const auto result = runtime.ProcessCommandBuffer(
+      kMain, static_cast<std::uint32_t>(main_commands.size()), trace);
+  Check(result.status == GpuCommandStatus::kComplete,
+        "valid command stream did not complete");
+  Check(result.processed_dwords == main_commands.size() + nested.size(),
+        "processed dword count did not include the indirect buffer");
+  Check(result.submitted_actions == 12 && trace.actions().size() == 12,
+        "action trace count is incorrect");
+  Check(trace.actions()[0].type == GpuActionType::kRegisterWrite &&
+            trace.actions()[0].values[0] ==
+                static_cast<std::uint64_t>(GpuRegisterSpace::kContext) &&
+            trace.actions()[0].values[1] == 0x8eU &&
+            trace.actions()[0].values[2] == 7U,
+        "direct context register was decoded incorrectly");
+  Check(trace.actions()[2].type == GpuActionType::kRegisterWrite &&
+            trace.actions()[2].values[1] == 0x8eU &&
+            trace.actions()[2].values[2] == 0xfU &&
+            trace.actions()[2].values[3] == kRegisterTable,
+        "indirect context register did not use the direct register key");
+  Check(trace.actions()[7].type == GpuActionType::kWaitMemory &&
+            trace.actions()[7].values[0] == kWaitLabel &&
+            trace.actions()[7].values[3] == 0x55U,
+        "satisfied wait was not recorded exactly");
+  Check(trace.actions()[8].type == GpuActionType::kIndirectBuffer &&
+            trace.actions()[8].values[0] == kNested &&
+            trace.actions()[8].values[1] == nested.size(),
+        "indirect buffer transition is incorrect");
+  Check(trace.actions()[9].type == GpuActionType::kDispatch &&
+            trace.actions()[9].values[0] == 2U &&
+            trace.actions()[9].values[1] == 3U &&
+            trace.actions()[9].values[2] == 4U,
+        "nested dispatch is incorrect");
+  Check(trace.actions()[11].type == GpuActionType::kWriteData &&
+            trace.actions()[11].values[0] == kWriteDestination &&
+            trace.actions()[11].values[2] == 2U &&
+            trace.actions()[11].values[3] == 0x11223344U,
+        "write-data action is incorrect");
+  Check(runtime.ReadRegister(GpuRegisterSpace::kContext, 0x8e) == 0xfU &&
+            runtime.ReadRegister(GpuRegisterSpace::kShader, 0xc8) ==
+                0x00448582U,
+        "parsed register state is incorrect");
+
+  constexpr std::uint64_t kSecondSubmission = kBase + 0x700;
+  const std::array second_submission = {Pm4(2, 0x10), 0U};
+  WriteDwords(memory, kSecondSubmission, second_submission);
+  GpuActionTrace second_trace(2);
+  Check(runtime.ProcessCommandBuffer(kSecondSubmission, 2, second_trace) &&
+            runtime.ReadRegister(GpuRegisterSpace::kContext, 0x8e) == 0xfU &&
+            runtime.ReadRegister(GpuRegisterSpace::kShader, 0xc8) ==
+                0x00448582U,
+        "register state did not persist across submissions");
+
+  constexpr std::uint64_t kBlocked = kBase + 0x800;
+  const std::array blocked_commands = {
+      Pm4(7, 0x10, 0x0a), static_cast<std::uint32_t>(kWaitLabel),
+      static_cast<std::uint32_t>(kWaitLabel >> 32U), 0xffU, 0x99U, 0x13U,
+      1U,
+      Pm4(3, 0x2d), 3U, 2U,
+  };
+  WriteDwords(memory, kBlocked, blocked_commands);
+  GpuActionTrace blocked_trace(4);
+  const auto blocked = runtime.ProcessCommandBuffer(
+      kBlocked, static_cast<std::uint32_t>(blocked_commands.size()),
+      blocked_trace);
+  Check(blocked.status == GpuCommandStatus::kBlocked &&
+            blocked.packet_address == kBlocked &&
+            blocked_trace.actions().size() == 1 &&
+            blocked_trace.actions()[0].type == GpuActionType::kWaitMemory,
+        "unsatisfied wait did not suspend before the following draw");
+  WriteValue32(memory, kWaitLabel, 0x99U);
+  blocked_trace.Clear();
+  Check(runtime.ProcessCommandBuffer(
+            kBlocked, static_cast<std::uint32_t>(blocked_commands.size()),
+            blocked_trace) &&
+            blocked_trace.actions().size() == 2 &&
+            blocked_trace.actions()[1].type == GpuActionType::kDraw,
+        "satisfied wait did not resume the command stream");
+
+  constexpr std::uint64_t kMalformed = kBase + 0x900;
+  const std::array malformed = {Pm4(5, 0x15), 1U};
+  WriteDwords(memory, kMalformed, malformed);
+  GpuActionTrace error_trace(4);
+  Check(runtime.ProcessCommandBuffer(kMalformed, 2, error_trace).status ==
+            GpuCommandStatus::kMalformedPacket,
+        "truncated PM4 packet was accepted");
+
+  constexpr std::uint64_t kUnsupported = kBase + 0xa00;
+  const std::array unsupported = {Pm4(2, 0xfe), 0U};
+  WriteDwords(memory, kUnsupported, unsupported);
+  Check(runtime.ProcessCommandBuffer(kUnsupported, 2, error_trace).status ==
+            GpuCommandStatus::kUnsupportedPacket,
+        "unknown PM4 opcode was accepted");
+
+  constexpr std::uint64_t kCycle = kBase + 0xb00;
+  const std::array cycle = {
+      Pm4(4, 0x3f), static_cast<std::uint32_t>(kCycle),
+      static_cast<std::uint32_t>(kCycle >> 32U), 0x0f200004U,
+  };
+  WriteDwords(memory, kCycle, cycle);
+  GpuActionTrace cycle_trace(4);
+  Check(runtime.ProcessCommandBuffer(kCycle, 4, cycle_trace).status ==
+            GpuCommandStatus::kResourceLimit &&
+            cycle_trace.actions().size() == 1,
+        "indirect-buffer cycle was not bounded");
+
+  constexpr std::uint64_t kBranch = kBase + 0xc00;
+  constexpr std::uint64_t kThen = kBase + 0xd00;
+  constexpr std::uint64_t kElse = kBase + 0xe00;
+  const std::array then_commands = {Pm4(5, 0x15), 7U, 8U, 9U, 0x41U};
+  const std::array else_commands = {Pm4(3, 0x2d), 6U, 2U};
+  WriteDwords(memory, kThen, then_commands);
+  WriteDwords(memory, kElse, else_commands);
+  const std::array branch = {
+      Pm4(14, 0x3f), 0x302U,
+      static_cast<std::uint32_t>(kWaitLabel),
+      static_cast<std::uint32_t>(kWaitLabel >> 32U), 0xffU, 0U, 0x99U, 0U,
+      static_cast<std::uint32_t>(kThen),
+      static_cast<std::uint32_t>(kThen >> 32U),
+      static_cast<std::uint32_t>(then_commands.size()),
+      static_cast<std::uint32_t>(kElse),
+      static_cast<std::uint32_t>(kElse >> 32U),
+      static_cast<std::uint32_t>(else_commands.size()),
+  };
+  WriteDwords(memory, kBranch, branch);
+  GpuActionTrace branch_trace(4);
+  Check(runtime.ProcessCommandBuffer(kBranch, 14, branch_trace) &&
+            branch_trace.actions().size() == 2 &&
+            branch_trace.actions()[0].type ==
+                GpuActionType::kIndirectBuffer &&
+            branch_trace.actions()[0].values[0] == kThen &&
+            branch_trace.actions()[0].values[4] == 1 &&
+            branch_trace.actions()[1].type == GpuActionType::kDispatch,
+        "conditional branch did not take the matching buffer");
+  WriteValue32(memory, kWaitLabel, 0x11U);
+  branch_trace.Clear();
+  Check(runtime.ProcessCommandBuffer(kBranch, 14, branch_trace) &&
+            branch_trace.actions().size() == 2 &&
+            branch_trace.actions()[0].values[0] == kElse &&
+            branch_trace.actions()[0].values[4] == 0 &&
+            branch_trace.actions()[1].type == GpuActionType::kDraw,
+        "conditional branch did not take the alternate buffer");
+
+  Check(std::string_view(kajps5::gpu::GpuCommandStatusName(
+                            GpuCommandStatus::kUnsupportedPacket)) ==
+            "unsupported-packet",
+        "command status name is incorrect");
+  return 0;
+}

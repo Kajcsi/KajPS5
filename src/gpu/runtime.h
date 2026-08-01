@@ -12,6 +12,9 @@
 #include <mutex>
 #include <optional>
 #include <span>
+#include <unordered_map>
+
+#include "gpu/command_processor.h"
 
 namespace kajps5::memory {
 class GuestMemory;
@@ -92,6 +95,12 @@ class GpuRuntime final {
       std::uint64_t packet_address) const noexcept;
   [[nodiscard]] GpuRuntimeStatus SetPacketPredication(
       std::uint64_t packet_address, std::uint32_t predication) noexcept;
+  [[nodiscard]] GpuCommandResult ProcessCommandBuffer(
+      std::uint64_t address, std::uint32_t dword_count,
+      GpuSubmissionSink& sink,
+      GpuCommandLimits limits = {});
+  [[nodiscard]] std::optional<std::uint32_t> ReadRegister(
+      GpuRegisterSpace space, std::uint32_t offset) const noexcept;
 
  private:
   [[nodiscard]] GpuPacketResult AppendPacket(
@@ -99,6 +108,9 @@ class GpuRuntime final {
 
   memory::GuestMemory& memory_;
   mutable std::mutex mutex_;
+  std::unordered_map<std::uint32_t, std::uint32_t> context_registers_;
+  std::unordered_map<std::uint32_t, std::uint32_t> shader_registers_;
+  std::unordered_map<std::uint32_t, std::uint32_t> user_config_registers_;
 };
 
 [[nodiscard]] const char* GpuRuntimeStatusName(
