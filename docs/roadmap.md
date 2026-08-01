@@ -152,8 +152,10 @@
       record.
 - [x] Submit checked DCB and ACB batches atomically through the existing
       graphics and owner-scoped compute queues.
+- [x] Adapt KytyPS5's complete Gen5 instruction decoder and SPIR-V section
+      builder behind the KajPS5 shader namespace.
 - Create a Vulkan device and a validation test.
-- Add shader and resource tests before game tests.
+- Add shader control-flow, IR, emission, and resource tests before game tests.
 - Add an audio queue test with stable timing.
 
 ## Stage 4: Title research

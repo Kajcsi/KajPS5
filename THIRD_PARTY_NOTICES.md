@@ -526,6 +526,26 @@ The SharpEmu reference file states:
 No SharpEmu graphics source or runtime was copied. KajPS5 keeps one C++ GPU
 owner and does not load an external compatibility library.
 
+The Gen5 shader decoder under
+`src/gpu/shader/recompiler/decompiler` directly adapts the complete KytyPS5
+`src/graphics/shader/recompiler/decompiler` source set at commit
+`a65d17a5d689257a35644e01e9d15539361f0bf0`. The SPIR-V section builder in
+`src/gpu/shader/spirv_builder.*` directly adapts KytyPS5
+`src/graphics/shader/recompiler/emitter/SpirvBuilder.*` at the same commit.
+The destination files keep `GPL-2.0-only`, matching KytyPS5. The adaptation
+changes namespaces, removes KytyPS5 common-library coupling, and uses the C++20
+standard formatting library. Opcode tables, instruction families, operand
+metadata, diagnostic text, section order, and SPIR-V version remain aligned
+with the pinned source.
+
+The focused tests in `tests/gpu_shader_decoder_test.cpp` and
+`tests/gpu_spirv_builder_test.cpp` re-express KytyPS5
+`tests/shaderCfgTests.cpp` and SharpEmu
+`src/SharpEmu.ShaderCompiler.Vulkan/SpirvModuleBuilder.cs` and
+`scripts/validate-synthetic-spirv.sh` at commit
+`5ee7cd1dfafdeb0ce0e458a365692df4b2e1c445`. No SharpEmu compiler source was
+copied.
+
 ## Files
 
 The open, close, read, positioned-read, seek, stat, fstat,

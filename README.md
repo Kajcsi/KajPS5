@@ -58,6 +58,10 @@ The current core includes:
   hardware event type to registered graphics queues while preserving the guest
   event ID and user data. A bounded action history is the current test sink;
   Vulkan execution is not implemented yet.
+- The shader path includes KytyPS5's complete Gen5 instruction decoder and a
+  deterministic SPIR-V module builder. Focused tests cover scalar, vector,
+  SDWA, termination, instruction boundaries, and stable module output. Control
+  flow, IR lowering, full SPIR-V emission, and Vulkan execution remain.
 - Typed kernel handles and one cooperative scheduler for ready, running,
   blocked, and exited guest threads. Initial pthread support includes guest
   attributes, bounded thread-local keys, per-thread values, identity, equality,

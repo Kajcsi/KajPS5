@@ -116,6 +116,12 @@ adapted paths change.
   record offsets, checked guest writes, continuation retry, and filter-based
   graphics payload. KajPS5 connects these rules to its existing scheduler and
   rejects late events after a timed wait expires.
+- The complete KytyPS5 Gen5 instruction decoder is adapted under
+  `src/gpu/shader/recompiler/decompiler`. Its scalar, vector, memory, image,
+  export, SDWA, and DPP families move together as one compiler component. The
+  KytyPS5 SPIR-V section builder is adapted under `src/gpu/shader`. SharpEmu's
+  independent SPIR-V builder and synthetic-module checks supply the
+  deterministic output and instruction-boundary test behavior.
 
 When KajPS5 imports code, identify the upstream file and commit, keep its
 copyright and license notice, and update `THIRD_PARTY_NOTICES.md` in the same
