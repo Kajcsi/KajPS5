@@ -18,6 +18,12 @@ The design review used these pinned references:
   `src/SharpEmu.HLE/HostMemory.cs` and
   `src/SharpEmu.Core/Cpu/Native/DirectExecutionBackend.cs`.
 
+The 2026-08-01 refresh also reviewed KytyPS5 commit
+`a65d17a5d689257a35644e01e9d15539361f0bf0`, especially its guest address-space
+ownership, rollback, program-memory, and writable host-patch tests. SharpEmu
+commit `7c9740fee8a633e17b145c6bc6d794e41d46c73f` adds a checked direct-memory-copy
+fast path that is recorded for the next HLE dispatch milestone.
+
 The first KajPS5 boundary is small: allocate writable memory, copy at most
 4 KiB from a readable and executable guest range, then remove write access
 before the call. Windows uses `VirtualAlloc`, `VirtualProtect`, and

@@ -4,8 +4,8 @@ KajPS5 uses these independent projects as references:
 
 | Project | Role | Language | License | Pinned commit |
 | --- | --- | --- | --- | --- |
-| [KytyPS5](https://github.com/KytyPS5/KytyPS5) | Primary native architecture reference | C++ | GPL-2.0-or-later | `f6e01e54031a3c615f089f061a4eab2f3c59acba` |
-| [SharpEmu](https://github.com/sharpemu/sharpemu) | Behavior and test reference | C# | GPL-2.0-or-later | `d5108e854d609808f17093a6f5dbbc711d09ad2e` |
+| [KytyPS5](https://github.com/KytyPS5/KytyPS5) | Primary native architecture reference | C++ | GPL-2.0-or-later | `a65d17a5d689257a35644e01e9d15539361f0bf0` |
+| [SharpEmu](https://github.com/sharpemu/sharpemu) | Behavior and test reference | C# | GPL-2.0-or-later | `7c9740fee8a633e17b145c6bc6d794e41d46c73f` |
 
 The current code does not copy source from either project. Adapted behavior
 and provenance are recorded in `THIRD_PARTY_NOTICES.md`.
@@ -29,7 +29,27 @@ adapted paths change.
 
 ## Refresh record
 
-No pin has been refreshed since the initial selection.
+### 2026-08-01
+
+- KytyPS5 moved from `f6e01e54031a3c615f089f061a4eab2f3c59acba`
+  to `a65d17a5d689257a35644e01e9d15539361f0bf0`. The review covered the
+  intervening commit list and the guest address-space, virtual-memory,
+  runtime-linker, and allocation-test changes in `src/common/virtualMemory.*`,
+  `src/common/platform/sysLinuxVirtual.cpp`, `src/kernel/memory.*`,
+  `src/kernel/memoryAddressSpace.inc`, `src/loader/runtimeLinker.*`, and
+  `tests/VirtualMemoryAllocationTests.cpp`. The new owner, rollback, range,
+  and writable-host-patch tests apply to KajPS5's coherent guest-memory work.
+- SharpEmu moved from `d5108e854d609808f17093a6f5dbbc711d09ad2e`
+  to `7c9740fee8a633e17b145c6bc6d794e41d46c73f`. The review covered the
+  intervening commit list, direct-execution memory-copy fast paths, event-queue
+  waiter lifetime and generation tests, and new generic import coverage in
+  `src/SharpEmu.Core/Cpu/Native/DirectExecutionBackend*.cs`,
+  `src/SharpEmu.Libs/Kernel/KernelEventQueueCompatExports.cs`, and the matching
+  kernel tests. These changes supply focused behavior and performance evidence
+  for the next C++ HLE milestones.
+- Validation: the update checker reported both pins current; all 46 KajPS5
+  tests passed in Debug, Release, and AddressSanitizer builds. Gitleaks and
+  actionlint also passed.
 
 When KajPS5 imports code, identify the upstream file and commit, keep its
 copyright and license notice, and update `THIRD_PARTY_NOTICES.md` in the same

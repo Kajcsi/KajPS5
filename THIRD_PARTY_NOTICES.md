@@ -1,9 +1,9 @@
 # Third-party notices
 
 The current source does not copy code from KytyPS5 or SharpEmu. Both projects
-serve as research references. The reviewed files and pinned commits are listed
-in `docs/stage1-loader.md`, `docs/stage2-kernel.md`, `docs/stage2-cpu.md`, and
-`docs/stage2-hle.md`.
+serve as research references. Each stage document records the exact commit
+used for its behavior, even after the current reference pin moves. Current
+pins and refresh reviews are in `docs/upstreams.md`.
 
 ## Kernel behavior
 
@@ -112,12 +112,13 @@ The host-mapped `GuestMemory` backing, page-aware ELF load plan, and direct
 execution path in `src/core/memory/guest_memory.cpp`, `src/loader/elf.cpp`,
 `src/cpu/native_leaf_executor.cpp`, and their focused tests adapt the
 runtime-address allocation, aligned segment sizing, and host protection
-boundary from pinned KytyPS5 `src/common/virtualMemory.cpp`,
+boundary from KytyPS5 `src/common/virtualMemory.cpp`,
 `src/common/platform/sysWindowsVirtual.cpp`,
 `src/common/platform/sysLinuxVirtual.cpp`, and
-`src/loader/runtimeLinker.cpp`. KajPS5 keeps its existing checked region model
-and uses the host mapping as that model's storage. No upstream virtual-memory,
-loader, or executor source was copied.
+`src/loader/runtimeLinker.cpp`, and the refreshed guest-address-space tests in
+`tests/VirtualMemoryAllocationTests.cpp`. KajPS5 keeps its existing checked
+region model and uses the host mapping as that model's storage. No upstream
+virtual-memory, loader, or executor source was copied.
 
 The library-scoped HLE import lookup and relocation connection in
 `src/hle/import_registry.cpp`, `tests/hle_import_registry_test.cpp`, and
