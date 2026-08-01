@@ -70,8 +70,10 @@ int main() {
 
   Check(scheduler.WakeBlockedThreads("", 1) == 0,
         "empty wake key changed scheduler state");
-  Check(scheduler.WakeBlockedThreads("event:1", 1) == 1,
-        "bounded wake did not wake one thread");
+  Check(!scheduler.WakeBlockedThread(second.handle, "wrong") &&
+            scheduler.WakeBlockedThread(first.handle, "event:1") &&
+            !scheduler.WakeBlockedThread(first.handle, "event:1"),
+        "exact wake did not select only the requested blocked thread");
   auto first_snapshot = scheduler.Snapshot(first.handle);
   auto second_snapshot = scheduler.Snapshot(second.handle);
   Check(first_snapshot && first_snapshot->state == GuestThreadState::kReady &&

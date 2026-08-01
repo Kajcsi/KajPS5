@@ -81,6 +81,8 @@ public:
   [[nodiscard]] std::size_t WakeBlockedThreads(
       std::string_view wait_key,
       std::size_t maximum_count = std::numeric_limits<std::size_t>::max());
+  [[nodiscard]] bool WakeBlockedThread(KernelHandle handle,
+                                       std::string_view wait_key);
   [[nodiscard]] GuestThreadJoinResult JoinThread(KernelHandle handle);
   [[nodiscard]] bool ExitCurrent(std::uint64_t exit_value);
   [[nodiscard]] bool CurrentThreadTimedOut(

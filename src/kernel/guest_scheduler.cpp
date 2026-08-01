@@ -183,6 +183,29 @@ std::size_t GuestScheduler::WakeBlockedThreads(std::string_view wait_key,
   return wake_count;
 }
 
+bool GuestScheduler::WakeBlockedThread(KernelHandle handle,
+                                       std::string_view wait_key) {
+  if (handle == kInvalidKernelHandle || wait_key.empty()) {
+    return false;
+  }
+
+  std::lock_guard lock(mutex_);
+  WakeExpiredThreadsLocked(clock_.MonotonicNanoseconds());
+  const auto found = threads_.find(handle);
+  if (found == threads_.end() ||
+      found->second->state != GuestThreadState::kBlocked ||
+      found->second->wait_key != wait_key) {
+    return false;
+  }
+
+  found->second->state = GuestThreadState::kReady;
+  found->second->wait_key.clear();
+  found->second->wait_deadline_nanoseconds.reset();
+  found->second->timed_out_wait_key.clear();
+  ready_threads_.push_back(handle);
+  return true;
+}
+
 GuestThreadJoinResult GuestScheduler::JoinThread(KernelHandle handle) {
   std::lock_guard lock(mutex_);
   const auto target = threads_.find(handle);

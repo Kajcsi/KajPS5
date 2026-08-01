@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -46,7 +47,7 @@ public:
   [[nodiscard]] KernelStatus AddUserEvent(std::uint64_t ident, bool edge);
   [[nodiscard]] KernelStatus DeleteUserEvent(std::uint64_t ident);
   [[nodiscard]] KernelStatus TriggerUserEvent(std::uint64_t ident,
-                                              std::uint64_t data);
+                                              std::uint64_t user_data);
   [[nodiscard]] std::vector<KernelEvent> Poll(std::size_t maximum_count);
 
 private:
@@ -95,19 +96,37 @@ public:
                                              std::uint64_t ident);
   [[nodiscard]] KernelStatus TriggerUserEvent(KernelHandle handle,
                                               std::uint64_t ident,
-                                              std::uint64_t data);
+                                              std::uint64_t user_data);
   [[nodiscard]] EventQueuePollResult Poll(KernelHandle handle,
                                           std::size_t maximum_count);
   [[nodiscard]] EventQueuePollResult Wait(KernelHandle handle,
                                           std::size_t maximum_count);
 
 private:
+  enum class WaitCompletion {
+    kWaiting,
+    kReserved,
+    kDeleted,
+  };
+
+  struct Waiter {
+    KernelHandle queue_handle = kInvalidKernelHandle;
+    std::size_t maximum_count = 0;
+    WaitCompletion completion = WaitCompletion::kWaiting;
+    std::vector<KernelEvent> events;
+  };
+
   [[nodiscard]] std::shared_ptr<EventQueue> Find(KernelHandle handle) const;
+  [[nodiscard]] EventQueuePollResult PollLocked(
+      KernelHandle handle, std::size_t maximum_count);
+  void ReserveWaitingThreadsLocked(KernelHandle handle,
+                                   const std::shared_ptr<EventQueue> &queue);
   [[nodiscard]] static std::string MakeWaitKey(KernelHandle handle);
 
   HandleTable &handles_;
   GuestScheduler &scheduler_;
   std::mutex wait_mutex_;
+  std::map<KernelHandle, Waiter> waiters_;
 };
 
 } // namespace kajps5::kernel

@@ -347,9 +347,10 @@ behavior from KytyPS5 `src/kernel/eventQueue.h` and
 `src/kernel/eventQueue.cpp` at commit
 `f6e01e54031a3c615f089f061a4eab2f3c59acba`, and SharpEmu
 `src/SharpEmu.Libs/Kernel/KernelEventQueueCompatExports.cs` at commit
-`d5108e854d609808f17093a6f5dbbc711d09ad2e`. The implementation uses Kyty's
-typed user-event contract and SharpEmu's deterministic pending-trigger
-coalescing behavior. The SharpEmu reference states:
+`816ec4ad27662bb8e505aeeec65ef9c621478d6c`. The implementation uses Kyty's
+typed user-event contract and adapts SharpEmu's user-event data placement,
+edge and level delivery, per-waiter reservation, and deleted-queue completion
+behavior. The SharpEmu reference states:
 
 `Copyright (C) 2026 SharpEmu Emulator Project`
 

@@ -92,9 +92,13 @@ The tests capture the behavior below.
   scheduler implements priority selection.
 - Event queues follow KytyPS5's typed registration, trigger, and user-event
   flag contract. Records use the 32-byte kernel layout. Repeated pending
-  triggers for one identifier follow SharpEmu's coalescing behavior: new data
-  replaces old data, `fflags` counts extra triggers, and queue order stays put.
-  Trigger and delete operations wake threads through the shared scheduler.
+  user triggers follow SharpEmu's coalescing behavior: the newest third
+  argument becomes `user_data`, while `data` and `fflags` stay zero.
+- Edge events are consumed once. Level events stay ready until their
+  registration is deleted. A trigger reserves edge events for one exact
+  waiter before waking it, so another waiter cannot steal the event. A level
+  event can wake each current waiter. Deleting a queue completes its blocked
+  waiters with the kernel deleted-object result.
 
 ## Time
 

@@ -135,8 +135,9 @@ int main() {
             polled.events[0].ident == 7 &&
             polled.events[0].flags ==
                 (kajps5::kernel::kEventAdd | kajps5::kernel::kEventClear) &&
-            polled.events[0].fflags == 1 &&
-            polled.events[0].data == 0x22,
+            polled.events[0].fflags == 0 &&
+            polled.events[0].data == 0 &&
+            polled.events[0].user_data == 0x22,
         "HLE triggers did not use the shared deterministic queue");
 
   HleCallContext add_context(memory);
