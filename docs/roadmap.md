@@ -146,6 +146,8 @@
       32-bit, 64-bit, and monotonic counter writes.
 - [x] Connect `EVENT_WRITE` packets to graphics event registrations without
       confusing hardware event types with guest event IDs.
+- [x] Submit checked DCB and ACB batches atomically through the existing
+      graphics and owner-scoped compute queues.
 - Create a Vulkan device and a validation test.
 - Add shader and resource tests before game tests.
 - Add an audio queue test with stable timing.

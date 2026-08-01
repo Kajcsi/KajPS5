@@ -473,6 +473,16 @@ graphics and owner-scoped compute queues, and wait-resume tests also re-express
 SharpEmu `src/SharpEmu.Libs/Agc/AgcExports.cs` at commit
 `5ee7cd1dfafdeb0ce0e458a365692df4b2e1c445`.
 
+The direct and multi-buffer submission handlers in `src/hle/agc_exports.*`
+and the transactional batch queue in `src/gpu/submission_queue.*` adapt the
+entry-point signatures, NIDs, and queue selection from KytyPS5
+`src/libs/agc.h`, `src/libs/agc.cpp`, and `src/libs/libGraphicsDriver.cpp` at
+commit `a65d17a5d689257a35644e01e9d15539361f0bf0`. The multi-DCB array ABI and
+4096-entry bound are independently confirmed by SharpEmu
+`src/SharpEmu.Libs/Agc/AgcExports.cs` at commit
+`5ee7cd1dfafdeb0ce0e458a365692df4b2e1c445`. KajPS5 adds checked guest reads
+and all-or-nothing queue commits. No upstream queue implementation was copied.
+
 The AGC NOP-wrapper `WRITE_DATA` encoding, the separate standard PM4 control
 decoder, and the checked ordered guest-memory effect in
 `src/gpu/runtime.cpp` and `src/gpu/command_processor.*` re-express SharpEmu

@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <limits>
 #include <utility>
+#include <vector>
 
 #include "gpu/runtime.h"
 
@@ -62,6 +63,30 @@ GpuEnqueueResult GpuSubmissionQueue::EnqueueCompute(
   }
 }
 
+GpuEnqueueResult GpuSubmissionQueue::EnqueueGraphicsBatch(
+    std::span<const GpuCommandBufferDescriptor> buffers,
+    GpuQueueLimits limits) {
+  std::lock_guard lock(mutex_);
+  return EnqueueBatch(graphics_, buffers, limits);
+}
+
+GpuEnqueueResult GpuSubmissionQueue::EnqueueComputeBatch(
+    std::uint32_t owner,
+    std::span<const GpuCommandBufferDescriptor> buffers,
+    GpuQueueLimits limits) {
+  std::lock_guard lock(mutex_);
+  try {
+    auto [entry, inserted] = compute_queues_.try_emplace(owner);
+    const auto result = EnqueueBatch(entry->second, buffers, limits);
+    if (!result && inserted && entry->second.submissions.empty()) {
+      compute_queues_.erase(entry);
+    }
+    return result;
+  } catch (...) {
+    return {GpuEnqueueStatus::kResourceLimit};
+  }
+}
+
 GpuEnqueueResult GpuSubmissionQueue::Enqueue(
     QueueState& queue, std::uint64_t address,
     std::uint32_t dword_count, const GpuQueueLimits& limits) {
@@ -71,6 +96,82 @@ GpuEnqueueResult GpuSubmissionQueue::Enqueue(
     return prepared;
   }
   return Commit(queue, dword_count, limits, std::move(cursor));
+}
+
+GpuEnqueueResult GpuSubmissionQueue::EnqueueBatch(
+    QueueState& queue,
+    std::span<const GpuCommandBufferDescriptor> buffers,
+    const GpuQueueLimits& limits) {
+  if (buffers.empty()) {
+    return {GpuEnqueueStatus::kInvalidArgument};
+  }
+  if (limits.max_pending_submissions == 0 ||
+      limits.max_pending_root_dwords == 0 ||
+      limits.max_drain_passes == 0 ||
+      buffers.size() > limits.max_pending_submissions ||
+      pending_submissions_ >
+          limits.max_pending_submissions - buffers.size()) {
+    return {GpuEnqueueStatus::kResourceLimit};
+  }
+
+  std::uint64_t total_dwords = 0;
+  for (const auto& buffer : buffers) {
+    if (buffer.dword_count >
+        std::numeric_limits<std::uint64_t>::max() - total_dwords) {
+      return {GpuEnqueueStatus::kResourceLimit};
+    }
+    total_dwords += buffer.dword_count;
+  }
+  if (total_dwords > limits.max_pending_root_dwords ||
+      pending_root_dwords_ >
+          limits.max_pending_root_dwords - total_dwords) {
+    return {GpuEnqueueStatus::kResourceLimit};
+  }
+  const auto last_index = static_cast<std::uint64_t>(buffers.size() - 1U);
+  if (next_submission_id_ == 0 ||
+      last_index >
+          std::numeric_limits<std::uint64_t>::max() - next_submission_id_) {
+    return {GpuEnqueueStatus::kResourceLimit};
+  }
+
+  std::vector<GpuCommandCursor> cursors;
+  try {
+    cursors.reserve(buffers.size());
+    for (const auto& buffer : buffers) {
+      auto cursor = runtime_.BeginCommandBuffer(
+          buffer.address, buffer.dword_count, limits.command);
+      if (cursor.terminal) {
+        return {EnqueueStatus(cursor.result.status), 0, cursor.result};
+      }
+      cursors.push_back(std::move(cursor));
+    }
+  } catch (...) {
+    return {GpuEnqueueStatus::kResourceLimit};
+  }
+
+  std::size_t inserted_count = 0;
+  try {
+    for (std::size_t index = 0; index < buffers.size(); ++index) {
+      queue.submissions.push_back(
+          Submission{next_submission_id_ + index,
+                     buffers[index].dword_count,
+                     std::move(cursors[index])});
+      ++inserted_count;
+    }
+  } catch (...) {
+    while (inserted_count != 0) {
+      queue.submissions.pop_back();
+      --inserted_count;
+    }
+    return {GpuEnqueueStatus::kResourceLimit};
+  }
+
+  const auto first_id = next_submission_id_;
+  next_submission_id_ += static_cast<std::uint64_t>(buffers.size());
+  pending_submissions_ += buffers.size();
+  pending_root_dwords_ += total_dwords;
+  limits_ = limits;
+  return {GpuEnqueueStatus::kAccepted, first_id};
 }
 
 GpuEnqueueResult GpuSubmissionQueue::Prepare(

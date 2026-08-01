@@ -24,6 +24,7 @@ constexpr std::int32_t kGen5ErrorMemoryFault =
     std::bit_cast<std::int32_t>(0x80020101U);
 constexpr std::int32_t kGen5ErrorNotFound =
     std::bit_cast<std::int32_t>(0x80020002U);
+constexpr std::uint64_t kMaximumDriverBatchSize = 4096;
 
 void SetSignedResult(HleCallContext& context, std::int32_t value) noexcept {
   context.SetReturn(
@@ -44,40 +45,9 @@ void AddDriver(std::vector<HleExportDefinition>& exports, const char* name,
   exports.push_back({kAgcDriverLibraryName, nid, handler});
 }
 
-HleContextStatus SubmitDriverCommandBuffer(
+HleContextStatus FinishDriverSubmission(
     HleCallContext& context, gpu::GpuRuntime& runtime,
-    bool compute) {
-  const auto packet_address = context.Argument(compute ? 1 : 0).value_or(0);
-  if (packet_address == 0 ||
-      packet_address > std::numeric_limits<std::uint64_t>::max() - 12U) {
-    SetSignedResult(context, kGen5ErrorInvalidArgument);
-    return HleContextStatus::kOk;
-  }
-  std::uint64_t command_address = 0;
-  std::uint32_t dword_count = 0;
-  std::uint32_t flags = 0;
-  if (context.ReadUInt64(packet_address, command_address) !=
-          HleContextStatus::kOk ||
-      context.ReadUInt32(packet_address + 8U, dword_count) !=
-          HleContextStatus::kOk ||
-      context.ReadUInt32(packet_address + 12U, flags) !=
-          HleContextStatus::kOk) {
-    SetSignedResult(context, kGen5ErrorMemoryFault);
-    return HleContextStatus::kOk;
-  }
-  if (command_address == 0 || dword_count == 0 ||
-      (!compute && flags != 0)) {
-    SetSignedResult(context, kGen5ErrorInvalidArgument);
-    return HleContextStatus::kOk;
-  }
-
-  const auto queued = compute
-                          ? runtime.submissions().EnqueueCompute(
-                                static_cast<std::uint32_t>(
-                                    context.Argument(0).value_or(0)),
-                                command_address, dword_count)
-                          : runtime.submissions().EnqueueGraphics(
-                                command_address, dword_count);
+    const gpu::GpuEnqueueResult& queued) {
   if (!queued) {
     if (queued.status == gpu::GpuEnqueueStatus::kMemoryFault) {
       SetSignedResult(context, kGen5ErrorMemoryFault);
@@ -110,6 +80,118 @@ HleContextStatus SubmitDriverCommandBuffer(
       return HleContextStatus::kFatalGuestError;
   }
   return HleContextStatus::kFatalGuestError;
+}
+
+HleContextStatus SubmitDriverCommandBuffer(
+    HleCallContext& context, gpu::GpuRuntime& runtime, bool compute) {
+  const auto packet_address = context.Argument(compute ? 1 : 0).value_or(0);
+  if (packet_address == 0 ||
+      packet_address > std::numeric_limits<std::uint64_t>::max() - 12U) {
+    SetSignedResult(context, kGen5ErrorInvalidArgument);
+    return HleContextStatus::kOk;
+  }
+  std::uint64_t command_address = 0;
+  std::uint32_t dword_count = 0;
+  std::uint32_t flags = 0;
+  if (context.ReadUInt64(packet_address, command_address) !=
+          HleContextStatus::kOk ||
+      context.ReadUInt32(packet_address + 8U, dword_count) !=
+          HleContextStatus::kOk ||
+      context.ReadUInt32(packet_address + 12U, flags) !=
+          HleContextStatus::kOk) {
+    SetSignedResult(context, kGen5ErrorMemoryFault);
+    return HleContextStatus::kOk;
+  }
+  if (command_address == 0 || dword_count == 0 ||
+      (!compute && flags != 0)) {
+    SetSignedResult(context, kGen5ErrorInvalidArgument);
+    return HleContextStatus::kOk;
+  }
+
+  const auto queued = compute
+                          ? runtime.submissions().EnqueueCompute(
+                                static_cast<std::uint32_t>(
+                                    context.Argument(0).value_or(0)),
+                                command_address, dword_count)
+                          : runtime.submissions().EnqueueGraphics(
+                                command_address, dword_count);
+  return FinishDriverSubmission(context, runtime, queued);
+}
+
+HleContextStatus SubmitDriverDirectCommandBuffer(
+    HleCallContext& context, gpu::GpuRuntime& runtime) {
+  const auto command_address = context.Argument(1).value_or(0);
+  const auto dword_count_raw = context.Argument(2).value_or(0);
+  if (command_address == 0 || dword_count_raw == 0 ||
+      dword_count_raw > std::numeric_limits<std::uint32_t>::max()) {
+    SetSignedResult(context, kGen5ErrorInvalidArgument);
+    return HleContextStatus::kOk;
+  }
+  const auto queued = runtime.submissions().EnqueueGraphics(
+      command_address, static_cast<std::uint32_t>(dword_count_raw));
+  return FinishDriverSubmission(context, runtime, queued);
+}
+
+HleContextStatus SubmitDriverCommandBufferBatch(
+    HleCallContext& context, gpu::GpuRuntime& runtime,
+    bool has_owner, bool compute) {
+  const std::size_t array_argument = has_owner ? 1 : 0;
+  const auto address_array = context.Argument(array_argument).value_or(0);
+  const auto size_array = context.Argument(array_argument + 1).value_or(0);
+  const auto count_raw = context.Argument(array_argument + 2).value_or(0);
+  if (address_array == 0 || size_array == 0 || count_raw == 0 ||
+      count_raw > kMaximumDriverBatchSize) {
+    SetSignedResult(context, kGen5ErrorInvalidArgument);
+    return HleContextStatus::kOk;
+  }
+
+  const auto count = static_cast<std::size_t>(count_raw);
+  const auto last_address_offset = (count - 1U) * sizeof(std::uint64_t);
+  const auto last_size_offset = (count - 1U) * sizeof(std::uint32_t);
+  if (address_array > std::numeric_limits<std::uint64_t>::max() -
+                          last_address_offset ||
+      size_array > std::numeric_limits<std::uint64_t>::max() -
+                       last_size_offset) {
+    SetSignedResult(context, kGen5ErrorInvalidArgument);
+    return HleContextStatus::kOk;
+  }
+
+  std::vector<gpu::GpuCommandBufferDescriptor> buffers;
+  try {
+    buffers.reserve(count);
+  } catch (...) {
+    context.SetReturn(0);
+    return HleContextStatus::kResourceLimit;
+  }
+  for (std::size_t index = 0; index < count; ++index) {
+    std::uint64_t command_address = 0;
+    std::uint32_t dword_count = 0;
+    if (context.ReadUInt64(address_array + index * sizeof(std::uint64_t),
+                           command_address) != HleContextStatus::kOk ||
+        context.ReadUInt32(size_array + index * sizeof(std::uint32_t),
+                           dword_count) != HleContextStatus::kOk) {
+      SetSignedResult(context, kGen5ErrorMemoryFault);
+      return HleContextStatus::kOk;
+    }
+    if (command_address == 0 || dword_count == 0) {
+      SetSignedResult(context, kGen5ErrorInvalidArgument);
+      return HleContextStatus::kOk;
+    }
+    try {
+      buffers.push_back({command_address, dword_count});
+    } catch (...) {
+      context.SetReturn(0);
+      return HleContextStatus::kResourceLimit;
+    }
+  }
+
+  const auto queued = compute
+                          ? runtime.submissions().EnqueueComputeBatch(
+                                static_cast<std::uint32_t>(
+                                    context.Argument(0).value_or(0)),
+                                buffers)
+                          : runtime.submissions().EnqueueGraphicsBatch(buffers);
+  return FinishDriverSubmission(context, runtime, queued);
 }
 
 HleContextStatus ReturnPacket(HleCallContext& context,
@@ -315,6 +397,35 @@ ExportRegistryStatus RegisterAgcExports(ExportRegistry& registry,
   AddDriver(exports, "sceAgcDriverSubmitAcb", kAgcDriverSubmitAcbNid,
             [runtime](HleCallContext& context) {
               return SubmitDriverCommandBuffer(context, *runtime, true);
+            });
+  AddDriver(exports, "sceAgcDriverSubmitMultiDcbs",
+            kAgcDriverSubmitMultiDcbsNid,
+            [runtime](HleCallContext& context) {
+              return SubmitDriverCommandBufferBatch(
+                  context, *runtime, false, false);
+            });
+  AddDriver(exports, "sceAgcDriverAgrSubmitMultiDcbs",
+            kAgcDriverAgrSubmitMultiDcbsNid,
+            [runtime](HleCallContext& context) {
+              return SubmitDriverCommandBufferBatch(
+                  context, *runtime, false, false);
+            });
+  AddDriver(exports, "sceAgcDriverSubmitCommandBuffer",
+            kAgcDriverSubmitCommandBufferNid,
+            [runtime](HleCallContext& context) {
+              return SubmitDriverDirectCommandBuffer(context, *runtime);
+            });
+  AddDriver(exports, "sceAgcDriverSubmitMultiCommandBuffers",
+            kAgcDriverSubmitMultiCommandBuffersNid,
+            [runtime](HleCallContext& context) {
+              return SubmitDriverCommandBufferBatch(
+                  context, *runtime, true, false);
+            });
+  AddDriver(exports, "sceAgcDriverSubmitMultiAcbs",
+            kAgcDriverSubmitMultiAcbsNid,
+            [runtime](HleCallContext& context) {
+              return SubmitDriverCommandBufferBatch(
+                  context, *runtime, true, true);
             });
   AddDriver(exports, "sceAgcDriverAddEqEvent", kAgcDriverAddEqEventNid,
             [queues](HleCallContext& context) {

@@ -12,6 +12,7 @@
 #include <map>
 #include <mutex>
 #include <optional>
+#include <span>
 
 #include "gpu/command_processor.h"
 
@@ -43,6 +44,11 @@ struct GpuEnqueueResult {
   }
 };
 
+struct GpuCommandBufferDescriptor {
+  std::uint64_t address = 0;
+  std::uint32_t dword_count = 0;
+};
+
 struct GpuQueueDrainResult {
   std::size_t completed_submissions = 0;
   std::size_t failed_submissions = 0;
@@ -62,6 +68,13 @@ class GpuSubmissionQueue final {
   [[nodiscard]] GpuEnqueueResult EnqueueCompute(
       std::uint32_t owner, std::uint64_t address,
       std::uint32_t dword_count, GpuQueueLimits limits = {});
+  [[nodiscard]] GpuEnqueueResult EnqueueGraphicsBatch(
+      std::span<const GpuCommandBufferDescriptor> buffers,
+      GpuQueueLimits limits = {});
+  [[nodiscard]] GpuEnqueueResult EnqueueComputeBatch(
+      std::uint32_t owner,
+      std::span<const GpuCommandBufferDescriptor> buffers,
+      GpuQueueLimits limits = {});
   [[nodiscard]] GpuQueueDrainResult Drain(GpuSubmissionSink& sink);
   [[nodiscard]] std::size_t PendingSubmissionCount() const noexcept;
 
@@ -79,6 +92,10 @@ class GpuSubmissionQueue final {
   [[nodiscard]] GpuEnqueueResult Enqueue(
       QueueState& queue, std::uint64_t address,
       std::uint32_t dword_count, const GpuQueueLimits& limits);
+  [[nodiscard]] GpuEnqueueResult EnqueueBatch(
+      QueueState& queue,
+      std::span<const GpuCommandBufferDescriptor> buffers,
+      const GpuQueueLimits& limits);
   [[nodiscard]] GpuEnqueueResult Prepare(
       std::uint64_t address, std::uint32_t dword_count,
       const GpuQueueLimits& limits, GpuCommandCursor& cursor);

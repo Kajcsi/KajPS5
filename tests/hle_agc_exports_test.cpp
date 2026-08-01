@@ -393,6 +393,10 @@ int main() {
   constexpr std::uint64_t kDriverReleaseWaitCommands = kBase + 0x1a00;
   constexpr std::uint64_t kDriverEventCommands = kBase + 0x1900;
   constexpr std::uint64_t kDriverLabel = kBase + 0x1f00;
+  constexpr std::uint64_t kBatchAddresses = kBase + 0x500;
+  constexpr std::uint64_t kBatchSizes = kBase + 0x520;
+  constexpr std::uint64_t kBatchFirst = kBase + 0x1500;
+  constexpr std::uint64_t kBatchSecond = kBase + 0x1600;
   const std::array driver_commands = {
       Pm4(5, 0x15), 2U, 3U, 4U, 0x41U,
   };
@@ -415,11 +419,16 @@ int main() {
       Pm4(2, 0x46), 0x407U,
       Pm4(3, 0x2d), 17U, 2U,
   };
+  const std::array batch_first = {Pm4(3, 0x2d), 18U, 2U};
+  const std::array batch_second = {
+      Pm4(5, 0x15), 4U, 3U, 2U, 0x41U};
   WriteDwords(memory, kDriverCommands, driver_commands);
   WriteDwords(memory, kDriverWaitCommands, driver_wait_commands);
   WriteDwords(memory, kDriverReleaseWaitCommands,
               driver_release_wait_commands);
   WriteDwords(memory, kDriverEventCommands, driver_event_commands);
+  WriteDwords(memory, kBatchFirst, batch_first);
+  WriteDwords(memory, kBatchSecond, batch_second);
   Check(context.WriteUInt32(kDriverLabel, 0) == HleContextStatus::kOk,
         "driver wait label setup failed");
 
@@ -570,6 +579,76 @@ int main() {
                     .status == kajps5::kernel::KernelStatus::kBusy,
         "deleted graphics registration still received events");
 
+  std::array<std::byte, 16> batch_addresses{};
+  Write64(batch_addresses, 0, kBatchFirst);
+  Write64(batch_addresses, 8, kBatchSecond);
+  std::array<std::byte, 8> batch_sizes{};
+  Write32(batch_sizes, 0,
+          static_cast<std::uint32_t>(batch_first.size()));
+  Write32(batch_sizes, 4,
+          static_cast<std::uint32_t>(batch_second.size()));
+  Check(memory.Write(kBatchAddresses, batch_addresses) &&
+            memory.Write(kBatchSizes, batch_sizes),
+        "driver batch array setup failed");
+  const auto history_before_batches = gpu_runtime.submission_history().size();
+  const std::array multi_dcb_arguments = {
+      kBatchAddresses, kBatchSizes, std::uint64_t{2}};
+  SetArguments(context, multi_dcb_arguments);
+  Check(registry.Dispatch(kajps5::hle::kAgcDriverSubmitMultiDcbsNid,
+                          context) &&
+            ReturnValue(context) == 0,
+        "multi-DCB submission failed");
+  SetArguments(context, multi_dcb_arguments);
+  Check(registry.Dispatch(kajps5::hle::kAgcDriverAgrSubmitMultiDcbsNid,
+                          context) &&
+            ReturnValue(context) == 0,
+        "AGR multi-DCB submission failed");
+  const std::array direct_arguments = {
+      std::uint64_t{4}, kBatchFirst,
+      static_cast<std::uint64_t>(batch_first.size())};
+  SetArguments(context, direct_arguments);
+  Check(registry.Dispatch(kajps5::hle::kAgcDriverSubmitCommandBufferNid,
+                          context) &&
+            ReturnValue(context) == 0,
+        "direct command-buffer submission failed");
+  const std::array multi_command_arguments = {
+      std::uint64_t{5}, kBatchAddresses, kBatchSizes,
+      std::uint64_t{2}};
+  SetArguments(context, multi_command_arguments);
+  Check(registry.Dispatch(
+            kajps5::hle::kAgcDriverSubmitMultiCommandBuffersNid,
+            context) &&
+            ReturnValue(context) == 0,
+        "multi-command-buffer submission failed");
+  const std::array multi_acb_arguments = {
+      std::uint64_t{6}, kBatchAddresses, kBatchSizes,
+      std::uint64_t{2}};
+  SetArguments(context, multi_acb_arguments);
+  Check(registry.Dispatch(kajps5::hle::kAgcDriverSubmitMultiAcbsNid,
+                          context) &&
+            ReturnValue(context) == 0 &&
+            gpu_runtime.submission_history().size() ==
+                history_before_batches + 9 &&
+            gpu_runtime.submissions().PendingSubmissionCount() == 0,
+        "driver batch exports did not share the ordered queues");
+
+  Write64(batch_addresses, 8, kBase + 0x4000);
+  Check(memory.Write(kBatchAddresses, batch_addresses),
+        "invalid driver batch setup failed");
+  const auto history_before_invalid_batch =
+      gpu_runtime.submission_history().size();
+  SetArguments(context, multi_dcb_arguments);
+  constexpr auto kMemoryFault = std::bit_cast<std::int32_t>(0x80020101U);
+  Check(registry.Dispatch(kajps5::hle::kAgcDriverSubmitMultiDcbsNid,
+                          context) &&
+            ReturnValue(context) == static_cast<std::uint64_t>(
+                                        static_cast<std::int64_t>(
+                                            kMemoryFault)) &&
+            gpu_runtime.submission_history().size() ==
+                history_before_invalid_batch &&
+            gpu_runtime.submissions().PendingSubmissionCount() == 0,
+        "invalid multi-DCB batch partly changed GPU state");
+
   const std::array invalid_submit_arguments = {std::uint64_t{0}};
   SetArguments(context, invalid_submit_arguments);
   Check(registry.Dispatch(kajps5::hle::kAgcDriverSubmitDcbNid, context) &&
@@ -577,7 +656,6 @@ int main() {
                                         static_cast<std::int64_t>(
                                             kInvalidArgument)),
         "null driver packet returned the wrong error");
-  constexpr auto kMemoryFault = std::bit_cast<std::int32_t>(0x80020101U);
   const std::array faulting_submit_arguments = {kBase + 0x2ff8};
   SetArguments(context, faulting_submit_arguments);
   Check(registry.Dispatch(kajps5::hle::kAgcDriverSubmitDcbNid, context) &&

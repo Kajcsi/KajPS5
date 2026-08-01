@@ -107,6 +107,10 @@ adapted paths change.
   evidence that delivery must match the graphics filter, retain the guest
   event ID and user data, and report the hardware event type separately.
   KajPS5 applies that behavior through its existing GPU runtime and event queue.
+- KytyPS5 supplies the direct and multi-buffer DCB and ACB entry points and
+  their NIDs. SharpEmu independently confirms the multi-DCB array ABI and a
+  4096-entry input bound. KajPS5 first checks and snapshots every supplied
+  command buffer, then commits the complete batch to its existing queues.
 
 When KajPS5 imports code, identify the upstream file and commit, keep its
 copyright and license notice, and update `THIRD_PARTY_NOTICES.md` in the same

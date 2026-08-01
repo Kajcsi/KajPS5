@@ -94,6 +94,7 @@ class SignallingSink final : public kajps5::gpu::GpuSubmissionSink {
 
 int main() {
   using kajps5::gpu::GpuActionType;
+  using kajps5::gpu::GpuCommandBufferDescriptor;
   using kajps5::gpu::GpuEnqueueStatus;
   using kajps5::gpu::GpuQueueLimits;
   using kajps5::gpu::GpuRuntime;
@@ -157,8 +158,60 @@ int main() {
             queue.PendingSubmissionCount() == 0,
         "invalid compute submission changed queue state");
 
+  constexpr std::uint64_t kBatchFirst = kBase + 0x4800;
+  constexpr std::uint64_t kBatchSecond = kBase + 0x4900;
+  const std::array batch_first = {Pm4(3, 0x2d), 20U, 2U};
+  const std::array batch_second = {Pm4(3, 0x2d), 21U, 2U};
+  WriteDwords(memory, kBatchFirst, batch_first);
+  WriteDwords(memory, kBatchSecond, batch_second);
+  const std::array batch = {
+      GpuCommandBufferDescriptor{
+          kBatchFirst, static_cast<std::uint32_t>(batch_first.size())},
+      GpuCommandBufferDescriptor{
+          kBatchSecond, static_cast<std::uint32_t>(batch_second.size())},
+  };
+  const auto batch_result = queue.EnqueueGraphicsBatch(batch);
+  Check(batch_result && batch_result.submission_id == 4 &&
+            queue.PendingSubmissionCount() == 2,
+        "valid graphics batch was not queued atomically");
+  const std::array replacement_batch = {Pm4(2, 0xfe), 0U};
+  WriteDwords(memory, kBatchSecond, replacement_batch);
+  SignallingSink batch_sink(memory, kLabel);
+  const auto batch_drain = queue.Drain(batch_sink);
+  Check(batch_drain.completed_submissions == 2 &&
+            batch_drain.failed_submissions == 0 &&
+            batch_sink.actions().size() == 2 &&
+            batch_sink.actions()[0] == GpuActionType::kDraw &&
+            batch_sink.actions()[1] == GpuActionType::kDraw,
+        "graphics batch did not retain its validated snapshots");
+  WriteDwords(memory, kBatchSecond, batch_second);
+
+  const std::array invalid_batch = {
+      batch[0],
+      GpuCommandBufferDescriptor{kBase + 0x7000, 2},
+  };
+  const auto invalid_batch_result =
+      queue.EnqueueGraphicsBatch(invalid_batch);
+  Check(invalid_batch_result.status == GpuEnqueueStatus::kMemoryFault &&
+            queue.PendingSubmissionCount() == 0,
+        "failed graphics batch changed queue state");
+
+  const auto compute_batch_result = queue.EnqueueComputeBatch(12, batch);
+  Check(compute_batch_result && compute_batch_result.submission_id == 6 &&
+            queue.PendingSubmissionCount() == 2,
+        "valid compute batch was not queued atomically");
+  SignallingSink compute_batch_sink(memory, kLabel);
+  const auto compute_batch_drain = queue.Drain(compute_batch_sink);
+  Check(compute_batch_drain.completed_submissions == 2 &&
+            compute_batch_drain.failed_submissions == 0,
+        "compute batch did not drain through its owner queue");
+
   GpuQueueLimits one_pending;
   one_pending.max_pending_submissions = 1;
+  const auto limited_batch = queue.EnqueueGraphicsBatch(batch, one_pending);
+  Check(limited_batch.status == GpuEnqueueStatus::kResourceLimit &&
+            queue.PendingSubmissionCount() == 0,
+        "batch limit failure changed queue state");
   Check(Store32(memory, kLabel, 0), "label reset failed");
   const auto limited_first = queue.EnqueueGraphics(
       kGraphics, static_cast<std::uint32_t>(graphics.size()), one_pending);
