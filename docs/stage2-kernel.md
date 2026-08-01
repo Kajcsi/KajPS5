@@ -117,15 +117,16 @@ The tests capture the behavior below.
 
 - Guest paths use forward slashes, collapse empty and `.` components, and
   reject relative paths, `..`, and embedded nulls.
-- The initial file service is read-only and exposes only files registered in
-  memory. An untrusted guest path is never resolved against the host file
-  system.
+- The file service is read-only. It exposes registered memory files and host
+  folders mounted at explicit guest roots such as `/app0`. Unmapped paths are
+  denied. Canonical path checks prevent `..`, drive-qualified components, and
+  links from escaping a mount.
 - Open, read, positioned read, seek, close, and size operations use typed
   handles and validated offsets. Guest output ranges are checked before reads,
   and large reads use bounded temporary chunks. A failed write does not advance
   the file position.
-- Stat and fstat write the full 120-byte regular-file layout at once. Memory
-  files report a stable path-based inode, 512-byte block accounting, and zero
+- Stat and fstat write the full 120-byte regular-file layout at once. Files
+  report a stable path-based inode, 512-byte block accounting, and zero
   timestamps.
 - A directory handle captures its immediate children when opened. Entries
   begin with `.` and `..`, then follow stable case-insensitive name order.

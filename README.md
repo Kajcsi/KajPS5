@@ -50,8 +50,9 @@ The current core includes:
   scheduler.
 - Event flags, semaphores, user-event queues, portable clocks, guest memory
   protection, flexible and direct-memory mappings, direct-memory range
-  allocation, and a read-only in-memory file namespace. The matching
-  `libkernel` handlers share the same services.
+  allocation, and a read-only file namespace. Explicit host mounts are
+  confined to their guest roots and keep stable directory ordering. The
+  matching `libkernel` handlers share the same services.
 - Checked JSON value construction and destruction through a bounded shadow
   store, without writing an assumed guest object layout.
 - Checked process arguments, bounded exit callbacks, and explicit guest exit

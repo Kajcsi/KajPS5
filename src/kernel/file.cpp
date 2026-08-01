@@ -164,6 +164,16 @@ FileService::RegisterReadOnlyFile(std::string path,
   return inserted ? KernelStatus::kOk : KernelStatus::kBusy;
 }
 
+KernelStatus FileService::MountReadOnly(std::string guest_root,
+                                        std::filesystem::path host_root) {
+  return host_files_.MountReadOnly(std::move(guest_root),
+                                   std::move(host_root));
+}
+
+KernelStatus FileService::Unmount(std::string_view guest_root) {
+  return host_files_.Unmount(guest_root);
+}
+
 FileOpenResult FileService::Open(std::string_view path, std::uint32_t flags) {
   constexpr std::uint32_t kAccessMask = 3;
   if ((flags & ~(kAccessMask | kFileOpenDirectory)) != 0 ||
@@ -181,15 +191,60 @@ FileOpenResult FileService::Open(std::string_view path, std::uint32_t flags) {
   std::shared_ptr<const std::vector<std::byte>> contents;
   std::vector<DirectoryEntry> directory_entries;
   bool directory_exists = false;
+  bool has_memory_file = false;
   {
     std::lock_guard lock(files_mutex_);
     const auto found = files_.find(*normalized);
     if (found != files_.end()) {
       contents = found->second;
+      has_memory_file = true;
     }
     if (wants_directory || !contents) {
       directory_entries =
           CollectDirectoryEntriesLocked(*normalized, directory_exists);
+    }
+  }
+
+  if (!has_memory_file) {
+    const auto host_stat = host_files_.Stat(*normalized);
+    if (host_stat && host_stat.is_file && !directory_exists &&
+        !wants_directory) {
+      if (access != kFileOpenRead) {
+        return {KernelStatus::kPermissionDenied, kInvalidKernelHandle};
+      }
+      auto host_file = host_files_.ReadFile(*normalized);
+      if (!host_file) {
+        return {host_file.status, kInvalidKernelHandle};
+      }
+      contents = std::make_shared<const std::vector<std::byte>>(
+          std::move(host_file.contents));
+    } else if (host_stat && !host_stat.is_file) {
+      const auto host_directory = host_files_.ListDirectory(*normalized);
+      if (!host_directory) {
+        return {host_directory.status, kInvalidKernelHandle};
+      }
+      if (!directory_exists) {
+        directory_entries = {
+            {".", false, StablePathHash(".")},
+            {"..", false, StablePathHash("..")},
+        };
+      }
+      directory_exists = true;
+      for (const auto &entry : host_directory.entries) {
+        const auto duplicate = std::find_if(
+            directory_entries.begin(), directory_entries.end(),
+            [&entry](const auto &existing) {
+              return existing.name == entry.name;
+            });
+        if (duplicate == directory_entries.end()) {
+          directory_entries.push_back(
+              {entry.name, entry.is_file, StablePathHash(entry.name)});
+        }
+      }
+      std::sort(directory_entries.begin() + 2, directory_entries.end(),
+                [](const auto &left, const auto &right) {
+                  return CaseInsensitiveLess(left.name, right.name);
+                });
     }
   }
 
@@ -276,10 +331,17 @@ FileStatResult FileService::Stat(std::string_view path) const {
     return {KernelStatus::kInvalidArgument, 0, 0};
   }
 
-  std::lock_guard lock(files_mutex_);
-  const auto found = files_.find(*normalized);
-  return found != files_.end()
-             ? FileStatResult{KernelStatus::kOk, found->second->size(),
+  {
+    std::lock_guard lock(files_mutex_);
+    const auto found = files_.find(*normalized);
+    if (found != files_.end()) {
+      return {KernelStatus::kOk, found->second->size(),
+              StablePathHash(*normalized)};
+    }
+  }
+  const auto host_stat = host_files_.Stat(*normalized);
+  return host_stat && host_stat.is_file
+             ? FileStatResult{KernelStatus::kOk, host_stat.size,
                               StablePathHash(*normalized)}
              : FileStatResult{KernelStatus::kNotFound, 0, 0};
 }
@@ -293,41 +355,7 @@ FileStatResult FileService::Fstat(KernelHandle handle) const {
 
 std::optional<std::string>
 FileService::NormalizeGuestPath(std::string_view path) {
-  if (path.empty() || path.size() > kMaximumGuestPathLength ||
-      path.find('\0') != std::string_view::npos) {
-    return std::nullopt;
-  }
-
-  std::string separators_fixed(path);
-  std::replace(separators_fixed.begin(), separators_fixed.end(), '\\', '/');
-  if (separators_fixed.front() != '/') {
-    return std::nullopt;
-  }
-
-  std::string normalized;
-  normalized.reserve(separators_fixed.size());
-  normalized.push_back('/');
-  std::size_t cursor = 1;
-  while (cursor <= separators_fixed.size()) {
-    const auto end = separators_fixed.find('/', cursor);
-    const auto length =
-        (end == std::string::npos ? separators_fixed.size() : end) - cursor;
-    const std::string_view component(separators_fixed.data() + cursor, length);
-    if (component == "..") {
-      return std::nullopt;
-    }
-    if (!component.empty() && component != ".") {
-      if (normalized.size() > 1) {
-        normalized.push_back('/');
-      }
-      normalized.append(component);
-    }
-    if (end == std::string::npos) {
-      break;
-    }
-    cursor = end + 1;
-  }
-  return normalized;
+  return VirtualFileSystem::NormalizeGuestPath(path);
 }
 
 std::shared_ptr<File> FileService::Find(KernelHandle handle) const {

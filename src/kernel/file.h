@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -18,10 +19,10 @@
 #include "kernel/handle_table.h"
 #include "kernel/object.h"
 #include "kernel/status.h"
+#include "kernel/virtual_file_system.h"
 
 namespace kajps5::kernel {
 
-inline constexpr std::size_t kMaximumGuestPathLength = 1'024;
 inline constexpr std::uint32_t kFileOpenRead = 0;
 inline constexpr std::uint32_t kFileOpenWrite = 1;
 inline constexpr std::uint32_t kFileOpenReadWrite = 2;
@@ -127,6 +128,9 @@ public:
 
   [[nodiscard]] KernelStatus
   RegisterReadOnlyFile(std::string path, std::vector<std::byte> contents);
+  [[nodiscard]] KernelStatus
+  MountReadOnly(std::string guest_root, std::filesystem::path host_root);
+  [[nodiscard]] KernelStatus Unmount(std::string_view guest_root);
   [[nodiscard]] FileOpenResult Open(std::string_view path, std::uint32_t flags);
   [[nodiscard]] KernelStatus Close(KernelHandle handle);
   [[nodiscard]] FileIoResult Read(KernelHandle handle,
@@ -153,6 +157,7 @@ private:
   HandleTable &handles_;
   mutable std::mutex files_mutex_;
   std::map<std::string, std::shared_ptr<const std::vector<std::byte>>> files_;
+  VirtualFileSystem host_files_;
 };
 
 } // namespace kajps5::kernel

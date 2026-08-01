@@ -387,6 +387,19 @@ entry list, `.` and `..` prefix, case-insensitive ordering, typed descriptor
 failure, fixed 512-byte record behavior, and optional directory base-position
 output. No file-service source was copied.
 
+The read-only host mount in `src/kernel/virtual_file_system.*`, its connection
+to the existing file service, and `tests/host_vfs_test.cpp` follow the mount
+boundary in KytyPS5 `src/kernel/fileSystem.{h,cpp}` at commit
+`a65d17a5d689257a35644e01e9d15539361f0bf0`. Path normalization, default-deny
+resolution, host case behavior, canonical root confinement, and symlink escape
+tests adapt behavior from SharpEmu `src/SharpEmu.Core/IFileSystem.cs`,
+`src/SharpEmu.Core/PhysicalFileSystem.cs`,
+`tests/SharpEmu.Libs.Tests/Kernel/KernelPathCaseSensitivityTests.cs`, and
+`tests/SharpEmu.Libs.Tests/Kernel/KernelSandboxEscapeTests.cs` at commit
+`7c9740fee8a633e17b145c6bc6d794e41d46c73f`. KajPS5 keeps mount state in its
+single C++ file-service owner and exposes only read access. No upstream
+file-service source was copied.
+
 The SharpEmu reference files state:
 
 `Copyright (C) 2026 SharpEmu Emulator Project`

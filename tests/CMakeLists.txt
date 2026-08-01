@@ -354,6 +354,12 @@ kajps5_deploy_msvc_asan_runtime(kajps5_kernel_file_test)
 
 add_test(NAME kajps5_kernel_file COMMAND kajps5_kernel_file_test)
 
+add_executable(kajps5_host_vfs_test host_vfs_test.cpp)
+target_link_libraries(kajps5_host_vfs_test PRIVATE kajps5_core)
+kajps5_deploy_msvc_asan_runtime(kajps5_host_vfs_test)
+
+add_test(NAME kajps5_host_vfs COMMAND kajps5_host_vfs_test)
+
 add_executable(kajps5_kernel_event_queue_test kernel_event_queue_test.cpp)
 target_link_libraries(kajps5_kernel_event_queue_test PRIVATE kajps5_core)
 kajps5_deploy_msvc_asan_runtime(kajps5_kernel_event_queue_test)

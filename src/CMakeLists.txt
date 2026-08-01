@@ -32,6 +32,7 @@ add_library(kajps5_core STATIC
   kernel/event_queue.cpp
   kernel/event_flag.cpp
   kernel/file.cpp
+  kernel/virtual_file_system.cpp
   kernel/guest_scheduler.cpp
   kernel/handle_table.cpp
   kernel/json_value.cpp
