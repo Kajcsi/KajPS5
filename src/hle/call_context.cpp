@@ -225,6 +225,14 @@ HleContextStatus HleCallContext::WriteMemory(
                                        : HleContextStatus::kMemoryFault;
 }
 
+HleContextStatus HleCallContext::CopyMemory(
+    std::uint64_t destination, std::uint64_t source,
+    std::uint64_t length) noexcept {
+  return memory_.Copy(destination, source, length)
+             ? HleContextStatus::kOk
+             : HleContextStatus::kMemoryFault;
+}
+
 HleContextStatus HleCallContext::FillMemory(
     std::uint64_t address, std::uint64_t length, std::byte value) noexcept {
   if (length == 0) {

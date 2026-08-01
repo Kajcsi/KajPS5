@@ -1,5 +1,6 @@
 // Copyright (C) 2026 KajPS5 contributors
 // Architecture reference: KytyPS5
+// Behavior reference: Copyright (C) 2026 SharpEmu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #pragma once
@@ -90,6 +91,9 @@ class GuestMemory final {
                           std::span<std::byte> destination) const noexcept;
   [[nodiscard]] bool Write(std::uint64_t address,
                            std::span<const std::byte> source) noexcept;
+  [[nodiscard]] bool Copy(std::uint64_t destination,
+                          std::uint64_t source,
+                          std::uint64_t length) noexcept;
   [[nodiscard]] bool Fill(std::uint64_t address, std::uint64_t length,
                           std::byte value) noexcept;
   [[nodiscard]] bool Initialize(

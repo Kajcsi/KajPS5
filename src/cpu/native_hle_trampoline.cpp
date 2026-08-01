@@ -15,6 +15,7 @@
 #include "core/memory/guest_memory.h"
 #include "cpu/host_executable_buffer.h"
 #include "hle/call_context.h"
+#include "hle/libc_exports.h"
 
 namespace kajps5::cpu {
 namespace {
@@ -36,12 +37,18 @@ void EmitUInt64(std::vector<std::byte>& code, std::uint64_t value) {
   }
 }
 
+bool IsHotMemoryCopySymbol(std::string_view symbol) noexcept {
+  return symbol == hle::kLibcMemcpyName || symbol == hle::kLibcMemcpyNid ||
+         symbol == hle::kLibcMemmoveName || symbol == hle::kLibcMemmoveNid;
+}
+
 }  // namespace
 
 struct NativeHleTrampoline::State {
   memory::GuestMemory* memory = nullptr;
   const hle::ExportRegistry* registry = nullptr;
   std::string symbol;
+  std::string resolved_library;
   std::vector<std::string> library_order;
   std::size_t stack_argument_count = 0;
   mutable std::mutex mutex;
@@ -89,6 +96,22 @@ std::uint64_t NativeHleTrampoline::Dispatch(
   }
 
   try {
+    if (state->resolved_library == hle::kLibcName &&
+        IsHotMemoryCopySymbol(state->symbol)) {
+      const auto destination = arguments[0];
+      const auto source = arguments[1];
+      const auto length = arguments[2];
+      if (length == 0 || state->memory->Copy(destination, source, length)) {
+        std::lock_guard lock(state->mutex);
+        state->last_dispatch = {};
+        state->last_dispatch.lookup_status = hle::ExportRegistryStatus::kOk;
+        state->last_dispatch.handler_status = hle::HleContextStatus::kOk;
+        state->last_dispatch.return_written = true;
+        state->last_dispatch.library = state->resolved_library;
+        return destination;
+      }
+    }
+
     hle::HleCallContext context(*state->memory);
     constexpr std::array registers = {
         hle::HleRegister::kRdi, hle::HleRegister::kRsi,
@@ -154,13 +177,16 @@ std::uint64_t NativeHleTrampoline::Dispatch(
 }
 
 void NativeHleTrampoline::Build() {
+  const auto lookup =
+      state_->registry->Lookup(state_->symbol, state_->library_order);
   if (state_->symbol.empty() || state_->library_order.empty() ||
       state_->stack_argument_count >
           hle::kMaximumCapturedHleStackArguments ||
-      !state_->registry->Lookup(state_->symbol, state_->library_order)) {
+      !lookup) {
     status_ = NativeHleTrampolineStatus::kInvalidArgument;
     return;
   }
+  state_->resolved_library = lookup.library;
 
 #if !defined(_M_X64) && !defined(__x86_64__)
   status_ = NativeHleTrampolineStatus::kUnsupportedHost;

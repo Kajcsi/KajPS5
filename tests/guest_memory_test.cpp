@@ -76,6 +76,42 @@ int main() {
   Check(memory.Read(0x1000, {}), "zero-length read at mapped address failed");
   Check(memory.Write(0x1000, {}), "zero-length write at mapped address failed");
 
+  GuestMemory copy_memory(0x5000, 0x40);
+  const std::array copy_input = {
+      std::byte{0},  std::byte{1},  std::byte{2},  std::byte{3},
+      std::byte{4},  std::byte{5},  std::byte{6},  std::byte{7},
+      std::byte{8},  std::byte{9},  std::byte{10}, std::byte{11},
+      std::byte{12}, std::byte{13}, std::byte{14}, std::byte{15}};
+  std::array<std::byte, copy_input.size()> copy_output{};
+  const std::array forward_overlap = {
+      std::byte{0}, std::byte{1}, std::byte{2}, std::byte{3},
+      std::byte{0}, std::byte{1}, std::byte{2}, std::byte{3},
+      std::byte{4}, std::byte{5}, std::byte{6}, std::byte{7},
+      std::byte{8}, std::byte{9}, std::byte{10}, std::byte{11}};
+  Check(copy_memory.Initialize(0x5000, copy_input) &&
+            copy_memory.Copy(0x5004, 0x5000, 12) &&
+            copy_memory.Read(0x5000, copy_output) &&
+            copy_output == forward_overlap,
+        "checked copy did not preserve forward overlap");
+  const std::array backward_overlap = {
+      std::byte{4},  std::byte{5},  std::byte{6},  std::byte{7},
+      std::byte{8},  std::byte{9},  std::byte{10}, std::byte{11},
+      std::byte{12}, std::byte{13}, std::byte{14}, std::byte{15},
+      std::byte{12}, std::byte{13}, std::byte{14}, std::byte{15}};
+  Check(copy_memory.Initialize(0x5000, copy_input) &&
+            copy_memory.Copy(0x5000, 0x5004, 12) &&
+            copy_memory.Read(0x5000, copy_output) &&
+            copy_output == backward_overlap,
+        "checked copy did not preserve backward overlap");
+  std::array<std::byte, 16> failed_destination{};
+  failed_destination.fill(std::byte{0xaa});
+  std::array<std::byte, failed_destination.size()> failed_output{};
+  Check(copy_memory.Write(0x5030, failed_destination) &&
+            !copy_memory.Copy(0x5038, 0x5000, 16) &&
+            copy_memory.Read(0x5030, failed_output) &&
+            failed_output == failed_destination,
+        "failed checked copy changed its destination");
+
   bool rejected_overflow = false;
   try {
     GuestMemory invalid(std::numeric_limits<std::uint64_t>::max() - 3, 8);
@@ -287,6 +323,11 @@ int main() {
     Check(host_mapped->Read(host_base, reused) &&
               reused == std::array<std::byte, 2>{},
           "host-mapped reuse exposed released bytes");
+    Check(host_mapped->Initialize(host_base, copy_input) &&
+              host_mapped->Copy(host_base + 4, host_base, 12) &&
+              host_mapped->Read(host_base, copy_output) &&
+              copy_output == forward_overlap,
+          "host-mapped checked copy lost overlapping bytes");
     const auto rejected_shared_backing =
         std::make_shared<kajps5::memory::SharedMemoryBacking>(0x4000);
     Check(!host_mapped->Map(host_base + 1, 0x1000,
@@ -324,6 +365,10 @@ int main() {
             shared.Read(0x17ffc, shared_output) &&
             shared_output == shared_input,
         "shared guest aliases lost a cross-page write");
+  Check(shared.Copy(0x18010, 0x7ffc, shared_input.size()) &&
+            shared.Read(0x8010, shared_output) &&
+            shared_output == shared_input,
+        "checked copy did not update a shared guest alias");
   Check(shared.Fill(0x18000, 0x4000, std::byte{0x5a}) &&
             shared.Read(0x8000, shared_output) &&
             std::all_of(shared_output.begin(), shared_output.end(),

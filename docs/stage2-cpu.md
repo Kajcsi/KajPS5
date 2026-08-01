@@ -22,7 +22,8 @@ The 2026-08-01 refresh also reviewed KytyPS5 commit
 `a65d17a5d689257a35644e01e9d15539361f0bf0`, especially its guest address-space
 ownership, rollback, program-memory, and writable host-patch tests. SharpEmu
 commit `7c9740fee8a633e17b145c6bc6d794e41d46c73f` adds a checked direct-memory-copy
-fast path that is recorded for the next HLE dispatch milestone.
+fast path. KajPS5 now applies that behavior to its single guest-memory owner
+and native HLE trampoline.
 
 The first KajPS5 boundary is small: allocate writable memory, copy at most
 4 KiB from a readable and executable guest range, then remove write access
@@ -47,8 +48,9 @@ code. This keeps optimized host callers intact even when guest code uses
 registers that are volatile on PS5.
 
 The executor is available only to tests. The host-mapped tests run a biased
-ELF, a code-to-data write, and a linked HLE call through one backing. The first
-ABI bridge captures the six
+ELF, a code-to-data write, a linked HLE call, and a direct checked `memcpy`
+import through one backing. The `memcpy` test also proves that a rejected fast
+copy returns to the full handler. The first ABI bridge captures the six
 System V integer registers, XMM0-XMM7, and a declared, bounded number of stack
 arguments. It returns `RAX` and optional XMM0-XMM1 values from the checked
 handler. It does not capture a full CPU context, faults, or timeouts. Until

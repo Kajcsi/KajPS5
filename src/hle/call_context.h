@@ -103,6 +103,9 @@ class HleCallContext final {
       std::uint64_t address, std::span<std::byte> value) const noexcept;
   [[nodiscard]] HleContextStatus WriteMemory(
       std::uint64_t address, std::span<const std::byte> value) noexcept;
+  [[nodiscard]] HleContextStatus CopyMemory(
+      std::uint64_t destination, std::uint64_t source,
+      std::uint64_t length) noexcept;
   [[nodiscard]] HleContextStatus FillMemory(
       std::uint64_t address, std::uint64_t length, std::byte value) noexcept;
   [[nodiscard]] bool CanReadMemory(std::uint64_t address,

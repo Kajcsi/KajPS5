@@ -14,6 +14,7 @@
 #include "cpu/native_leaf_executor.h"
 #include "hle/export_registry.h"
 #include "hle/import_registry.h"
+#include "hle/libc_exports.h"
 #include "loader/elf.h"
 #include "loader/relocator.h"
 
@@ -367,6 +368,87 @@ int main() {
               host_dispatch.handler_status == HleContextStatus::kOk &&
               host_dispatch.return_written && !host_dispatch.host_exception,
           "host-mapped guest did not call the checked HLE runtime");
+  }
+
+  auto copy_memory = GuestMemory::CreateHostMapped(0x10000);
+  Check(copy_memory != nullptr, "hot memory-copy allocation failed");
+  if (copy_memory) {
+    const auto code_address = copy_memory->base_address();
+    const auto source_address = code_address + 0x4000;
+    const auto destination_address = code_address + 0x8000;
+    const auto data_protection = GuestMemoryProtection::kRead |
+                                 GuestMemoryProtection::kWrite;
+    ExportRegistry copy_exports;
+    int fallback_calls = 0;
+    Check(copy_memory->Map(code_address, 0x1000,
+                           GuestMemoryProtection::kExecute) &&
+              copy_memory->Map(source_address, 0x1000, data_protection) &&
+              copy_memory->Map(destination_address, 0x1000,
+                               data_protection) &&
+              copy_exports.Register(
+                  kajps5::hle::kLibcName, kajps5::hle::kLibcMemcpyNid,
+                  [&fallback_calls](kajps5::hle::HleCallContext& context) {
+                    ++fallback_calls;
+                    context.SetReturn(context.Argument(0).value_or(0));
+                    return HleContextStatus::kMemoryFault;
+                  }) == ExportRegistryStatus::kOk,
+          "hot memory-copy setup failed");
+    NativeHleTrampoline copy_trampoline(
+        *copy_memory, copy_exports, kajps5::hle::kLibcMemcpyNid,
+        {kajps5::hle::kLibcName});
+    std::vector<std::byte> copy_code = {
+        std::byte{0x48}, std::byte{0xbf}, std::byte{0},    std::byte{0},
+        std::byte{0},    std::byte{0},    std::byte{0},    std::byte{0},
+        std::byte{0},    std::byte{0},    std::byte{0x48}, std::byte{0xbe},
+        std::byte{0},    std::byte{0},    std::byte{0},    std::byte{0},
+        std::byte{0},    std::byte{0},    std::byte{0},    std::byte{0},
+        std::byte{0x48}, std::byte{0xba}, std::byte{0},    std::byte{0},
+        std::byte{0},    std::byte{0},    std::byte{0},    std::byte{0},
+        std::byte{0},    std::byte{0},    std::byte{0x48}, std::byte{0x83},
+        std::byte{0xec}, std::byte{0x08}, std::byte{0x48}, std::byte{0xb8},
+        std::byte{0},    std::byte{0},    std::byte{0},    std::byte{0},
+        std::byte{0},    std::byte{0},    std::byte{0},    std::byte{0},
+        std::byte{0xff}, std::byte{0xd0}, std::byte{0x48}, std::byte{0x83},
+        std::byte{0xc4}, std::byte{0x08}, std::byte{0xc3}};
+    Write64(copy_code, 2, destination_address);
+    Write64(copy_code, 12, source_address);
+    Write64(copy_code, 22, 16);
+    Write64(copy_code, 36, copy_trampoline.address());
+    const std::array copy_input = {
+        std::byte{0x10}, std::byte{0x20}, std::byte{0x30}, std::byte{0x40},
+        std::byte{0x50}, std::byte{0x60}, std::byte{0x70}, std::byte{0x80},
+        std::byte{0x90}, std::byte{0xa0}, std::byte{0xb0}, std::byte{0xc0},
+        std::byte{0xd0}, std::byte{0xe0}, std::byte{0xf0}, std::byte{0xff}};
+    std::array<std::byte, copy_input.size()> copy_output{};
+    const auto copy_result =
+        copy_trampoline.status() == NativeHleTrampolineStatus::kOk &&
+                copy_memory->Initialize(source_address, copy_input) &&
+                copy_memory->Initialize(code_address, copy_code)
+            ? executor.Execute(*copy_memory, code_address, copy_code.size())
+            : kajps5::cpu::NativeExecutionResult{
+                  NativeExecutionStatus::kHostProtectionFailed, 0};
+    const auto copy_dispatch = copy_trampoline.last_dispatch();
+    Check(copy_result && copy_result.return_value == destination_address &&
+              copy_memory->Read(destination_address, copy_output) &&
+              copy_output == copy_input && fallback_calls == 0 &&
+              copy_dispatch.handler_status == HleContextStatus::kOk &&
+              copy_dispatch.return_written &&
+              copy_dispatch.library == kajps5::hle::kLibcName,
+          "hot memory-copy import did not use the direct checked path");
+
+    Write64(copy_code, 12, copy_memory->end_address() + 0x1000);
+    const auto rejected_copy =
+        copy_memory->Initialize(code_address, copy_code)
+            ? executor.Execute(*copy_memory, code_address, copy_code.size())
+            : kajps5::cpu::NativeExecutionResult{
+                  NativeExecutionStatus::kHostProtectionFailed, 0};
+    const auto rejected_dispatch = copy_trampoline.last_dispatch();
+    Check(rejected_copy &&
+              rejected_copy.return_value == destination_address &&
+              fallback_calls == 1 &&
+              rejected_dispatch.handler_status ==
+                  HleContextStatus::kMemoryFault,
+          "rejected hot memory copy did not use the checked fallback");
   }
   Check(kajps5::cpu::NativeHleTrampolineStatusName(
             NativeHleTrampolineStatus::kHostProtectionFailed) ==

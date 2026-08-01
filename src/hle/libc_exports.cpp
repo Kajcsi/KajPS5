@@ -31,7 +31,6 @@ constexpr std::uint64_t kGuardStateMask = 0xffff;
 constexpr std::int32_t kMaximumInitArgumentCount = 2;
 constexpr std::uint64_t kPosixEinval = 22;
 constexpr std::uint64_t kPosixEnomem = 12;
-constexpr std::size_t kMemoryCopyChunkBytes = 4096;
 constexpr std::size_t kMaximumLibcWideUnits = 1024 * 1024;
 
 bool IsPowerOfTwo(std::uint64_t value) noexcept {
@@ -327,25 +326,7 @@ HleContextStatus Memcpy(HleCallContext& context) {
   if (length == 0) {
     return HleContextStatus::kOk;
   }
-  if (!context.CanReadMemory(source, length) ||
-      !context.CanWriteMemory(destination, length)) {
-    return HleContextStatus::kMemoryFault;
-  }
-
-  std::array<std::byte, kMemoryCopyChunkBytes> bytes{};
-  std::uint64_t copied = 0;
-  while (copied < length) {
-    const auto chunk = static_cast<std::size_t>(std::min<std::uint64_t>(
-        bytes.size(), length - copied));
-    const auto view = std::span(bytes).first(chunk);
-    if (context.ReadMemory(source + copied, view) != HleContextStatus::kOk ||
-        context.WriteMemory(destination + copied, view) !=
-            HleContextStatus::kOk) {
-      return HleContextStatus::kMemoryFault;
-    }
-    copied += chunk;
-  }
-  return HleContextStatus::kOk;
+  return context.CopyMemory(destination, source, length);
 }
 
 HleContextStatus Memmove(HleCallContext& context) {
@@ -356,43 +337,7 @@ HleContextStatus Memmove(HleCallContext& context) {
   if (length == 0 || destination == source) {
     return HleContextStatus::kOk;
   }
-  if (!context.CanReadMemory(source, length) ||
-      !context.CanWriteMemory(destination, length)) {
-    return HleContextStatus::kMemoryFault;
-  }
-
-  std::array<std::byte, kMemoryCopyChunkBytes> bytes{};
-  if (destination > source && destination - source < length) {
-    auto remaining = length;
-    while (remaining != 0) {
-      const auto chunk = static_cast<std::size_t>(std::min<std::uint64_t>(
-          bytes.size(), remaining));
-      const auto offset = remaining - chunk;
-      const auto view = std::span(bytes).first(chunk);
-      if (context.ReadMemory(source + offset, view) !=
-              HleContextStatus::kOk ||
-          context.WriteMemory(destination + offset, view) !=
-              HleContextStatus::kOk) {
-        return HleContextStatus::kMemoryFault;
-      }
-      remaining = offset;
-    }
-    return HleContextStatus::kOk;
-  }
-
-  std::uint64_t copied = 0;
-  while (copied < length) {
-    const auto chunk = static_cast<std::size_t>(std::min<std::uint64_t>(
-        bytes.size(), length - copied));
-    const auto view = std::span(bytes).first(chunk);
-    if (context.ReadMemory(source + copied, view) != HleContextStatus::kOk ||
-        context.WriteMemory(destination + copied, view) !=
-            HleContextStatus::kOk) {
-      return HleContextStatus::kMemoryFault;
-    }
-    copied += chunk;
-  }
-  return HleContextStatus::kOk;
+  return context.CopyMemory(destination, source, length);
 }
 
 HleContextStatus Strcmp(HleCallContext& context) {

@@ -1,10 +1,12 @@
 // Copyright (C) 2026 KajPS5 contributors
 // Architecture reference: KytyPS5
+// Behavior reference: Copyright (C) 2026 SharpEmu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "core/memory/guest_memory.h"
 
 #include <algorithm>
+#include <array>
 #include <cstring>
 #include <limits>
 #include <new>
@@ -654,6 +656,60 @@ bool GuestMemory::Write(std::uint64_t address,
     return false;
   }
   return WriteBytes(address, source);
+}
+
+bool GuestMemory::Copy(std::uint64_t destination, std::uint64_t source,
+                       std::uint64_t length) noexcept {
+  if (!CanAccess(source, length, GuestMemoryProtection::kRead) ||
+      !CanAccess(destination, length, GuestMemoryProtection::kWrite)) {
+    return false;
+  }
+  if (length == 0 || destination == source) {
+    return true;
+  }
+
+  const auto byte_count = static_cast<std::size_t>(length);
+  if (host_mapped()) {
+    std::memmove(host_mapping_ + OffsetOf(destination),
+                 host_mapping_ + OffsetOf(source), byte_count);
+    return true;
+  }
+  if (shared_mappings_.empty()) {
+    std::memmove(bytes_.data() + OffsetOf(destination),
+                 bytes_.data() + OffsetOf(source), byte_count);
+    return true;
+  }
+
+  constexpr std::size_t kCopyChunkBytes = 4096;
+  std::array<std::byte, kCopyChunkBytes> bytes{};
+  if (destination > source && destination - source < length) {
+    auto remaining = length;
+    while (remaining != 0) {
+      const auto chunk = static_cast<std::size_t>(
+          std::min<std::uint64_t>(bytes.size(), remaining));
+      const auto offset = remaining - chunk;
+      const auto view = std::span(bytes).first(chunk);
+      if (!ReadBytes(source + offset, view) ||
+          !WriteBytes(destination + offset, view)) {
+        return false;
+      }
+      remaining = offset;
+    }
+    return true;
+  }
+
+  std::uint64_t copied = 0;
+  while (copied < length) {
+    const auto chunk = static_cast<std::size_t>(
+        std::min<std::uint64_t>(bytes.size(), length - copied));
+    const auto view = std::span(bytes).first(chunk);
+    if (!ReadBytes(source + copied, view) ||
+        !WriteBytes(destination + copied, view)) {
+      return false;
+    }
+    copied += chunk;
+  }
+  return true;
 }
 
 bool GuestMemory::Fill(std::uint64_t address, std::uint64_t length,

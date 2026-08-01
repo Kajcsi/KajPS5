@@ -47,11 +47,15 @@ Caller-owned mspaces use the same service but keep their own bounded free
 ranges and allocation records. Destroying an mspace does not unmap the memory
 that its caller supplied.
 
-Common `memcpy`, `memset`, and `strcmp` calls use whole-range guest-memory
-checks. Failed copies do not change the destination. Scalar libc math reads
-its System V inputs from XMM registers and returns results through XMM0. The
-C++ scalar allocation calls use the same checked libc heap. A stack-canary
-failure returns a fatal guest status instead of pretending that execution can
+Common `memcpy`, `memmove`, `memset`, and `strcmp` calls use whole-range
+guest-memory checks. Failed copies do not change the destination. Valid
+copies use the coherent guest backing directly, including overlapping ranges.
+The native HLE trampoline sends valid `memcpy` and `memmove` imports straight
+to this checked copy operation. A rejected fast copy returns to the normal HLE
+handler, so fault behavior does not change. Scalar libc math reads its System
+V inputs from XMM registers and returns results through XMM0. The C++ scalar
+allocation calls use the same checked libc heap. A stack-canary failure
+returns a fatal guest status instead of pretending that execution can
 continue.
 
 Libc string scans have a one-megabyte limit. `wcscmp` reads little-endian

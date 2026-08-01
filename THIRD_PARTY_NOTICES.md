@@ -230,6 +230,14 @@ KytyPS5's direct host-math bridge but uses KajPS5's checked XMM call context.
 C++ allocation remains inside the existing guest heap. No upstream handler
 source was copied.
 
+The checked `GuestMemory::Copy` operation and the native `memcpy` and
+`memmove` short path adapt behavior from SharpEmu
+`src/SharpEmu.Core/Cpu/Native/DirectExecutionBackend.Imports.cs` at commit
+`532251c0c39b976f1e5ce7058f3a563461fa9a07`. KajPS5 first checks complete
+source and destination ranges, then copies through its existing coherent C++
+guest-memory owner. A rejected short path uses the normal HLE handler. No
+SharpEmu source was copied verbatim.
+
 The bounded `strlen` and 16-bit `wcscmp` behavior also follows pinned
 SharpEmu `src/SharpEmu.Libs/Kernel/KernelMemoryCompatExports.cs`. The
 `sincos` and `sincosf` output rules follow pinned KytyPS5
@@ -253,8 +261,9 @@ KytyPS5 `src/common/virtualMemory.cpp` and the matching platform files. KajPS5
 currently captures the six System V integer registers and a declared, bounded
 number of stack arguments. It also transfers XMM0-XMM7 and optional XMM0-XMM1
 returns through an FXSAVE64 image. The Windows entry bridge preserves
-host-only nonvolatile state around the System V call. No upstream trampoline
-bytes or handler source were copied.
+host-only nonvolatile state around the System V call. Valid libc memory copies
+can bypass context and vector marshalling after library and symbol resolution.
+No upstream trampoline bytes or handler source were copied.
 
 The process-time handlers in `src/hle/kernel_clock_exports.cpp` and
 `tests/hle_kernel_clock_exports_test.cpp` adapt the matching process-time,
