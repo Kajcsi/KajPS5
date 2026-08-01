@@ -47,7 +47,9 @@ struct NativeHleImportTableResult {
 class NativeHleImportTable final : public loader::ImportResolver {
  public:
   NativeHleImportTable(memory::GuestMemory& memory,
-                       const hle::ExportRegistry& registry) noexcept;
+                       const hle::ExportRegistry& registry,
+                       NativeGuestExecutionContext* execution_context =
+                           nullptr) noexcept;
 
   [[nodiscard]] NativeHleImportTableResult Build(
       const loader::ElfMetadata& metadata,
@@ -65,6 +67,7 @@ class NativeHleImportTable final : public loader::ImportResolver {
 
   memory::GuestMemory& memory_;
   const hle::ExportRegistry& registry_;
+  NativeGuestExecutionContext* execution_context_ = nullptr;
   hle::ImportRegistry targets_;
   std::map<Key, std::unique_ptr<NativeHleTrampoline>> trampolines_;
   bool built_ = false;

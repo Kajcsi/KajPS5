@@ -14,13 +14,14 @@
 
 #include "core/memory/guest_memory.h"
 #include "cpu/host_executable_buffer.h"
+#include "cpu/native_guest_executor.h"
 #include "hle/call_context.h"
 #include "hle/libc_exports.h"
 
 namespace kajps5::cpu {
 namespace {
 
-constexpr std::size_t kNativeHleTrampolineBytes = 128;
+constexpr std::size_t kNativeHleTrampolineBytes = 256;
 constexpr std::size_t kFxSaveXmmOffset = 160;
 
 void Emit(std::vector<std::byte>& code,
@@ -51,6 +52,7 @@ struct NativeHleTrampoline::State {
   std::string resolved_library;
   std::vector<std::string> library_order;
   std::size_t stack_argument_count = 0;
+  NativeGuestExecutionContext* execution_context = nullptr;
   mutable std::mutex mutex;
   NativeHleDispatchSnapshot last_dispatch;
 };
@@ -58,13 +60,15 @@ struct NativeHleTrampoline::State {
 NativeHleTrampoline::NativeHleTrampoline(
     memory::GuestMemory& memory, const hle::ExportRegistry& registry,
     std::string symbol, std::vector<std::string> library_order,
-    std::size_t stack_argument_count)
+    std::size_t stack_argument_count,
+    NativeGuestExecutionContext* execution_context)
     : state_(std::make_unique<State>()) {
   state_->memory = &memory;
   state_->registry = &registry;
   state_->symbol = std::move(symbol);
   state_->library_order = std::move(library_order);
   state_->stack_argument_count = stack_argument_count;
+  state_->execution_context = execution_context;
   Build();
 }
 
@@ -216,7 +220,26 @@ void NativeHleTrampoline::Build() {
   Emit(code, {0x48, 0xb8});
   EmitUInt64(code, static_cast<std::uint64_t>(
                        reinterpret_cast<std::uintptr_t>(&Dispatch)));
-  Emit(code, {0xff, 0xd0});
+  if (state_->execution_context == nullptr) {
+    Emit(code, {0xff, 0xd0});
+  } else {
+    // SharpEmu's direct backend returns to the saved host stack before a host
+    // handler runs. Preserve the guest R12 and return to the guest stack after
+    // dispatch. An inactive context returns zero instead of changing RSP.
+    Emit(code, {0x41, 0x54, 0x49, 0x89, 0xe4, 0x49, 0xbb});
+    EmitUInt64(code, static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(
+                         &state_->execution_context->host_stack_pointer_)));
+    Emit(code, {0x4d, 0x8b, 0x1b, 0x4d, 0x85, 0xdb});
+    Emit(code, {0x75, 0x05, 0x45, 0x31, 0xd2});
+#if defined(_WIN32)
+    Emit(code, {0xeb, 0x0c, 0x4c, 0x89, 0xdc});
+    Emit(code, {0x48, 0x83, 0xec, 0x20});
+#else
+    Emit(code, {0xeb, 0x08, 0x4c, 0x89, 0xdc});
+#endif
+    Emit(code, {0xff, 0xd0, 0x49, 0x89, 0xc2});
+    Emit(code, {0x4c, 0x89, 0xe4, 0x41, 0x5c});
+  }
 #if defined(_WIN32)
   Emit(code, {0x48, 0x0f, 0xae, 0x4c, 0x24, 0x20});
   Emit(code, {0x48, 0x81, 0xc4, 0x28, 0x02, 0x00, 0x00});
@@ -224,6 +247,9 @@ void NativeHleTrampoline::Build() {
   Emit(code, {0x48, 0x0f, 0xae, 0x0c, 0x24});
   Emit(code, {0x48, 0x81, 0xc4, 0x08, 0x02, 0x00, 0x00});
 #endif
+  if (state_->execution_context != nullptr) {
+    Emit(code, {0x4c, 0x89, 0xd0});
+  }
   Emit(code, {0x48, 0x83, 0xc4, 0x30, 0xc3});
 
   code_ =

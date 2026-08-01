@@ -96,6 +96,15 @@ import-stub setup. Table construction is transactional: malformed metadata or
 a failed executable allocation leaves no callable entry. Duplicate relocation
 references share one trampoline.
 
+The native guest-entry bridge now uses KytyPS5's two-argument entry ABI, root
+frame, and separate guest stack. It checks the executable entry, full stack,
+and parameter block before changing RSP. A linked HLE trampoline follows
+SharpEmu's host-return design: it saves the guest call frame, runs the C++
+handler on the original host stack, then restores the guest frame and return
+register. An inactive execution context cannot switch stacks. Controlled tests
+cover direct return and linked HLE return. Fault containment and blocked-call
+continuation are still required before the command-line tool can run a title.
+
 Known runtime data never points into host memory. Startup maps one checked
 16 KiB guest page for the stack guard, process name, and two libc need flags.
 The four exact library and NID pairs come from KytyPS5. The bounded process

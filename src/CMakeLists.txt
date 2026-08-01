@@ -3,6 +3,7 @@ add_library(kajps5_core STATIC
   core/memory/shared_memory_backing.cpp
   core/project_info.cpp
   cpu/host_executable_buffer.cpp
+  cpu/native_guest_executor.cpp
   cpu/native_hle_import_table.cpp
   cpu/native_hle_trampoline.cpp
   cpu/native_leaf_executor.cpp

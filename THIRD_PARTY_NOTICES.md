@@ -275,6 +275,15 @@ commit. KajPS5 keeps the table inside its C++ runtime, resolves only registered
 library and NID pairs, and layers guest data symbols below function targets.
 No upstream trampoline bytes, table source, or handler source were copied.
 
+The guest-entry bridge in `src/cpu/native_guest_executor.cpp` adapts the entry
+parameter layout, root frame, guest-stack switch, and host-state preservation
+from KytyPS5 `src/loader/runtimeLinker.cpp` at commit
+`a65d17a5d689257a35644e01e9d15539361f0bf0`. The HLE trampoline's saved host
+stack follows SharpEmu `src/SharpEmu.Core/Cpu/Native/DirectExecutionBackend.cs`
+at commit `7c9740fee8a633e17b145c6bc6d794e41d46c73f`. KajPS5 implements a small C++
+execution context and checked guest-memory boundary. No upstream bridge or
+trampoline bytes were copied.
+
 The process-time handlers in `src/hle/kernel_clock_exports.cpp` and
 `tests/hle_kernel_clock_exports_test.cpp` adapt the matching process-time,
 counter, and frequency behavior from the pinned KytyPS5

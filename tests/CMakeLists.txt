@@ -93,6 +93,14 @@ kajps5_deploy_msvc_asan_runtime(kajps5_native_leaf_executor_test)
 add_test(NAME kajps5_native_leaf_executor
          COMMAND kajps5_native_leaf_executor_test)
 
+add_executable(kajps5_native_guest_executor_test
+               native_guest_executor_test.cpp)
+target_link_libraries(kajps5_native_guest_executor_test PRIVATE kajps5_core)
+kajps5_deploy_msvc_asan_runtime(kajps5_native_guest_executor_test)
+
+add_test(NAME kajps5_native_guest_executor
+         COMMAND kajps5_native_guest_executor_test)
+
 add_executable(kajps5_hle_import_registry_test hle_import_registry_test.cpp)
 target_link_libraries(kajps5_hle_import_registry_test PRIVATE kajps5_core)
 kajps5_deploy_msvc_asan_runtime(kajps5_hle_import_registry_test)

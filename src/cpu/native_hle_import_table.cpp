@@ -13,8 +13,11 @@
 namespace kajps5::cpu {
 
 NativeHleImportTable::NativeHleImportTable(
-    memory::GuestMemory& memory, const hle::ExportRegistry& registry) noexcept
-    : memory_(memory), registry_(registry) {}
+    memory::GuestMemory& memory, const hle::ExportRegistry& registry,
+    NativeGuestExecutionContext* execution_context) noexcept
+    : memory_(memory),
+      registry_(registry),
+      execution_context_(execution_context) {}
 
 NativeHleImportTableResult NativeHleImportTable::Build(
     const loader::ElfMetadata& metadata, std::size_t stack_argument_count) {
@@ -69,7 +72,7 @@ NativeHleImportTableResult NativeHleImportTable::Build(
 
     auto trampoline = std::make_unique<NativeHleTrampoline>(
         memory_, registry_, key.second, std::vector<std::string>{key.first},
-        stack_argument_count);
+        stack_argument_count, execution_context_);
     if (trampoline->status() != NativeHleTrampolineStatus::kOk) {
       result.status = NativeHleImportTableStatus::kTrampolineBuildFailed;
       result.trampoline_status = trampoline->status();

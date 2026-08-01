@@ -83,6 +83,8 @@
       trampoline.
 - [x] Capture XMM arguments and return XMM0-XMM1 through native HLE.
 - [x] Share one host-mapped backing between native guest code and checked HLE.
+- [x] Run a checked guest entry on its guest stack and return HLE work to the
+      saved host stack.
 - [x] Build and own native HLE trampolines for all resolved executable imports.
 - Expand thread, event, file, and time coverage as their HLE bridges grow.
 - Compare small, repeatable traces with both upstream projects.

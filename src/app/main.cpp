@@ -15,6 +15,7 @@
 
 #include "core/memory/guest_memory.h"
 #include "core/project_info.h"
+#include "cpu/native_guest_executor.h"
 #include "cpu/native_hle_import_table.h"
 #include "hle/data_symbols.h"
 #include "hle/export_registry.h"
@@ -217,7 +218,9 @@ int TraceExecutableFile(const char* path) {
       return 7;
     }
 
-    kajps5::cpu::NativeHleImportTable hle_functions(memory, hle_exports);
+    kajps5::cpu::NativeGuestExecutionContext execution_context;
+    kajps5::cpu::NativeHleImportTable hle_functions(
+        memory, hle_exports, &execution_context);
     const auto function_status = hle_functions.Build(
         loaded.metadata, kajps5::hle::kMaximumCapturedHleStackArguments);
     std::cout << "hle.trampolines.status="

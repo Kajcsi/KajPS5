@@ -20,6 +20,8 @@ class GuestMemory;
 
 namespace kajps5::cpu {
 
+class NativeGuestExecutionContext;
+
 enum class NativeHleTrampolineStatus {
   kOk,
   kUnsupportedHost,
@@ -46,7 +48,8 @@ class NativeHleTrampoline final {
                       const hle::ExportRegistry& registry,
                       std::string symbol,
                       std::vector<std::string> library_order,
-                      std::size_t stack_argument_count = 0);
+                      std::size_t stack_argument_count = 0,
+                      NativeGuestExecutionContext* execution_context = nullptr);
   ~NativeHleTrampoline();
 
   NativeHleTrampoline(const NativeHleTrampoline&) = delete;
