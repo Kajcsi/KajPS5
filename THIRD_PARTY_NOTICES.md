@@ -335,6 +335,9 @@ V integer argument registers. This supports KytyPS5's three-argument module
 initializer ABI and SharpEmu's zeroed module frame without another executor.
 General guest functions also use the existing guest scheduler, continuation
 state, and guarded stack ownership.
+The checked process startup sequence adapts KytyPS5's module initializer call
+order and SharpEmu's stop-on-failure behavior. It keeps initializer work in the
+same scheduler lane and creates the main thread only after startup succeeds.
 
 The process-time handlers in `src/hle/kernel_clock_exports.cpp` and
 `tests/hle_kernel_clock_exports_test.cpp` adapt the matching process-time,
