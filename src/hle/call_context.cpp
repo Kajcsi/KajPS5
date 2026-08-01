@@ -153,6 +153,12 @@ bool HleCallContext::return_written() const noexcept {
   return return_written_;
 }
 
+void HleCallContext::RequestYield() noexcept { yield_requested_ = true; }
+
+bool HleCallContext::yield_requested() const noexcept {
+  return yield_requested_;
+}
+
 HleContextStatus HleCallContext::ReadUInt32(
     std::uint64_t address, std::uint32_t& value) const noexcept {
   std::array<std::byte, sizeof(value)> bytes{};

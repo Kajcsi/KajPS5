@@ -165,7 +165,14 @@ std::uint64_t NativeHleTrampoline::Dispatch(
           result.status == hle::ExportRegistryStatus::kOk
               ? result.handler_status
               : hle::HleContextStatus::kInvalidArgument;
-      if (execution_context->hle_status_ == hle::HleContextStatus::kBlocked) {
+      const auto blocked =
+          execution_context->hle_status_ == hle::HleContextStatus::kBlocked;
+      const auto yielded =
+          execution_context->hle_status_ == hle::HleContextStatus::kOk &&
+          context.yield_requested();
+      if (blocked || yielded) {
+        execution_context->retry_hle_on_resume_ = blocked;
+        execution_context->completed_hle_return_value_ = return_value;
         execution_context->resume_hle_dispatch_ = &Dispatch;
         execution_context->resume_hle_state_ = state;
         execution_context->resume_arguments_ = arguments;
@@ -178,7 +185,8 @@ std::uint64_t NativeHleTrampoline::Dispatch(
         std::memcpy(execution_context->floating_state_.data(), floating_state,
                     execution_context->floating_state_.size());
         execution_context->control_request_ =
-            NativeGuestExecutionContext::kControlBlocked;
+            blocked ? NativeGuestExecutionContext::kControlBlocked
+                    : NativeGuestExecutionContext::kControlYielded;
       } else if (execution_context->hle_status_ != hle::HleContextStatus::kOk) {
         execution_context->control_request_ =
             NativeGuestExecutionContext::kControlStopped;

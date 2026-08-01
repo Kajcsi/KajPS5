@@ -90,6 +90,8 @@ class HleCallContext final {
 
   void SetReturn(std::uint64_t value) noexcept;
   [[nodiscard]] bool return_written() const noexcept;
+  void RequestYield() noexcept;
+  [[nodiscard]] bool yield_requested() const noexcept;
 
   [[nodiscard]] HleContextStatus ReadUInt32(
       std::uint64_t address, std::uint32_t& value) const noexcept;
@@ -150,6 +152,7 @@ class HleCallContext final {
   std::array<HleVectorValue, kHleVectorReturnRegisterCount> vector_returns_{};
   std::array<bool, kHleVectorReturnRegisterCount> vector_return_written_{};
   bool return_written_ = false;
+  bool yield_requested_ = false;
 };
 
 [[nodiscard]] std::string_view HleContextStatusName(

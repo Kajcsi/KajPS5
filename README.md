@@ -70,7 +70,8 @@ The current core includes:
   its guest continuation and returns control to the scheduler. The shared HLE
   table and execution lane can run another selected thread. After the first
   thread wakes, the handler is retried and guest code resumes with its final
-  return value.
+  return value. A cooperative yield uses the same continuation path but does
+  not call the completed handler twice.
 - Small public and generated test fixtures, including an ELF that loads
   without running guest code and controlled x86-64 leaf programs used only by
   tests.

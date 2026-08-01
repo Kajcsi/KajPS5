@@ -113,6 +113,9 @@ After the first thread wakes and is selected again, the executor retries the
 handler and resumes after the import with its final return value. A
 continuation is bound to its original guest-memory owner. Controlled tests
 cover this full block, park, interleave, wake, retry, and resume sequence.
+Cooperative pthread yield uses the same saved continuation. It runs the next
+ready scheduler thread and resumes after the completed yield import without
+calling that handler a second time.
 Portable fault containment and a multi-thread execution loop are still
 required before the command-line tool can run a title.
 

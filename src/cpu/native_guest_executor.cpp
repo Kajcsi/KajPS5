@@ -27,6 +27,7 @@ constexpr std::uint64_t kGuestRootFrameSize = 32;
 constexpr std::uint64_t kStackAlignment = 16;
 constexpr std::uint64_t kNativeControlNone = 0;
 constexpr std::uint64_t kNativeControlBlocked = 1;
+constexpr std::uint64_t kNativeControlYielded = 3;
 
 #if defined(_WIN32)
 
@@ -123,6 +124,8 @@ NativeGuestExecutionResult ControlResult(
   result.hle_status = hle_status;
   if (control_request == kNativeControlBlocked) {
     result.status = NativeGuestExecutionStatus::kHleBlocked;
+  } else if (control_request == kNativeControlYielded) {
+    result.status = NativeGuestExecutionStatus::kHleYielded;
   } else if (hle_status == hle::HleContextStatus::kGuestExit) {
     result.status = NativeGuestExecutionStatus::kGuestExit;
   } else {
@@ -419,7 +422,8 @@ NativeGuestExecutionResult NativeGuestExecutor::Execute(
   const auto result =
       RunGuestEntry(memory, entry_point, stack_top, root_frame,
                     parameters_address, exit_handler_address, *context);
-  if (result.status != NativeGuestExecutionStatus::kHleBlocked) {
+  if (result.status != NativeGuestExecutionStatus::kHleBlocked &&
+      result.status != NativeGuestExecutionStatus::kHleYielded) {
     ResetExecutionContext(*context);
   }
   return result;
@@ -466,17 +470,22 @@ NativeGuestExecutionResult NativeGuestExecutor::Resume(
   execution_context.control_request_ =
       NativeGuestExecutionContext::kControlNone;
   execution_context.hle_status_ = hle::HleContextStatus::kOk;
-  execution_context.retrying_hle_dispatch_ = true;
-  const auto hle_return = execution_context.resume_hle_dispatch_(
-      execution_context.resume_hle_state_, execution_context.resume_arguments_,
-      execution_context.floating_state_.data(),
-      execution_context.nonvolatile_registers_.data());
-  execution_context.retrying_hle_dispatch_ = false;
+  auto hle_return = execution_context.completed_hle_return_value_;
+  if (execution_context.retry_hle_on_resume_) {
+    execution_context.retrying_hle_dispatch_ = true;
+    hle_return = execution_context.resume_hle_dispatch_(
+        execution_context.resume_hle_state_,
+        execution_context.resume_arguments_,
+        execution_context.floating_state_.data(),
+        execution_context.nonvolatile_registers_.data());
+    execution_context.retrying_hle_dispatch_ = false;
+  }
   if (execution_context.control_request_ !=
       NativeGuestExecutionContext::kControlNone) {
     const auto result = ControlResult(execution_context.control_request_,
                                       execution_context.hle_status_);
-    if (result.status != NativeGuestExecutionStatus::kHleBlocked) {
+    if (result.status != NativeGuestExecutionStatus::kHleBlocked &&
+        result.status != NativeGuestExecutionStatus::kHleYielded) {
       ResetExecutionContext(execution_context);
     }
     return result;
@@ -484,7 +493,8 @@ NativeGuestExecutionResult NativeGuestExecutor::Resume(
 
   const auto result =
       RunGuestContinuation(memory, execution_context, hle_return);
-  if (result.status != NativeGuestExecutionStatus::kHleBlocked) {
+  if (result.status != NativeGuestExecutionStatus::kHleBlocked &&
+      result.status != NativeGuestExecutionStatus::kHleYielded) {
     ResetExecutionContext(execution_context);
   }
   return result;
@@ -506,6 +516,10 @@ NativeGuestExecutionResult NativeGuestExecutor::Resume(
   execution_context.control_request_ =
       NativeGuestExecutionContext::kControlBlocked;
   execution_context.hle_status_ = continuation.hle_status_;
+  execution_context.retry_hle_on_resume_ =
+      continuation.retry_hle_on_resume_ != 0;
+  execution_context.completed_hle_return_value_ =
+      continuation.completed_hle_return_value_;
   execution_context.resume_hle_dispatch_ = continuation.resume_hle_dispatch_;
   execution_context.resume_hle_state_ = continuation.resume_hle_state_;
   execution_context.resume_arguments_ = continuation.resume_arguments_;
@@ -531,6 +545,10 @@ bool NativeGuestExecutor::TakeContinuation(
 
   continuation.valid_ = true;
   continuation.hle_status_ = execution_context.hle_status_;
+  continuation.retry_hle_on_resume_ =
+      execution_context.retry_hle_on_resume_ ? 1 : 0;
+  continuation.completed_hle_return_value_ =
+      execution_context.completed_hle_return_value_;
   continuation.resume_hle_dispatch_ = execution_context.resume_hle_dispatch_;
   continuation.resume_hle_state_ = execution_context.resume_hle_state_;
   continuation.resume_arguments_ = execution_context.resume_arguments_;
@@ -599,6 +617,8 @@ void NativeGuestExecutor::ResetExecutionContext(
       NativeGuestExecutionContext::kControlNone;
   execution_context.retrying_hle_dispatch_ = false;
   execution_context.hle_status_ = hle::HleContextStatus::kOk;
+  execution_context.retry_hle_on_resume_ = true;
+  execution_context.completed_hle_return_value_ = 0;
   execution_context.resume_hle_dispatch_ = nullptr;
   execution_context.resume_hle_state_ = nullptr;
   execution_context.resume_arguments_ = nullptr;
@@ -615,6 +635,8 @@ void NativeGuestExecutor::ResetContinuation(
     NativeGuestContinuation& continuation) noexcept {
   continuation.valid_ = false;
   continuation.hle_status_ = hle::HleContextStatus::kOk;
+  continuation.retry_hle_on_resume_ = 1;
+  continuation.completed_hle_return_value_ = 0;
   continuation.resume_hle_dispatch_ = nullptr;
   continuation.resume_hle_state_ = nullptr;
   continuation.resume_arguments_ = nullptr;
@@ -654,6 +676,8 @@ std::string_view NativeGuestExecutionStatusName(
       return "guest-fault";
     case NativeGuestExecutionStatus::kHleBlocked:
       return "hle-blocked";
+    case NativeGuestExecutionStatus::kHleYielded:
+      return "hle-yielded";
     case NativeGuestExecutionStatus::kHleDispatchFailed:
       return "hle-dispatch-failed";
     case NativeGuestExecutionStatus::kGuestExit:

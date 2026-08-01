@@ -91,6 +91,8 @@
       wakes its guest thread.
 - [x] Park a blocked continuation so the shared native lane can run another
       selected guest thread.
+- [x] Return a native pthread yield to the scheduler and resume it without a
+      second HLE dispatch.
 - [x] Build and own native HLE trampolines for all resolved executable imports.
 - Expand thread, event, file, and time coverage as their HLE bridges grow.
 - Compare small, repeatable traces with both upstream projects.

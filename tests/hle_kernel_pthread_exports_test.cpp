@@ -185,6 +185,7 @@ int main() {
 
   HleCallContext yield(memory);
   Check(Dispatch(registry, kajps5::hle::kPosixPthreadYieldNid, yield) == 0 &&
+            yield.yield_requested() &&
             runtime.scheduler().SelectNext() == worker_thread.handle,
         "pthread_yield did not return control to the guest scheduler");
   HleCallContext get_worker_value(memory);

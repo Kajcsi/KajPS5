@@ -88,7 +88,9 @@ HleContextStatus PthreadEqual(HleCallContext& context) {
 
 HleContextStatus PthreadYield(HleCallContext& context,
                               kernel::GuestScheduler& scheduler) {
-  (void)scheduler.YieldCurrent();
+  if (scheduler.YieldCurrent()) {
+    context.RequestYield();
+  }
   context.SetReturn(0);
   return HleContextStatus::kOk;
 }

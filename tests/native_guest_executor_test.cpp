@@ -91,6 +91,7 @@ int main() {
   const auto memory_fault_code_address = base + 0x200;
   const auto instruction_fault_code_address = base + 0x220;
   const auto blocked_hle_code_address = base + 0x300;
+  const auto yielded_hle_code_address = base + 0x500;
   const auto stack_address = base + 0x4000;
   const auto stack_size = std::uint64_t{0x4000};
   const auto parameters_address = stack_address + 0x100;
@@ -117,6 +118,7 @@ int main() {
   kajps5::kernel::GuestScheduler scheduler(handles, clock);
   auto nested_status = NativeGuestExecutionStatus::kOk;
   std::size_t blocking_dispatch_count = 0;
+  std::size_t yielding_dispatch_count = 0;
   ExportRegistry registry;
   Check(registry.Register(
             "libTest", "addOne",
@@ -149,6 +151,17 @@ int main() {
               return HleContextStatus::kOk;
             }) == ExportRegistryStatus::kOk,
         "blocking HLE handler registration failed");
+  Check(registry.Register("libTest", "yieldOnce",
+                          [&](kajps5::hle::HleCallContext& call_context) {
+                            ++yielding_dispatch_count;
+                            if (!scheduler.YieldCurrent()) {
+                              return HleContextStatus::kInvalidArgument;
+                            }
+                            call_context.RequestYield();
+                            call_context.SetReturn(0x33);
+                            return HleContextStatus::kOk;
+                          }) == ExportRegistryStatus::kOk,
+        "yielding HLE handler registration failed");
   kajps5::cpu::NativeHleTrampoline trampoline(
       *memory, registry, "addOne", std::vector<std::string>{"libTest"}, 0,
       &execution_context);
@@ -160,6 +173,12 @@ int main() {
   Check(blocking_trampoline.status() ==
             kajps5::cpu::NativeHleTrampolineStatus::kOk,
         "blocking HLE trampoline creation failed");
+  kajps5::cpu::NativeHleTrampoline yielding_trampoline(
+      *memory, registry, "yieldOnce", std::vector<std::string>{"libTest"}, 0,
+      &execution_context);
+  Check(yielding_trampoline.status() ==
+            kajps5::cpu::NativeHleTrampolineStatus::kOk,
+        "yielding HLE trampoline creation failed");
   using RawTrampoline = std::uint64_t (*)();
   Check(reinterpret_cast<RawTrampoline>(
             static_cast<std::uintptr_t>(trampoline.address()))() == 0,
@@ -237,6 +256,14 @@ int main() {
        std::byte{0x01}, std::byte{0xc8}});
   blocked_hle_entry.push_back(std::byte{0xc3});
 
+  std::vector<std::byte> yielded_hle_entry = {std::byte{0x48}, std::byte{0xb8}};
+  AppendUInt64(yielded_hle_entry, yielding_trampoline.address());
+  yielded_hle_entry.insert(
+      yielded_hle_entry.end(),
+      {std::byte{0x48}, std::byte{0x83}, std::byte{0xec}, std::byte{0x08},
+       std::byte{0xff}, std::byte{0xd0}, std::byte{0x48}, std::byte{0x83},
+       std::byte{0xc4}, std::byte{0x08}, std::byte{0xc3}});
+
   const std::array<std::byte, 14> memory_fault_entry = {
       std::byte{0x48}, std::byte{0xb8}, std::byte{0x01}, std::byte{0x00},
       std::byte{0x00}, std::byte{0x00}, std::byte{0x00}, std::byte{0x00},
@@ -251,6 +278,7 @@ int main() {
             memory->Initialize(instruction_fault_code_address,
                                instruction_fault_entry) &&
             memory->Initialize(blocked_hle_code_address, blocked_hle_entry) &&
+            memory->Initialize(yielded_hle_code_address, yielded_hle_entry) &&
             memory->Protect(
                 code_address, 0x1000,
                 GuestMemoryProtection::kRead | GuestMemoryProtection::kExecute),
@@ -332,6 +360,36 @@ int main() {
         "completed guest continuation resumed twice");
   Check(scheduler.ExitCurrent(resumed.return_value),
         "resumed native guest thread did not exit cleanly");
+
+  const auto yielding_thread = scheduler.CreateThread("native-yield", 0);
+  const auto peer_thread = scheduler.CreateThread("native-peer", 0);
+  Check(yielding_thread && peer_thread &&
+            scheduler.SelectNext() == yielding_thread.handle,
+        "native yield test threads did not start");
+  const auto yielded =
+      executor.Execute(*memory, yielded_hle_code_address, stack_address,
+                       stack_size, parameters_address, 0, &execution_context);
+  kajps5::cpu::NativeGuestContinuation yielded_continuation;
+  Check(
+      yielded.status == NativeGuestExecutionStatus::kHleYielded &&
+          NativeGuestExecutionStatusName(yielded.status) == "hle-yielded" &&
+          executor.TakeContinuation(execution_context, yielded_continuation) &&
+          scheduler.SelectNext() == peer_thread.handle,
+      "yielding HLE call did not return to the guest scheduler");
+  const auto peer_result = executor.Execute(
+      *memory, code_address, worker_stack_address, worker_stack_size,
+      worker_parameters_address, 0, &execution_context);
+  Check(peer_result.status == NativeGuestExecutionStatus::kOk &&
+            scheduler.ExitCurrent(peer_result.return_value) &&
+            scheduler.SelectNext() == yielding_thread.handle,
+        "native peer thread did not run between yield and resume");
+  const auto yield_resumed =
+      executor.Resume(*memory, yielded_continuation, execution_context);
+  Check(yield_resumed.status == NativeGuestExecutionStatus::kOk &&
+            yield_resumed.return_value == 0x33 &&
+            yielding_dispatch_count == 1 &&
+            scheduler.ExitCurrent(yield_resumed.return_value),
+        "yielded HLE call was dispatched twice or did not resume");
 
 #if defined(_WIN32)
   const auto memory_fault =

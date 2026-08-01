@@ -38,6 +38,8 @@ class NativeGuestContinuation final {
 
   std::uint64_t valid_ = 0;
   hle::HleContextStatus hle_status_ = hle::HleContextStatus::kOk;
+  std::uint64_t retry_hle_on_resume_ = 1;
+  std::uint64_t completed_hle_return_value_ = 0;
   ResumeHleDispatch resume_hle_dispatch_ = nullptr;
   void* resume_hle_state_ = nullptr;
   const std::uint64_t* resume_arguments_ = nullptr;
@@ -64,7 +66,8 @@ class NativeGuestExecutionContext final {
     return host_stack_pointer_ != 0;
   }
   [[nodiscard]] bool suspended() const noexcept {
-    return control_request_ == kControlBlocked;
+    return control_request_ == kControlBlocked ||
+           control_request_ == kControlYielded;
   }
 
  private:
@@ -78,12 +81,15 @@ class NativeGuestExecutionContext final {
   static constexpr std::uint64_t kControlNone = 0;
   static constexpr std::uint64_t kControlBlocked = 1;
   static constexpr std::uint64_t kControlStopped = 2;
+  static constexpr std::uint64_t kControlYielded = 3;
 
   volatile std::uint64_t host_stack_pointer_ = 0;
   volatile std::uint64_t recovery_address_ = 0;
   volatile std::uint64_t control_request_ = kControlNone;
   bool retrying_hle_dispatch_ = false;
   hle::HleContextStatus hle_status_ = hle::HleContextStatus::kOk;
+  bool retry_hle_on_resume_ = true;
+  std::uint64_t completed_hle_return_value_ = 0;
   ResumeHleDispatch resume_hle_dispatch_ = nullptr;
   void* resume_hle_state_ = nullptr;
   const std::uint64_t* resume_arguments_ = nullptr;
@@ -117,6 +123,7 @@ enum class NativeGuestExecutionStatus {
   kGuestInstructionFault,
   kGuestFault,
   kHleBlocked,
+  kHleYielded,
   kHleDispatchFailed,
   kGuestExit,
   kHostAllocationFailed,

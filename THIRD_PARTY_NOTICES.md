@@ -305,6 +305,13 @@ in a checked C++ record, parks it per guest thread, and reuses its existing
 scheduler and shared native execution lane. No upstream continuation or
 trampoline source was copied.
 
+The cooperative native-yield control path also adapts SharpEmu's active guest
+yield request and return-to-host behavior in
+`src/SharpEmu.Core/Cpu/Native/DirectExecutionBackend.cs` and
+`src/SharpEmu.Core/Cpu/Native/DirectExecutionBackend.Imports.cs` at the same
+commit. KajPS5 records the completed HLE return and resumes it without a
+second dispatch. No upstream yield source or stub bytes were copied.
+
 The process-time handlers in `src/hle/kernel_clock_exports.cpp` and
 `tests/hle_kernel_clock_exports_test.cpp` adapt the matching process-time,
 counter, and frequency behavior from the pinned KytyPS5
