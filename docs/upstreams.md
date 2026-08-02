@@ -4,7 +4,7 @@ KajPS5 uses these independent projects as references:
 
 | Project | Role | Language | License | Pinned commit |
 | --- | --- | --- | --- | --- |
-| [KytyPS5](https://github.com/KytyPS5/KytyPS5) | Primary native architecture reference | C++ | GPL-2.0-only, with original Kyty portions under MIT | `a65d17a5d689257a35644e01e9d15539361f0bf0` |
+| [KytyPS5](https://github.com/KytyPS5/KytyPS5) | Primary native architecture reference | C++ | GPL-2.0-only, with original Kyty portions under MIT | `59b8fad34189816137c5cbe1982e9fd499532b6f` |
 | [SharpEmu](https://github.com/sharpemu/sharpemu) | Behavior and test reference | C# | GPL-2.0-or-later | `5ee7cd1dfafdeb0ce0e458a365692df4b2e1c445` |
 
 The AGC command-buffer core closely adapts selected KytyPS5 algorithms. Other
@@ -36,6 +36,21 @@ and KajPS5 validation. Update `THIRD_PARTY_NOTICES.md` when the referenced or
 adapted paths change.
 
 ## Refresh record
+
+### 2026-08-02
+
+- KytyPS5 moved from `a65d17a5d689257a35644e01e9d15539361f0bf0`
+  to `59b8fad34189816137c5cbe1982e9fd499532b6f`. The review covered all 23
+  commits and the complete changed-path list. The current M7 work uses the
+  loop-control, loop-normalization, and shared-exit corrections in
+  `src/graphics/shader/recompiler/cfg/ShaderCFG.cpp` and
+  `tests/shaderCfgTests.cpp`. The packed 10-10-10-2 format addition is also
+  covered by the new IR test. Renderer, audio, loader, kernel, and AGC changes
+  remain recorded for their later milestones; this change does not import
+  those owners.
+- Validation: all 65 tests passed in Windows Debug, Release, and AddressSanitizer
+  builds. Gitleaks, actionlint, upstream-pin, commit-email, tracked-AGENTS,
+  repository-privacy, and diff checks passed.
 
 ### 2026-08-01
 

@@ -10,13 +10,28 @@ add_library(kajps5_core STATIC
   cpu/native_hle_trampoline.cpp
   cpu/native_leaf_executor.cpp
   gpu/command_processor.cpp
+  gpu/format.cpp
   gpu/runtime.cpp
+  gpu/shader/recompiler/cfg/ShaderCFG.cpp
   gpu/shader/recompiler/decompiler/ExportOps.cpp
   gpu/shader/recompiler/decompiler/ImageOps.cpp
   gpu/shader/recompiler/decompiler/MemoryOps.cpp
   gpu/shader/recompiler/decompiler/ScalarAluOps.cpp
   gpu/shader/recompiler/decompiler/ShaderDecoder.cpp
   gpu/shader/recompiler/decompiler/VectorAluOps.cpp
+  gpu/shader/recompiler/ExecMask.cpp
+  gpu/shader/recompiler/ir/BindingLayout.cpp
+  gpu/shader/recompiler/ir/ReadLaneElimination.cpp
+  gpu/shader/recompiler/ir/ResourceMaterialization.cpp
+  gpu/shader/recompiler/ir/ResourceTracking.cpp
+  gpu/shader/recompiler/ir/ScalarProvenance.cpp
+  gpu/shader/recompiler/ir/ShaderIR.cpp
+  gpu/shader/recompiler/ir/ShaderInfoCollection.cpp
+  gpu/shader/recompiler/ir/ShaderIRLog.cpp
+  gpu/shader/recompiler/ir/ShaderIRMemory.cpp
+  gpu/shader/recompiler/ir/ShaderIROpcodes.cpp
+  gpu/shader/recompiler/ir/SrtPatcher.cpp
+  gpu/shader/recompiler/ir/SrtWalker.cpp
   gpu/shader/spirv_builder.cpp
   gpu/submission_queue.cpp
   hle/agc_exports.cpp

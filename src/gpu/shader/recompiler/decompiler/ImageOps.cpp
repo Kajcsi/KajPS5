@@ -1,6 +1,6 @@
 // Adapted from KytyPS5
 // src/graphics/shader/recompiler/decompiler/ImageOps.cpp at
-// a65d17a5d689257a35644e01e9d15539361f0bf0.
+// 59b8fad34189816137c5cbe1982e9fd499532b6f.
 // SPDX-License-Identifier: GPL-2.0-only
 
 #include "gpu/shader/recompiler/decompiler/ImageOps.h"
@@ -40,9 +40,9 @@ constexpr ImageDimension DecodeImageDimension(uint32_t dim) {
 		case 2u: return ImageDimension::Dim3D;
 		case 3u: return ImageDimension::Dim2DArray;
 		case 4u: return ImageDimension::Dim1DArray;
-		case 5u:
-		case 7u: return ImageDimension::Dim2DArray;
-		case 6u: return ImageDimension::Dim2D;
+		case 5u: return ImageDimension::Dim2DArray;
+		case 6u: return ImageDimension::Dim2DMsaa;
+		case 7u: return ImageDimension::Dim2DMsaaArray;
 		default: return ImageDimension::Unknown;
 	}
 }
@@ -51,8 +51,10 @@ constexpr uint32_t ImageCoordComponents(ImageDimension dimension) {
 	switch (dimension) {
 		case ImageDimension::Dim1D: return 1u;
 		case ImageDimension::Dim1DArray: return 2u;
+		case ImageDimension::Dim2DMsaa:
 		case ImageDimension::Dim3D:
 		case ImageDimension::Dim2DArray: return 3u;
+		case ImageDimension::Dim2DMsaaArray: return 4u;
 		default: return 2u;
 	}
 }

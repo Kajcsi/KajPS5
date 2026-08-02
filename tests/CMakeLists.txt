@@ -345,6 +345,18 @@ kajps5_deploy_msvc_asan_runtime(kajps5_gpu_shader_decoder_test)
 
 add_test(NAME kajps5_gpu_shader_decoder COMMAND kajps5_gpu_shader_decoder_test)
 
+add_executable(kajps5_gpu_shader_cfg_test gpu_shader_cfg_test.cpp)
+target_link_libraries(kajps5_gpu_shader_cfg_test PRIVATE kajps5_core)
+kajps5_deploy_msvc_asan_runtime(kajps5_gpu_shader_cfg_test)
+
+add_test(NAME kajps5_gpu_shader_cfg COMMAND kajps5_gpu_shader_cfg_test)
+
+add_executable(kajps5_gpu_shader_ir_test gpu_shader_ir_test.cpp)
+target_link_libraries(kajps5_gpu_shader_ir_test PRIVATE kajps5_core)
+kajps5_deploy_msvc_asan_runtime(kajps5_gpu_shader_ir_test)
+
+add_test(NAME kajps5_gpu_shader_ir COMMAND kajps5_gpu_shader_ir_test)
+
 add_executable(kajps5_relocation_trace_test relocation_trace_test.cpp)
 target_link_libraries(kajps5_relocation_trace_test PRIVATE kajps5_core)
 kajps5_deploy_msvc_asan_runtime(kajps5_relocation_trace_test)

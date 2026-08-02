@@ -1,6 +1,6 @@
 // Adapted from KytyPS5
 // src/graphics/shader/recompiler/decompiler/ShaderDecoder.h at
-// a65d17a5d689257a35644e01e9d15539361f0bf0.
+// 59b8fad34189816137c5cbe1982e9fd499532b6f.
 // SPDX-License-Identifier: GPL-2.0-only
 
 #ifndef EMULATOR_INCLUDE_EMULATOR_GRAPHICS_SHADER_RECOMPILER_SHADERDECODER_H_
@@ -579,6 +579,8 @@ enum class ImageDimension : uint32_t {
 	Dim2D,
 	Dim3D,
 	Dim2DArray,
+	Dim2DMsaa,
+	Dim2DMsaaArray,
 };
 
 constexpr uint32_t MaxInstructionRawWords       = 5u;

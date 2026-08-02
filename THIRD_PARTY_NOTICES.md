@@ -527,8 +527,11 @@ No SharpEmu graphics source or runtime was copied. KajPS5 keeps one C++ GPU
 owner and does not load an external compatibility library.
 
 The Gen5 shader decoder under
-`src/gpu/shader/recompiler/decompiler` directly adapts the complete KytyPS5
-`src/graphics/shader/recompiler/decompiler` source set at commit
+`src/gpu/shader/recompiler/decompiler` directly adapts the KytyPS5
+`src/graphics/shader/recompiler/decompiler` source set. `ImageOps.cpp`,
+`ShaderDecoder.cpp`, and `ShaderDecoder.h` follow commit
+`59b8fad34189816137c5cbe1982e9fd499532b6f`; the remaining decoder files
+retain their predecessor provenance at commit
 `a65d17a5d689257a35644e01e9d15539361f0bf0`. The SPIR-V section builder in
 `src/gpu/shader/spirv_builder.*` directly adapts KytyPS5
 `src/graphics/shader/recompiler/emitter/SpirvBuilder.*` at the same commit.
@@ -545,6 +548,33 @@ The focused tests in `tests/gpu_shader_decoder_test.cpp` and
 `scripts/validate-synthetic-spirv.sh` at commit
 `5ee7cd1dfafdeb0ce0e458a365692df4b2e1c445`. No SharpEmu compiler source was
 copied.
+
+The shader control-flow and IR implementation under
+`src/gpu/shader/recompiler/cfg` and `src/gpu/shader/recompiler/ir` directly
+adapts KytyPS5 `src/graphics/shader/recompiler/cfg` and
+`src/graphics/shader/recompiler/ir` at commit
+`59b8fad34189816137c5cbe1982e9fd499532b6f`. Its compiler-facing GPU types,
+format tables, bindings, wave-mask helper, and buffer-format metadata adapt
+KytyPS5 `src/graphics/guest_gpu/gpu_defs.h`,
+`src/graphics/guest_gpu/gpu_format.*`, `src/graphics/shader/shaderBindings.h`,
+`src/graphics/shader/shader.h`, and
+`src/graphics/shader/recompiler/{BufferFormat,ExecMask}.*` at the same commit.
+The destination files keep `GPL-2.0-only`, matching KytyPS5. KajPS5 retains
+its existing GPU runtime and imports only compiler data and algorithms.
+
+The focused CFG and IR tests in `tests/gpu_shader_cfg_test.cpp` and
+`tests/gpu_shader_ir_test.cpp` re-express KytyPS5
+`tests/shaderCfgTests.cpp` at commit
+`59b8fad34189816137c5cbe1982e9fd499532b6f`. The scalar merge cases also
+re-express SharpEmu
+`tests/SharpEmu.ShaderCompiler.Tests/Gen5ScalarSsaTests.cs`, and the explicit
+floating-point sign-modifier case follows
+`src/SharpEmu.ShaderCompiler.Vulkan/Gen5SpirvTranslator.Alu.cs` at commit
+`5ee7cd1dfafdeb0ce0e458a365692df4b2e1c445`. The SharpEmu files state:
+
+`Copyright (C) 2026 SharpEmu Emulator Project`
+
+No SharpEmu compiler source was copied.
 
 ## Files
 

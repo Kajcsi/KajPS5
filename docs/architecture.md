@@ -42,5 +42,7 @@ one owner for graphics state.
 The loader, memory, native CPU path, title session, HLE, and first kernel
 services now follow these boundaries. The checked memory owner can use a
 buffered backing for inspection or a host-mapped backing for controlled direct
-execution. Graphics, audio, input, and the user interface are still future
-work.
+execution. The GPU owner now decodes and schedules checked command buffers.
+The shader compiler has Gen5 decoding, structured control flow, and IR
+lowering. SPIR-V emission, Vulkan execution, presentation, audio, input, and
+the user interface remain incomplete.

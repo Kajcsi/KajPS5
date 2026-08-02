@@ -1,6 +1,6 @@
 // Adapted from KytyPS5
 // src/graphics/shader/recompiler/decompiler/ShaderDecoder.cpp at
-// a65d17a5d689257a35644e01e9d15539361f0bf0.
+// 59b8fad34189816137c5cbe1982e9fd499532b6f.
 // SPDX-License-Identifier: GPL-2.0-only
 
 #include "gpu/shader/recompiler/decompiler/ShaderDecoder.h"
@@ -199,6 +199,8 @@ const char* ImageDimensionToString(ImageDimension dimension) {
 		case ImageDimension::Dim2D: return "2d";
 		case ImageDimension::Dim3D: return "3d";
 		case ImageDimension::Dim2DArray: return "2d_array";
+		case ImageDimension::Dim2DMsaa: return "2d_msaa";
+		case ImageDimension::Dim2DMsaaArray: return "2d_msaa_array";
 		default: return "unknown";
 	}
 }
