@@ -1,3 +1,5 @@
+find_package(Threads REQUIRED)
+
 add_executable(kajps5_project_info_test project_info_test.cpp)
 target_link_libraries(kajps5_project_info_test PRIVATE kajps5_core)
 kajps5_deploy_msvc_asan_runtime(kajps5_project_info_test)
@@ -324,6 +326,15 @@ kajps5_deploy_msvc_asan_runtime(kajps5_gpu_command_processor_test)
 
 add_test(NAME kajps5_gpu_command_processor
          COMMAND kajps5_gpu_command_processor_test)
+
+add_executable(kajps5_gpu_resource_coherence_test
+               gpu_resource_coherence_test.cpp)
+target_link_libraries(kajps5_gpu_resource_coherence_test
+                      PRIVATE kajps5_core Threads::Threads)
+kajps5_deploy_msvc_asan_runtime(kajps5_gpu_resource_coherence_test)
+
+add_test(NAME kajps5_gpu_resource_coherence
+         COMMAND kajps5_gpu_resource_coherence_test)
 
 add_executable(kajps5_gpu_submission_queue_test
                gpu_submission_queue_test.cpp)

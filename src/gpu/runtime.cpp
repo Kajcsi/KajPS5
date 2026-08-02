@@ -132,9 +132,10 @@ void Write64(std::span<std::byte> bytes, std::uint64_t value) noexcept {
 
 GpuRuntime::GpuRuntime(memory::GuestMemory& memory,
                        GpuSubmissionSink* submission_sink,
-                       kernel::EventQueueService* event_queues) noexcept
+                       kernel::EventQueueService* event_queues)
     : memory_(memory),
       shader_runtime_(memory_),
+      resource_coherence_(GpuResourceCoherence::Create(memory_)),
       submission_queue_(*this),
       submission_history_(4096),
       event_effects_(event_queues,

@@ -10,6 +10,7 @@ add_library(kajps5_core STATIC
   cpu/native_hle_trampoline.cpp
   cpu/native_leaf_executor.cpp
   gpu/command_processor.cpp
+  gpu/resource_coherence.cpp
   gpu/shader/bindings.cpp
   gpu/shader/recompiler/ShaderRecompiler.cpp
   gpu/format.cpp

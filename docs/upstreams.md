@@ -39,6 +39,40 @@ adapted paths change.
 
 ### 2026-08-02
 
+- M8 resource-coherence review used the current KytyPS5 pin's
+  `src/graphics/host_gpu/memoryTracker.*`, `pageManager.*`, and
+  `renderer/cache/gpuResourceManager.*`, plus the current SharpEmu pin's
+  `src/SharpEmu.HLE/GuestImageWriteTracker.cs`,
+  `src/SharpEmu.Libs/VideoOut/VulkanVideoPresenter.cs`, and focused
+  guest-image write-generation tests. The first KajPS5 slice preserves one
+  checked guest-memory model and one GpuRuntime owner: it adds actual-write
+  events (including a changed prefix when a checked mutation fails late),
+  generation-tagged resource records, explicit GPU-write-pending metadata, and
+  range-local map-lifetime rejection. Shared backing aliases fan out each
+  actual backing-byte mutation to every overlapping guest alias through a
+  bounded exact report, with a conservative whole-GuestMemory fallback if that
+  report is exhausted. GuestMemory stores internal mapping-
+  lifetime intervals alongside its canonical region view, so unrelated
+  Map/Unmap operations leave a resource current while an overlapping
+  unmap/remap changes its token.
+  It deliberately does not port a page manager, renderer cache, host-fault
+  observer, or a second address-space owner. Native direct guest writes remain
+  unobserved until GuestMemory gains a fault-backed source; such a source must
+  defer verified faults to the ordinary GuestMemory observation funnel.
+- Mapping-token capture is serialized with GuestMemory Map/MapShared/Protect/
+  Unmap operations, and callbacks run after GuestMemory releases its mapping
+  and coherence locks. The token is a checked snapshot rather than a mapping
+  reservation: a future backend that spans independent calls must synchronize
+  its own mapping lifetime and revalidate before committing work.
+- Per-resource CPU write generations are monotonic even when concurrent
+  callbacks arrive out of order; a generation-exhaustion precision loss is
+  sticky and remains fail-closed. Host-mapped Initialize and InitializeFill
+  hold the exclusive mapping transition while temporarily changing native page
+  protections, so a concurrent initializer cannot restore a read-only page
+  under another write.
+- M8 resource-coherence validation: all 76 configured CTest cases passed in
+  Windows Debug, Release, and AddressSanitizer builds. The seven external
+  `spirv-val --target-env vulkan1.2` checks also passed in each build.
 - KytyPS5 moved from `a65d17a5d689257a35644e01e9d15539361f0bf0`
   to `59b8fad34189816137c5cbe1982e9fd499532b6f`. The review covered all 23
   commits and the complete changed-path list. The current M7 work uses the

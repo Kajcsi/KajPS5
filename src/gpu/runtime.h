@@ -15,6 +15,7 @@
 #include <unordered_map>
 
 #include "gpu/command_processor.h"
+#include "gpu/resource_coherence.h"
 #include "gpu/shader_runtime.h"
 #include "gpu/submission_queue.h"
 
@@ -90,10 +91,11 @@ struct GpuPacketSizeResult {
 class GpuRuntime final {
  public:
   // A non-null sink must outlive this runtime and must not call it recursively.
+  // Construction rejects a GuestMemory that already has a live GPU owner.
   explicit GpuRuntime(
       memory::GuestMemory& memory,
       GpuSubmissionSink* submission_sink = nullptr,
-      kernel::EventQueueService* event_queues = nullptr) noexcept;
+      kernel::EventQueueService* event_queues = nullptr);
 
   [[nodiscard]] GpuPacketResult WriteNop(std::uint64_t command_buffer,
                                          std::uint32_t dword_count);
@@ -127,6 +129,13 @@ class GpuRuntime final {
       GpuCommandCursor& cursor, GpuSubmissionSink& sink);
   [[nodiscard]] std::optional<std::uint32_t> ReadRegister(
       GpuRegisterSpace space, std::uint32_t offset) const noexcept;
+  [[nodiscard]] GpuResourceCoherence& resource_coherence() noexcept {
+    return *resource_coherence_;
+  }
+  [[nodiscard]] const GpuResourceCoherence& resource_coherence() const
+      noexcept {
+    return *resource_coherence_;
+  }
   [[nodiscard]] GpuSubmissionQueue& submissions() noexcept {
     return submission_queue_;
   }
@@ -146,6 +155,7 @@ class GpuRuntime final {
 
   memory::GuestMemory& memory_;
   ShaderRuntime shader_runtime_;
+  std::shared_ptr<GpuResourceCoherence> resource_coherence_;
   mutable std::mutex mutex_;
   std::unordered_map<std::uint32_t, std::uint32_t> context_registers_;
   std::unordered_map<std::uint32_t, std::uint32_t> shader_registers_;

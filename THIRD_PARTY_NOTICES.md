@@ -462,6 +462,38 @@ recompile tests re-express behavior from SharpEmu
 only GPU and guest-memory owner, and shader compilation stays outside command
 submission.
 
+The first Vulkan-independent resource-coherence seam in
+`src/core/memory/guest_memory.*`, `src/gpu/resource_coherence.*`,
+`src/gpu/runtime.*`, and `tests/gpu_resource_coherence_test.cpp` adapts the
+ownership boundary from KytyPS5
+`src/graphics/host_gpu/memoryTracker.*`, `pageManager.*`, and
+`renderer/cache/gpuResourceManager.*` at commit
+`fb5ecec455cf6c67154134429485ffccbfc34203`. It also re-expresses the monotonic
+write-generation, acknowledged re-upload, overlap, and CPU/GPU-divergence
+behavior from SharpEmu `src/SharpEmu.HLE/GuestImageWriteTracker.cs`,
+`src/SharpEmu.Libs/VideoOut/VulkanVideoPresenter.cs`, and
+`tests/SharpEmu.Libs.Tests/{Memory/GuestImageWriteTrackerTests.cs,
+VideoOut/VulkanGuestImageCpuSyncPolicyTests.cs}` at commit
+`4b5ea6a79346cb4529fa531cf2c1973f3978eb22`. KajPS5 does not import Kyty's
+page manager, host-fault handler, renderer cache, or SharpEmu's Vulkan code.
+`GuestMemory` remains the sole checked guest-memory owner and reports every
+range actually changed by its checked mutation APIs, including a changed prefix
+when an operation fails late; it does not claim to observe native direct guest
+stores. A changed shared backing range is reported through every overlapping
+guest alias using a bounded exact event set and a conservative whole-memory
+fallback; its range-local mapping tokens are captured atomically with mapping
+updates, but remain snapshots rather than backend-lifetime reservations.
+`GpuRuntime` owns the scalar resource records, which preserve an explicit
+GPU-write-pending state, preserve monotonic CPU-write generations despite
+out-of-order callbacks, and require the future backend to perform any real
+upload, readback, or invalidation. Host-mapped initialization serializes its
+temporary native protection transitions. A future fault-backed observer must
+defer a verified fault into GuestMemory's ordinary write-observation funnel; it
+cannot invoke a GPU callback from fault context. The new GPU source and test use
+`GPL-2.0-only`, matching the close Kyty architecture reference; the existing
+guest-memory source retains `GPL-2.0-or-later`. SharpEmu states
+`Copyright (C) 2026 SharpEmu Emulator Project`. No upstream source was copied.
+
 The checked PM4 processor in `src/gpu/command_processor.*` closely adapts
 KytyPS5 `src/graphics/guest_gpu/command_processor/pm4Dispatch.cpp`,
 `src/graphics/guest_gpu/command_processor/pm4Handlers.cpp`, and
