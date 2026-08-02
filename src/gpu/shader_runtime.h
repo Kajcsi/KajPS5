@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <string>
 #include <unordered_map>
 
@@ -22,6 +23,8 @@ class GuestMemory;
 }
 
 namespace kajps5::gpu {
+
+struct GpuShaderBinding;
 
 // The guest header carries a 32-bit byte count with no intrinsic allocation
 // bound. Keep copied shader images deliberately small until a later GPU owner
@@ -42,14 +45,15 @@ enum class ShaderRuntimeStatus {
 };
 
 // Diagnostic fault points used only by focused runtime and HLE transaction
-// tests. A CreateShader call snapshots this process-wide configuration at
-// entry, so setting and clearing it are thread-safe and deterministic for
-// subsequent calls.
+// tests. Each guarded ShaderRuntime operation snapshots this process-wide
+// configuration at entry, so setting and clearing it are thread-safe and
+// deterministic for subsequent calls.
 enum class ShaderRuntimeTestFaultPoint {
   kNone,
   kBeforeMutationCommitBadAlloc,
   kFailMutationWriteAfterSuccessfulWrites,
   kPartiallyWriteMutationThenFail,
+  kBeforeBindingResolutionResourceLimit,
 };
 
 struct ShaderRuntimeTestFault {
@@ -61,9 +65,15 @@ struct ShaderRuntimeTestFault {
 
 struct RegisteredShader {
   std::uint64_t code_address = 0;
+  // The reconstructed PGM address and its offset into code_address's checked
+  // image. Front halves that defer PGM publication keep has_program_binding
+  // false and are intentionally absent from the direct program index.
+  std::uint64_t program_address = 0;
   std::uint64_t header_address = 0;
+  std::uint64_t program_offset_bytes = 0;
   std::uint32_t code_size_bytes = 0;
   std::uint8_t binary_type = 0;
+  bool has_program_binding = false;
   std::uint64_t user_data_address = 0;
   std::uint64_t input_semantics_address = 0;
   std::uint32_t input_semantics_count = 0;
@@ -98,6 +108,13 @@ class ShaderRuntime final {
                                              std::uint64_t code_address);
   [[nodiscard]] std::optional<RegisteredShader> Lookup(
       std::uint64_t code_address) const;
+  [[nodiscard]] std::optional<RegisteredShader> LookupProgram(
+      std::uint64_t program_address) const;
+  // Resolves program-address snapshots without allocating or compiling. An
+  // unregistered address remains explicitly unregistered for later renderer
+  // policy and diagnostics.
+  [[nodiscard]] ShaderRuntimeStatus ResolveProgramBindings(
+      std::span<GpuShaderBinding> bindings) const noexcept;
   // Returns structured status and error information. `result` is replaced only
   // after the checked image read and TryRecompile both succeed.
   [[nodiscard]] ShaderCompileResult Recompile(
@@ -108,11 +125,15 @@ class ShaderRuntime final {
   static void SetCreateShaderTestFaultForTesting(
       ShaderRuntimeTestFault fault) noexcept;
   static void ClearCreateShaderTestFaultForTesting() noexcept;
+  static void SetBindingResolutionTestFaultForTesting(
+      ShaderRuntimeTestFault fault) noexcept;
+  static void ClearBindingResolutionTestFaultForTesting() noexcept;
 
  private:
   memory::GuestMemory& memory_;
   mutable std::mutex mutex_;
   std::unordered_map<std::uint64_t, RegisteredShader> records_;
+  std::unordered_map<std::uint64_t, std::uint64_t> program_records_;
 };
 
 [[nodiscard]] const char* ShaderRuntimeStatusName(

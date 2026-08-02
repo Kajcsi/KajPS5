@@ -340,6 +340,13 @@ kajps5_deploy_msvc_asan_runtime(kajps5_gpu_shader_runtime_test)
 add_test(NAME kajps5_gpu_shader_runtime
          COMMAND kajps5_gpu_shader_runtime_test)
 
+add_executable(kajps5_gpu_shader_binding_test gpu_shader_binding_test.cpp)
+target_link_libraries(kajps5_gpu_shader_binding_test PRIVATE kajps5_core)
+kajps5_deploy_msvc_asan_runtime(kajps5_gpu_shader_binding_test)
+
+add_test(NAME kajps5_gpu_shader_binding
+         COMMAND kajps5_gpu_shader_binding_test)
+
 add_executable(kajps5_gpu_spirv_builder_test gpu_spirv_builder_test.cpp)
 target_link_libraries(kajps5_gpu_spirv_builder_test PRIVATE kajps5_core)
 kajps5_deploy_msvc_asan_runtime(kajps5_gpu_spirv_builder_test)

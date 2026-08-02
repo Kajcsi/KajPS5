@@ -20,6 +20,7 @@
 #include <vector>
 
 #include "core/memory/guest_memory.h"
+#include "gpu/command_processor.h"
 
 namespace kajps5::gpu {
 namespace {
@@ -117,7 +118,7 @@ ShaderRuntimeTestFaultState& GetShaderRuntimeTestFaultState() noexcept {
   return state;
 }
 
-ShaderRuntimeTestFault SnapshotCreateShaderTestFault() noexcept {
+ShaderRuntimeTestFault SnapshotShaderRuntimeTestFault() noexcept {
   auto& state = GetShaderRuntimeTestFaultState();
   std::lock_guard lock(state.mutex);
   return state.fault;
@@ -380,15 +381,67 @@ void ShaderRuntime::ClearCreateShaderTestFaultForTesting() noexcept {
   SetCreateShaderTestFaultForTesting({});
 }
 
+void ShaderRuntime::SetBindingResolutionTestFaultForTesting(
+    ShaderRuntimeTestFault fault) noexcept {
+  SetCreateShaderTestFaultForTesting(fault);
+}
+
+void ShaderRuntime::ClearBindingResolutionTestFaultForTesting() noexcept {
+  ClearCreateShaderTestFaultForTesting();
+}
+
 ShaderMapResult ShaderRuntime::CreateShader(std::uint64_t destination_address,
                                              std::uint64_t header_address,
                                              std::uint64_t code_address) {
   std::lock_guard lock(mutex_);
   try {
-    const auto test_fault = SnapshotCreateShaderTestFault();
+    const auto test_fault = SnapshotShaderRuntimeTestFault();
     if (header_address == 0 || code_address == 0 ||
         !IsEncodableProgramAddress(code_address)) {
       return FailedMap(ShaderRuntimeStatus::kInvalidArgument);
+    }
+
+    // CreateShader mutates its guest header in place. Repeating the exact
+    // registration must therefore be idempotent rather than treating those
+    // now-absolute pointers as a second set of relative offsets. The existing
+    // direct index is already authoritative; only a requested destination
+    // publication remains to be applied.
+    if (const auto existing = records_.find(code_address);
+        existing != records_.end() &&
+        existing->second.header_address == header_address) {
+      if (destination_address == 0) {
+        return {ShaderRuntimeStatus::kOk, existing->second};
+      }
+      auto value = Encode64(header_address);
+      std::vector<std::byte> previous(value.size());
+      if (!memory_.CanAccess(destination_address, value.size(),
+                             memory::GuestMemoryProtection::kWrite) ||
+          !memory_.Read(destination_address, previous)) {
+        return FailedMap(ShaderRuntimeStatus::kMemoryFault);
+      }
+      if (test_fault.point ==
+          ShaderRuntimeTestFaultPoint::kBeforeMutationCommitBadAlloc) {
+        throw std::bad_alloc();
+      }
+      if (test_fault.point ==
+              ShaderRuntimeTestFaultPoint::
+                  kFailMutationWriteAfterSuccessfulWrites &&
+          test_fault.successful_mutation_writes == 0) {
+        return FailedMap(ShaderRuntimeStatus::kMemoryFault);
+      }
+      if (test_fault.point ==
+              ShaderRuntimeTestFaultPoint::kPartiallyWriteMutationThenFail &&
+          test_fault.successful_mutation_writes == 0) {
+        const std::span<const std::byte> prefix(value.data(), value.size() / 2U);
+        (void)memory_.Write(destination_address, prefix);
+        (void)memory_.Write(destination_address, previous);
+        return FailedMap(ShaderRuntimeStatus::kMemoryFault);
+      }
+      if (!memory_.Write(destination_address, value)) {
+        (void)memory_.Write(destination_address, previous);
+        return FailedMap(ShaderRuntimeStatus::kMemoryFault);
+      }
+      return {ShaderRuntimeStatus::kOk, existing->second};
     }
 
     std::array<std::byte, kShaderHeaderBytes> header{};
@@ -491,6 +544,9 @@ ShaderMapResult ShaderRuntime::CreateShader(std::uint64_t destination_address,
         std::to_integer<std::uint8_t>(header[kShaderShRegisterCountOffset]));
     const auto sh_registers_address = relocated[2];
     const auto expected_pair = ProgramPairForType(binary_type);
+    std::uint64_t program_address = 0;
+    std::uint64_t program_offset_bytes = 0;
+    bool has_program_binding = false;
     if (expected_pair.has_value()) {
       if (sh_registers_address == 0 || register_count < 2U) {
         return FailedMap(ShaderRuntimeStatus::kInvalidArgument);
@@ -519,7 +575,6 @@ ShaderMapResult ShaderRuntime::CreateShader(std::uint64_t destination_address,
             (static_cast<std::uint64_t>(found_pair->first->value) << 8U) |
             ((static_cast<std::uint64_t>(found_pair->second->value) & 0xffU)
              << 40U);
-        std::uint64_t program_address = 0;
         if (!AddAddressSize(found_pair->first->address,
                             kShaderRegisterValueOffset, lo_value_address) ||
             !AddAddressSize(found_pair->second->address,
@@ -536,6 +591,12 @@ ShaderMapResult ShaderRuntime::CreateShader(std::uint64_t destination_address,
                                                     0xffU)))) {
           return FailedMap(ShaderRuntimeStatus::kInvalidArgument);
         }
+        program_offset_bytes = shader_offset;
+        // Registration still preserves Kyty's exact PGM patch for a table
+        // whose entry lies outside this image. It cannot, however, become a
+        // program binding: recompilation must never read past the checked
+        // image merely because the original PGM offset was malformed.
+        has_program_binding = shader_offset < code_size_bytes;
       }
     }
 
@@ -557,16 +618,52 @@ ShaderMapResult ShaderRuntime::CreateShader(std::uint64_t destination_address,
 
     RegisteredShader record;
     record.code_address = code_address;
+    record.program_address = program_address;
     record.header_address = header_address;
+    record.program_offset_bytes = program_offset_bytes;
     record.code_size_bytes = code_size_bytes;
     record.binary_type = binary_type;
+    record.has_program_binding = has_program_binding;
     record.user_data_address = user_data_address;
     record.input_semantics_address = input_semantics_address;
     record.input_semantics_count = input_semantics_count;
     // Finish all potentially allocating registry work before any guest write.
     // Successful publication is then a non-allocating swap after the complete
     // transaction has been applied.
+    // The direct program index is intentionally separate from the code-base
+    // registry. A program address points at an entry dword inside a checked
+    // image, not at an arbitrary range that a later lookup would scan.
+    if (const auto program_owner = program_records_.find(code_address);
+        program_owner != program_records_.end() &&
+        program_owner->second != code_address) {
+      return FailedMap(ShaderRuntimeStatus::kInvalidArgument);
+    }
     auto next_records = records_;
+    auto next_program_records = program_records_;
+    if (const auto previous = records_.find(code_address);
+        previous != records_.end() && previous->second.has_program_binding) {
+      const auto previous_program =
+          next_program_records.find(previous->second.program_address);
+      if (previous_program != next_program_records.end() &&
+          previous_program->second == code_address) {
+        next_program_records.erase(previous_program);
+      }
+    }
+    if (record.has_program_binding) {
+      if (const auto program_owner =
+              next_program_records.find(record.program_address);
+          program_owner != next_program_records.end() &&
+          program_owner->second != code_address) {
+        return FailedMap(ShaderRuntimeStatus::kInvalidArgument);
+      }
+      if (const auto code_owner = next_records.find(record.program_address);
+          code_owner != next_records.end() &&
+          code_owner->first != code_address) {
+        return FailedMap(ShaderRuntimeStatus::kInvalidArgument);
+      }
+      next_program_records.insert_or_assign(record.program_address,
+                                            code_address);
+    }
     next_records.insert_or_assign(code_address, record);
 
     if (test_fault.point ==
@@ -616,6 +713,7 @@ ShaderMapResult ShaderRuntime::CreateShader(std::uint64_t destination_address,
     }
 
     records_.swap(next_records);
+    program_records_.swap(next_program_records);
     return {ShaderRuntimeStatus::kOk, record};
   } catch (const std::bad_alloc&) {
     return FailedMap(ShaderRuntimeStatus::kResourceLimit);
@@ -632,16 +730,75 @@ std::optional<RegisteredShader> ShaderRuntime::Lookup(
                                  : std::optional<RegisteredShader>(found->second);
 }
 
+std::optional<RegisteredShader> ShaderRuntime::LookupProgram(
+    std::uint64_t program_address) const {
+  std::lock_guard lock(mutex_);
+  const auto program = program_records_.find(program_address);
+  if (program == program_records_.end()) {
+    return std::nullopt;
+  }
+  const auto record = records_.find(program->second);
+  if (record == records_.end() || !record->second.has_program_binding ||
+      record->second.program_address != program_address) {
+    return std::nullopt;
+  }
+  return record->second;
+}
+
+ShaderRuntimeStatus ShaderRuntime::ResolveProgramBindings(
+    std::span<GpuShaderBinding> bindings) const noexcept {
+  if (SnapshotShaderRuntimeTestFault().point ==
+      ShaderRuntimeTestFaultPoint::kBeforeBindingResolutionResourceLimit) {
+    return ShaderRuntimeStatus::kResourceLimit;
+  }
+
+  std::lock_guard lock(mutex_);
+  for (auto& binding : bindings) {
+    binding.status = GpuShaderBindingStatus::kUnregistered;
+    binding.code_address = 0;
+    binding.header_address = 0;
+    binding.code_offset_bytes = 0;
+    binding.code_size_bytes = 0;
+    binding.binary_type = 0;
+    if (binding.program_address == 0) {
+      continue;
+    }
+    const auto program = program_records_.find(binding.program_address);
+    if (program == program_records_.end()) {
+      continue;
+    }
+    const auto record = records_.find(program->second);
+    if (record == records_.end() || !record->second.has_program_binding ||
+        record->second.program_address != binding.program_address) {
+      continue;
+    }
+    binding.status = GpuShaderBindingStatus::kRegistered;
+    binding.code_address = record->second.code_address;
+    binding.header_address = record->second.header_address;
+    binding.code_offset_bytes = record->second.program_offset_bytes;
+    binding.code_size_bytes = record->second.code_size_bytes;
+    binding.binary_type = record->second.binary_type;
+  }
+  return ShaderRuntimeStatus::kOk;
+}
+
 ShaderCompileResult ShaderRuntime::Recompile(
-    std::uint64_t code_address,
+    std::uint64_t program_or_code_address,
     const shader::recompiler::CompileOptions& options,
     shader::recompiler::CompileResult& result) {
   std::lock_guard lock(mutex_);
   try {
-    const auto found = records_.find(code_address);
+    auto found = records_.end();
+    if (const auto program = program_records_.find(program_or_code_address);
+        program != program_records_.end()) {
+      found = records_.find(program->second);
+    }
+    if (found == records_.end()) {
+      found = records_.find(program_or_code_address);
+    }
     if (found == records_.end()) {
       return {ShaderRuntimeStatus::kNotRegistered,
-              "shader code address is not registered"};
+              "shader program address is not registered"};
     }
     const auto& record = found->second;
     const auto expected_stage = RecompilerStageForType(record.binary_type);
@@ -653,17 +810,32 @@ ShaderCompileResult ShaderRuntime::Recompile(
       return {ShaderRuntimeStatus::kStageMismatch,
               "requested stage does not match the registered shader type"};
     }
+    if (record.program_address == 0 || !record.has_program_binding ||
+        record.program_offset_bytes >= record.code_size_bytes) {
+      return {ShaderRuntimeStatus::kMemoryFault,
+              "registered program entry is outside its checked image"};
+    }
+    std::uint64_t expected_program_address = 0;
+    if (!AddAddress(record.code_address, record.program_offset_bytes,
+                    expected_program_address) ||
+        expected_program_address != record.program_address) {
+      return {ShaderRuntimeStatus::kMemoryFault,
+              "registered program entry is invalid"};
+    }
+    const auto program_size_bytes = static_cast<std::size_t>(
+        record.code_size_bytes - record.program_offset_bytes);
     if (record.code_size_bytes == 0 ||
         record.code_size_bytes > kMaximumRegisteredShaderBytes ||
         record.code_size_bytes % sizeof(std::uint32_t) != 0U ||
-        !memory_.CanAccess(record.code_address, record.code_size_bytes,
+        program_size_bytes == 0 ||
+        !memory_.CanAccess(record.program_address, program_size_bytes,
                            memory::GuestMemoryProtection::kRead)) {
       return {ShaderRuntimeStatus::kMemoryFault,
               "registered shader range is no longer readable"};
     }
 
-    std::vector<std::byte> code_bytes(record.code_size_bytes);
-    if (!memory_.Read(record.code_address, code_bytes)) {
+    std::vector<std::byte> code_bytes(program_size_bytes);
+    if (!memory_.Read(record.program_address, code_bytes)) {
       return {ShaderRuntimeStatus::kMemoryFault,
               "registered shader range could not be read"};
     }
@@ -676,7 +848,7 @@ ShaderCompileResult ShaderRuntime::Recompile(
     SrtReaderContext reader{memory_};
     auto effective_options = options;
     effective_options.stage = *expected_stage;
-    effective_options.shader_base = record.code_address;
+    effective_options.shader_base = record.program_address;
     effective_options.read_memory = ReadGuestSrtDword;
     effective_options.read_memory_data = &reader;
 

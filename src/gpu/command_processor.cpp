@@ -2,6 +2,8 @@
 // Adapted from KytyPS5 src/graphics/guest_gpu/command_processor and
 // src/graphics/guest_gpu/graphicsRun.cpp at
 // a65d17a5d689257a35644e01e9d15539361f0bf0.
+// Shader-program register reference: KytyPS5 src/libs/agc.cpp at
+// fb5ecec455cf6c67154134429485ffccbfc34203.
 // Behavior and test reference: Copyright (C) 2026 SharpEmu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-only
 
@@ -74,10 +76,30 @@ struct DecodeContext {
   memory::GuestMemory& memory;
   GpuSubmissionSink& sink;
   GpuCommandCursor& cursor;
+  ShaderRuntime& shader_runtime;
   RegisterMap& context_registers;
   RegisterMap& shader_registers;
   RegisterMap& user_config_registers;
 };
+
+struct ShaderProgramPair {
+  GpuShaderStage stage = GpuShaderStage::kPixel;
+  std::uint32_t lo = 0;
+  std::uint32_t hi = 0;
+};
+
+// Exact Kyty PGM LO/HI reconstruction uses bits 8..47. Keep graphics order
+// stable for future pipeline-key construction regardless of register-write
+// order in the packet stream.
+constexpr std::array kGraphicsShaderProgramPairs = {
+    ShaderProgramPair{GpuShaderStage::kPixel, 0x008U, 0x009U},
+    ShaderProgramPair{GpuShaderStage::kGeometry, 0x088U, 0x089U},
+    ShaderProgramPair{GpuShaderStage::kExport, 0x0c8U, 0x0c9U},
+    ShaderProgramPair{GpuShaderStage::kHull, 0x108U, 0x109U},
+    ShaderProgramPair{GpuShaderStage::kLocal, 0x148U, 0x149U},
+};
+constexpr ShaderProgramPair kComputeShaderProgramPair{
+    GpuShaderStage::kCompute, 0x20cU, 0x20dU};
 
 std::uint32_t Read32(std::span<const std::byte> bytes,
                      std::size_t offset = 0) noexcept {
@@ -156,6 +178,40 @@ GpuAction MakeAction(GpuActionType type, std::uint64_t packet_address,
   return action;
 }
 
+void AddProgramBindingSnapshot(const RegisterMap& shader_registers,
+                               ShaderProgramPair pair,
+                               GpuAction& action) noexcept {
+  const auto lo = shader_registers.find(pair.lo);
+  const auto hi = shader_registers.find(pair.hi);
+  if (lo == shader_registers.end() || hi == shader_registers.end() ||
+      action.shader_binding_count >= action.shader_bindings.size()) {
+    return;
+  }
+  const auto program_address =
+      (static_cast<std::uint64_t>(lo->second) << 8U) |
+      ((static_cast<std::uint64_t>(hi->second) & 0xffU) << 40U);
+  if (program_address == 0) {
+    return;
+  }
+  auto& binding = action.shader_bindings[action.shader_binding_count++];
+  binding = {};
+  binding.stage = pair.stage;
+  binding.program_address = program_address;
+}
+
+void SnapshotProgramBindings(const DecodeContext& context,
+                             GpuAction& action) noexcept {
+  action.shader_binding_count = 0;
+  if (action.type == GpuActionType::kDraw) {
+    for (const auto pair : kGraphicsShaderProgramPairs) {
+      AddProgramBindingSnapshot(context.shader_registers, pair, action);
+    }
+  } else if (action.type == GpuActionType::kDispatch) {
+    AddProgramBindingSnapshot(context.shader_registers,
+                              kComputeShaderProgramPair, action);
+  }
+}
+
 GpuCommandStatus Stop(DecodeContext& context, GpuCommandStatus status,
                       std::uint64_t packet_address,
                       std::uint32_t opcode = 0) noexcept {
@@ -171,6 +227,35 @@ GpuCommandStatus Emit(DecodeContext& context,
       context.cursor.limits.max_actions) {
     return Stop(context, GpuCommandStatus::kResourceLimit,
                 action.packet_address, action.opcode);
+  }
+  if (action.type == GpuActionType::kDraw ||
+      action.type == GpuActionType::kDispatch) {
+    try {
+      // Bind against a local copy so later register writes cannot change an
+      // already delivered action, while preserving the decoder's packet and
+      // scalar action fields unchanged.
+      GpuAction enriched = action;
+      SnapshotProgramBindings(context, enriched);
+      const auto binding_status = context.shader_runtime.ResolveProgramBindings(
+          std::span<GpuShaderBinding>(enriched.shader_bindings.data(),
+                                      enriched.shader_binding_count));
+      if (binding_status != ShaderRuntimeStatus::kOk) {
+        return Stop(context,
+                    binding_status == ShaderRuntimeStatus::kResourceLimit
+                        ? GpuCommandStatus::kResourceLimit
+                        : GpuCommandStatus::kInvalidArgument,
+                    action.packet_address, action.opcode);
+      }
+      const auto sink_status = context.sink.Submit(enriched);
+      if (sink_status != GpuCommandStatus::kComplete) {
+        return Stop(context, sink_status, action.packet_address, action.opcode);
+      }
+    } catch (...) {
+      return Stop(context, GpuCommandStatus::kResourceLimit,
+                  action.packet_address, action.opcode);
+    }
+    ++context.cursor.result.submitted_actions;
+    return GpuCommandStatus::kComplete;
   }
   const auto sink_status = context.sink.Submit(action);
   if (sink_status != GpuCommandStatus::kComplete) {
@@ -1087,6 +1172,7 @@ GpuCommandCursor GpuRuntime::BeginCommandBuffer(
   DecodeContext context{memory_,
                         unused_sink,
                         cursor,
+                        shader_runtime_,
                         context_registers_,
                         shader_registers_,
                         user_config_registers_};
@@ -1106,8 +1192,9 @@ GpuCommandResult GpuRuntime::ResumeCommandBuffer(
     return cursor.result;
   }
   std::lock_guard lock(mutex_);
-  DecodeContext context{memory_, sink, cursor, context_registers_,
-                        shader_registers_, user_config_registers_};
+  DecodeContext context{memory_, sink, cursor, shader_runtime_,
+                        context_registers_, shader_registers_,
+                        user_config_registers_};
   cursor.result.status = GpuCommandStatus::kComplete;
   cursor.result.packet_address = 0;
   cursor.result.opcode = 0;

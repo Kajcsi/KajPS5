@@ -71,6 +71,12 @@ adapted paths change.
   Windows Debug, Release, and AddressSanitizer builds. This includes the new
   public AGC export, the focused shader-runtime tests, and seven external
   `spirv-val --target-env vulkan1.2` checks.
+- Shader-binding validation: all 75 configured CTest cases passed in Windows
+  Debug, Release, and AddressSanitizer builds. The new focused test covers
+  stable draw and dispatch stage snapshots, direct program lookup, nonzero
+  entry offsets, unregistered programs, index conflicts, and failed-publication
+  rollback. The seven external `spirv-val --target-env vulkan1.2` checks also
+  passed in each build.
 - Validation: all 65 tests passed in Windows Debug, Release, and AddressSanitizer
   builds. Gitleaks, actionlint, upstream-pin, commit-email, tracked-AGENTS,
   repository-privacy, and diff checks passed.

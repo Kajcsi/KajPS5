@@ -311,7 +311,7 @@ void CheckResultPreserved(
 void TestNormalComputeMappingAndCompilation() {
   Fixture fixture;
   constexpr std::array registers = {
-      RegisterWord{0x20c, 0x11111111U}, RegisterWord{0x20d, 0xaabbccddU}};
+      RegisterWord{0x20c, 0U}, RegisterWord{0x20d, 0xaabbcc00U}};
   ConfigureShader(fixture, 0, registers);
 
   const auto mapped = fixture.runtime.CreateShader(kDestination, kHeader, kCode);

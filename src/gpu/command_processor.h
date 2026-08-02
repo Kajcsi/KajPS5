@@ -2,6 +2,8 @@
 // Adapted from KytyPS5 src/graphics/guest_gpu/command_processor and
 // src/graphics/guest_gpu/graphicsRun.cpp at
 // a65d17a5d689257a35644e01e9d15539361f0bf0.
+// Shader-program register reference: KytyPS5 src/libs/agc.cpp at
+// fb5ecec455cf6c67154134429485ffccbfc34203.
 // Behavior and test reference: Copyright (C) 2026 SharpEmu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-only
 
@@ -61,6 +63,38 @@ enum class GpuActionType : std::uint8_t {
   kLodStats,
 };
 
+// SH program pairs are captured in this order for graphics actions. Compute
+// actions carry only kCompute. kExport denotes the ES / vertex entry program.
+enum class GpuShaderStage : std::uint8_t {
+  kPixel,
+  kGeometry,
+  kExport,
+  kHull,
+  kLocal,
+  kCompute,
+};
+
+enum class GpuShaderBindingStatus : std::uint8_t {
+  kUnregistered,
+  kRegistered,
+};
+
+// Scalar-only submission handoff metadata. The command decoder owns the SH
+// register snapshot; ShaderRuntime fills the registered-image fields before a
+// downstream sink sees the enclosing action.
+struct GpuShaderBinding {
+  GpuShaderStage stage = GpuShaderStage::kPixel;
+  GpuShaderBindingStatus status = GpuShaderBindingStatus::kUnregistered;
+  std::uint64_t program_address = 0;
+  std::uint64_t code_address = 0;
+  std::uint64_t header_address = 0;
+  std::uint64_t code_offset_bytes = 0;
+  std::uint32_t code_size_bytes = 0;
+  std::uint8_t binary_type = 0;
+};
+
+inline constexpr std::size_t kMaximumGpuActionShaderBindings = 6;
+
 struct GpuAction {
   GpuActionType type = GpuActionType::kNop;
   std::uint64_t packet_address = 0;
@@ -70,12 +104,17 @@ struct GpuAction {
   std::array<std::uint64_t, 8> values{};
   std::size_t value_count = 0;
   std::vector<std::uint32_t> payload;
+  // Draw: pixel, geometry, ES/vertex, hull, local. Dispatch: compute.
+  std::array<GpuShaderBinding, kMaximumGpuActionShaderBindings>
+      shader_bindings{};
+  std::size_t shader_binding_count = 0;
 };
 
 class GpuSubmissionSink {
  public:
   virtual ~GpuSubmissionSink() = default;
-  // Submission is synchronous. A sink must not call the same GpuRuntime.
+  // Submission is synchronous and receives an already enriched action. A sink
+  // must not call the same GpuRuntime.
   [[nodiscard]] virtual GpuCommandStatus Submit(
       const GpuAction& action) noexcept = 0;
 };

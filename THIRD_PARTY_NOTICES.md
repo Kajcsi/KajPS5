@@ -450,6 +450,18 @@ is `GPL-2.0-or-later` and states
 guest addresses and scalar metadata in its existing GPU runtime; no SharpEmu
 runtime or renderer source was copied.
 
+The shader-program binding handoff in `src/gpu/command_processor.*`,
+`src/gpu/shader_runtime.*`, and `tests/gpu_shader_binding_test.cpp` adapts the
+stage-specific SH program-register pairs and address reconstruction from
+KytyPS5 `src/libs/agc.cpp` at commit
+`fb5ecec455cf6c67154134429485ffccbfc34203`. Its checked direct program index,
+stable stage snapshots, unregistered-program diagnostics, and exact-entry
+recompile tests re-express behavior from SharpEmu
+`src/SharpEmu.Libs/Agc/AgcExports.cs` at commit
+`4b5ea6a79346cb4529fa531cf2c1973f3978eb22`. The KajPS5 runtime remains the
+only GPU and guest-memory owner, and shader compilation stays outside command
+submission.
+
 The checked PM4 processor in `src/gpu/command_processor.*` closely adapts
 KytyPS5 `src/graphics/guest_gpu/command_processor/pm4Dispatch.cpp`,
 `src/graphics/guest_gpu/command_processor/pm4Handlers.cpp`, and
