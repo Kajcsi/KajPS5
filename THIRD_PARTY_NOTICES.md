@@ -655,6 +655,41 @@ informed by SharpEmu
 `5ee7cd1dfafdeb0ce0e458a365692df4b2e1c445`. No SharpEmu compiler source
 was copied.
 
+The optional Vulkan device owner in `src/gpu/vulkan/{loader,device}.*`,
+`src/gpu/vulkan/vulkan_types.h`, `src/gpu/runtime.*`, and
+`tests/gpu_vulkan_{device,smoke}_test.cpp` adapts KytyPS5's instance,
+physical-device, universal queue, logical-device, and queue-mutex ownership
+shape from `src/graphics/host_gpu/vulkanInstance.h`,
+`src/graphics/presentation/window/vulkanWindow.cpp`, and
+`src/graphics/host_gpu/renderer/context.cpp` at commit
+`fb5ecec455cf6c67154134429485ffccbfc34203`. It preserves KytyPS5's complete
+non-surface renderer-ready core feature baseline, but intentionally does not
+import a window, surface, allocator, renderer, or command-buffer owner. Device
+ranking, capability diagnostics, and the focused injected-discovery tests
+re-express the device-scoring and
+capability reporting behavior in SharpEmu
+`src/SharpEmu.Libs/VideoOut/VulkanVideoPresenter.cs` and
+`tests/SharpEmu.Libs.Tests/VideoOut/VulkanPhysicalDeviceScoringTests.cs` at
+commit `4b5ea6a79346cb4529fa531cf2c1973f3978eb22`. The SharpEmu reference
+states `Copyright (C) 2026 SharpEmu Emulator Project`. KajPS5 creates no
+second GPU runtime or global Vulkan dispatch; it dynamically loads one
+optional, runtime-owned device context.
+
+The exact declarations required by that context are vendored from the
+KytyPS5 `3rdparty/Vulkan-Headers` submodule commit
+`2fa203425eb4af9dfc6b03f97ef72b0b5bcb8350`, which is the
+KhronosGroup/Vulkan-Headers commit used by the pinned KytyPS5 tree. The import
+contains only `include/vulkan/{vulkan.h,vulkan_core.h,vk_platform.h}` and the
+required `include/vk_video/*.h` transitive headers, at
+`src/gpu/vulkan/third_party/vulkan_headers/include/`. These files retain their
+original `Copyright 2014-2025 The Khronos Group Inc.` or
+`Copyright 2015-2025 The Khronos Group Inc.` notices and
+`SPDX-License-Identifier: Apache-2.0`. The exact upstream `LICENSE.md` is
+preserved at `LICENSES/Vulkan-Headers-LICENSE.md`. The standard Apache-2.0
+license text is separately preserved at `LICENSES/Apache-2.0.txt`, copied from
+the upstream `LICENSES/Apache-2.0.txt` at the same commit. No Vulkan loader,
+SDK binary, or import library is redistributed or required for a build.
+
 ## Files
 
 The open, close, read, positioned-read, seek, stat, fstat,

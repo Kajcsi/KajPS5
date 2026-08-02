@@ -9,6 +9,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <span>
@@ -18,6 +19,7 @@
 #include "gpu/resource_coherence.h"
 #include "gpu/shader_runtime.h"
 #include "gpu/submission_queue.h"
+#include "gpu/vulkan/device.h"
 
 namespace kajps5::memory {
 class GuestMemory;
@@ -149,6 +151,22 @@ class GpuRuntime final {
     return submission_history_;
   }
 
+  // Vulkan stays opt-in so headless loading and existing GPU-core tests do
+  // not probe host hardware. A successful context is retained for this
+  // runtime's lifetime; a duplicate request preserves that context unchanged.
+  [[nodiscard]] vulkan::VulkanInitializationResult InitializeVulkan(
+      const vulkan::VulkanContextOptions& options = {});
+  [[nodiscard]] vulkan::VulkanInitializationResult InitializeVulkan(
+      vulkan::VulkanLoader loader,
+      const vulkan::VulkanContextOptions& options = {});
+  [[nodiscard]] bool has_vulkan_context() const noexcept;
+  // The returned context remains owned by this runtime. Initialize Vulkan
+  // before sharing the runtime with submission threads, and synchronize with
+  // runtime destruction before retaining this pointer.
+  [[nodiscard]] vulkan::VulkanDeviceContext* vulkan_context() noexcept;
+  [[nodiscard]] const vulkan::VulkanDeviceContext* vulkan_context() const
+      noexcept;
+
  private:
   [[nodiscard]] GpuPacketResult AppendPacket(
       std::uint64_t command_buffer, std::span<const std::uint32_t> packet);
@@ -165,6 +183,8 @@ class GpuRuntime final {
   GpuEventSubmissionSink event_effects_;
   GpuMemorySubmissionSink submission_effects_;
   GpuSubmissionSink* submission_sink_ = nullptr;
+  mutable std::mutex vulkan_mutex_;
+  std::unique_ptr<vulkan::VulkanDeviceContext> vulkan_context_;
 };
 
 [[nodiscard]] const char* GpuRuntimeStatusName(

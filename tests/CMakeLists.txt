@@ -336,6 +336,21 @@ kajps5_deploy_msvc_asan_runtime(kajps5_gpu_resource_coherence_test)
 add_test(NAME kajps5_gpu_resource_coherence
          COMMAND kajps5_gpu_resource_coherence_test)
 
+add_executable(kajps5_gpu_vulkan_device_test gpu_vulkan_device_test.cpp)
+target_link_libraries(kajps5_gpu_vulkan_device_test PRIVATE kajps5_core)
+kajps5_deploy_msvc_asan_runtime(kajps5_gpu_vulkan_device_test)
+
+add_test(NAME kajps5_gpu_vulkan_device
+         COMMAND kajps5_gpu_vulkan_device_test)
+
+add_executable(kajps5_gpu_vulkan_smoke_test gpu_vulkan_smoke_test.cpp)
+target_link_libraries(kajps5_gpu_vulkan_smoke_test PRIVATE kajps5_core)
+kajps5_deploy_msvc_asan_runtime(kajps5_gpu_vulkan_smoke_test)
+
+add_test(NAME kajps5_gpu_vulkan_smoke
+         COMMAND kajps5_gpu_vulkan_smoke_test)
+set_tests_properties(kajps5_gpu_vulkan_smoke PROPERTIES SKIP_RETURN_CODE 77)
+
 add_executable(kajps5_gpu_submission_queue_test
                gpu_submission_queue_test.cpp)
 target_link_libraries(kajps5_gpu_submission_queue_test PRIVATE kajps5_core)

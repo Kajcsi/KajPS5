@@ -16,6 +16,8 @@ add_library(kajps5_core STATIC
   gpu/format.cpp
   gpu/runtime.cpp
   gpu/shader_runtime.cpp
+  gpu/vulkan/device.cpp
+  gpu/vulkan/loader.cpp
   gpu/shader/recompiler/cfg/ShaderCFG.cpp
   gpu/shader/recompiler/decompiler/ExportOps.cpp
   gpu/shader/recompiler/decompiler/ImageOps.cpp
@@ -101,9 +103,16 @@ add_library(kajps5_core STATIC
 )
 
 target_include_directories(kajps5_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(kajps5_core SYSTEM PUBLIC
+  ${CMAKE_CURRENT_SOURCE_DIR}/gpu/vulkan/third_party/vulkan_headers/include
+)
 target_compile_definitions(kajps5_core PUBLIC
   KAJPS5_VERSION="${PROJECT_VERSION}"
 )
+
+if(CMAKE_DL_LIBS)
+  target_link_libraries(kajps5_core PRIVATE ${CMAKE_DL_LIBS})
+endif()
 
 if(MSVC)
   target_compile_options(kajps5_core PRIVATE /W4 /permissive-)

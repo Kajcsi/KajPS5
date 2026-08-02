@@ -144,6 +144,68 @@ GpuRuntime::GpuRuntime(memory::GuestMemory& memory,
       submission_effects_(memory, event_effects_),
       submission_sink_(&submission_effects_) {}
 
+vulkan::VulkanInitializationResult GpuRuntime::InitializeVulkan(
+    const vulkan::VulkanContextOptions& options) {
+  std::lock_guard lock(vulkan_mutex_);
+  if (vulkan_context_ != nullptr) {
+    vulkan::VulkanInitializationResult result;
+    result.status = vulkan::VulkanContextStatus::kAlreadyInitialized;
+    result.diagnostics.push_back(
+        {vulkan::VulkanDiagnosticSeverity::kError,
+         vulkan::VulkanDiagnosticCode::kDuplicateInitialization, std::nullopt,
+         VK_SUCCESS,
+         "GpuRuntime already owns a Vulkan device context; the duplicate "
+         "request was rejected without changing it"});
+    return result;
+  }
+
+  auto created = vulkan::VulkanDeviceContext::Create(options);
+  if (!created) {
+    return std::move(created.initialization);
+  }
+  vulkan_context_ = std::move(created.context);
+  return std::move(created.initialization);
+}
+
+vulkan::VulkanInitializationResult GpuRuntime::InitializeVulkan(
+    vulkan::VulkanLoader loader, const vulkan::VulkanContextOptions& options) {
+  std::lock_guard lock(vulkan_mutex_);
+  if (vulkan_context_ != nullptr) {
+    vulkan::VulkanInitializationResult result;
+    result.status = vulkan::VulkanContextStatus::kAlreadyInitialized;
+    result.diagnostics.push_back(
+        {vulkan::VulkanDiagnosticSeverity::kError,
+         vulkan::VulkanDiagnosticCode::kDuplicateInitialization, std::nullopt,
+         VK_SUCCESS,
+         "GpuRuntime already owns a Vulkan device context; the duplicate "
+         "request was rejected without changing it"});
+    return result;
+  }
+
+  auto created = vulkan::VulkanDeviceContext::Create(std::move(loader), options);
+  if (!created) {
+    return std::move(created.initialization);
+  }
+  vulkan_context_ = std::move(created.context);
+  return std::move(created.initialization);
+}
+
+bool GpuRuntime::has_vulkan_context() const noexcept {
+  std::lock_guard lock(vulkan_mutex_);
+  return vulkan_context_ != nullptr;
+}
+
+vulkan::VulkanDeviceContext* GpuRuntime::vulkan_context() noexcept {
+  std::lock_guard lock(vulkan_mutex_);
+  return vulkan_context_.get();
+}
+
+const vulkan::VulkanDeviceContext* GpuRuntime::vulkan_context() const
+    noexcept {
+  std::lock_guard lock(vulkan_mutex_);
+  return vulkan_context_.get();
+}
+
 ShaderMapResult GpuRuntime::CreateShader(std::uint64_t destination_address,
                                          std::uint64_t header_address,
                                          std::uint64_t code_address) {
