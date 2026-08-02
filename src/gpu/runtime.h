@@ -15,6 +15,7 @@
 #include <unordered_map>
 
 #include "gpu/command_processor.h"
+#include "gpu/shader_runtime.h"
 #include "gpu/submission_queue.h"
 
 namespace kajps5::memory {
@@ -106,6 +107,15 @@ class GpuRuntime final {
       std::uint64_t packet_address) const noexcept;
   [[nodiscard]] GpuRuntimeStatus SetPacketPredication(
       std::uint64_t packet_address, std::uint32_t predication) noexcept;
+  [[nodiscard]] ShaderMapResult CreateShader(
+      std::uint64_t destination_address, std::uint64_t header_address,
+      std::uint64_t code_address);
+  [[nodiscard]] std::optional<RegisteredShader> LookupRegisteredShader(
+      std::uint64_t code_address) const;
+  [[nodiscard]] ShaderCompileResult RecompileRegisteredShader(
+      std::uint64_t code_address,
+      const shader::recompiler::CompileOptions& options,
+      shader::recompiler::CompileResult& result);
   [[nodiscard]] GpuCommandResult ProcessCommandBuffer(
       std::uint64_t address, std::uint32_t dword_count,
       GpuSubmissionSink& sink,
@@ -135,6 +145,7 @@ class GpuRuntime final {
       std::uint64_t command_buffer, std::span<const std::uint32_t> packet);
 
   memory::GuestMemory& memory_;
+  ShaderRuntime shader_runtime_;
   mutable std::mutex mutex_;
   std::unordered_map<std::uint32_t, std::uint32_t> context_registers_;
   std::unordered_map<std::uint32_t, std::uint32_t> shader_registers_;

@@ -14,6 +14,7 @@ add_library(kajps5_core STATIC
   gpu/shader/recompiler/ShaderRecompiler.cpp
   gpu/format.cpp
   gpu/runtime.cpp
+  gpu/shader_runtime.cpp
   gpu/shader/recompiler/cfg/ShaderCFG.cpp
   gpu/shader/recompiler/decompiler/ExportOps.cpp
   gpu/shader/recompiler/decompiler/ImageOps.cpp

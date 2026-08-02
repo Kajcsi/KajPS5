@@ -45,5 +45,7 @@ buffered backing for inspection or a host-mapped backing for controlled direct
 execution. The GPU owner now decodes and schedules checked command buffers.
 The shader compiler has Gen5 decoding, structured control flow, IR lowering,
 and a tested public `ShaderRecompiler` unit that emits Kyty-derived SPIR-V.
-Live GPU/Vulkan execution, presentation, audio, input, and the user interface
-remain incomplete.
+The same GPU runtime now owns checked registered AGC shader images and uses
+that registry to feed exact guest dwords to the recompiler. Live GPU/Vulkan
+execution, presentation, audio, input, and the user interface remain
+incomplete.

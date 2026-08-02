@@ -103,6 +103,67 @@ void WriteDwords(kajps5::memory::GuestMemory& memory,
   Check(memory.Write(address, bytes), "driver command write failed");
 }
 
+void ConfigureCreateShaderFixture(kajps5::memory::GuestMemory& memory,
+                                  std::uint64_t header_address,
+                                  std::uint64_t code_address,
+                                  std::uint64_t user_data_address,
+                                  std::uint64_t register_address,
+                                  std::uint64_t input_semantics_address,
+                                  std::uint64_t destination_address) {
+  constexpr std::size_t kHeaderBytes = 0x60;
+  constexpr std::size_t kUserDataBytes = 0x28;
+  std::array<std::byte, kHeaderBytes> header{};
+  const auto relative = [](std::uint64_t field, std::uint64_t target) {
+    Check(target >= field, "shader fixture relative pointer underflowed");
+    return target - field;
+  };
+  Write32(header, 0x00, 0x34333231U);
+  Write32(header, 0x04, 0x18U);
+  Write64(header, 0x08,
+          relative(header_address + 0x08, user_data_address));
+  Write64(header, 0x18,
+          relative(header_address + 0x18, user_data_address + 0x40));
+  Write64(header, 0x20,
+          relative(header_address + 0x20, register_address));
+  Write64(header, 0x28,
+          relative(header_address + 0x28, user_data_address + 0x80));
+  Write64(header, 0x30,
+          relative(header_address + 0x30, input_semantics_address));
+  Write64(header, 0x38,
+          relative(header_address + 0x38, user_data_address + 0xc0));
+  Write32(header, 0x44, sizeof(std::uint32_t));
+  Write32(header, 0x50, 1);
+  header[0x5a] = std::byte{0};
+  header[0x5c] = std::byte{2};
+  Check(memory.Write(header_address, header), "shader header fixture write failed");
+
+  std::array<std::byte, kUserDataBytes> user_data{};
+  for (std::size_t offset = 0; offset < user_data.size(); offset += 8U) {
+    Write64(user_data, offset,
+            relative(user_data_address + offset,
+                     user_data_address + 0x100U + offset));
+  }
+  Check(memory.Write(user_data_address, user_data),
+        "shader user-data fixture write failed");
+  std::array<std::byte, sizeof(std::uint32_t)> input_semantics{};
+  Check(memory.Write(input_semantics_address, input_semantics),
+        "shader input-semantic fixture write failed");
+  std::array<std::byte, 16> registers{};
+  Write32(registers, 0, 0x20cU);
+  Write32(registers, 4, 0);
+  Write32(registers, 8, 0x20dU);
+  Write32(registers, 12, 0xaabbccddU);
+  Check(memory.Write(register_address, registers),
+        "shader register fixture write failed");
+  std::array<std::byte, sizeof(std::uint32_t)> code{};
+  Write32(code, 0, 0xbf810000U);
+  Check(memory.Write(code_address, code), "shader code fixture write failed");
+  std::array<std::byte, sizeof(std::uint64_t)> destination{};
+  Write64(destination, 0, 0xd1d2d3d4d5d6d7d8ULL);
+  Check(memory.Write(destination_address, destination),
+        "shader destination fixture write failed");
+}
+
 }  // namespace
 
 int main() {
@@ -139,6 +200,85 @@ int main() {
         "command-buffer setup failed");
 
   HleCallContext context(memory);
+  constexpr std::uint64_t kShaderHeaderByName = kBase + 0x2000;
+  constexpr std::uint64_t kShaderCodeByName = kBase + 0x2100;
+  constexpr std::uint64_t kShaderUserDataByName = kBase + 0x2200;
+  constexpr std::uint64_t kShaderRegistersByName = kBase + 0x2300;
+  constexpr std::uint64_t kShaderInputsByName = kBase + 0x2400;
+  constexpr std::uint64_t kShaderDestinationByName = kBase + 0x2600;
+  constexpr std::uint64_t kShaderHeaderByNid = kBase + 0x2700;
+  constexpr std::uint64_t kShaderCodeByNid = kBase + 0x2800;
+  constexpr std::uint64_t kShaderUserDataByNid = kBase + 0x2900;
+  constexpr std::uint64_t kShaderRegistersByNid = kBase + 0x2a00;
+  constexpr std::uint64_t kShaderInputsByNid = kBase + 0x2b00;
+  constexpr std::uint64_t kShaderDestinationByNid = kBase + 0x2c00;
+  ConfigureCreateShaderFixture(
+      memory, kShaderHeaderByName, kShaderCodeByName, kShaderUserDataByName,
+      kShaderRegistersByName, kShaderInputsByName, kShaderDestinationByName);
+  ConfigureCreateShaderFixture(
+      memory, kShaderHeaderByNid, kShaderCodeByNid, kShaderUserDataByNid,
+      kShaderRegistersByNid, kShaderInputsByNid, kShaderDestinationByNid);
+  Check(registry.Lookup("sceAgcCreateShader").status ==
+            ExportRegistryStatus::kOk &&
+            registry.Lookup(kajps5::hle::kAgcCreateShaderNid).status ==
+                ExportRegistryStatus::kOk,
+        "CreateShader exports did not resolve by name and NID");
+  constexpr auto kCreateInvalidArgument =
+      std::bit_cast<std::int32_t>(0x80020003U);
+  constexpr auto kCreateMemoryFault = std::bit_cast<std::int32_t>(0x80020101U);
+  constexpr std::uint64_t kFaultingShaderCode = kBase + 0x2f00;
+  Check(memory.Protect(kFaultingShaderCode, sizeof(std::uint32_t),
+                       GuestMemoryProtection::kWrite),
+        "CreateShader unreadable-code protection setup failed");
+  const std::array create_shader_invalid = {
+      kShaderDestinationByName, std::uint64_t{0}, kShaderCodeByName};
+  SetArguments(context, create_shader_invalid);
+  Check(registry.Dispatch("sceAgcCreateShader", context) &&
+            ReturnValue(context) == static_cast<std::uint64_t>(
+                                        static_cast<std::int64_t>(
+                                            kCreateInvalidArgument)),
+        "CreateShader invalid argument did not use the Gen5 convention");
+  const std::array create_shader_fault = {
+      kShaderDestinationByName, kShaderHeaderByName, kFaultingShaderCode};
+  SetArguments(context, create_shader_fault);
+  Check(registry.Dispatch(kajps5::hle::kAgcCreateShaderNid, context) &&
+            ReturnValue(context) == static_cast<std::uint64_t>(
+                                        static_cast<std::int64_t>(
+                                            kCreateMemoryFault)),
+        "CreateShader memory fault did not use the Gen5 convention");
+  const std::array create_shader_by_name = {
+      kShaderDestinationByName, kShaderHeaderByName, kShaderCodeByName};
+  kajps5::gpu::ShaderRuntime::SetCreateShaderTestFaultForTesting(
+      {kajps5::gpu::ShaderRuntimeTestFaultPoint::kBeforeMutationCommitBadAlloc,
+       0});
+  SetArguments(context, create_shader_by_name);
+  const auto create_shader_resource_limit =
+      registry.Dispatch("sceAgcCreateShader", context);
+  kajps5::gpu::ShaderRuntime::ClearCreateShaderTestFaultForTesting();
+  Check(create_shader_resource_limit.status == ExportRegistryStatus::kOk &&
+            create_shader_resource_limit.handler_status ==
+                HleContextStatus::kResourceLimit &&
+            ReturnValue(context) == 0 &&
+            !gpu_runtime.LookupRegisteredShader(kShaderCodeByName).has_value(),
+        "CreateShader resource limit did not use the HLE resource-limit convention");
+  SetArguments(context, create_shader_by_name);
+  Check(registry.Dispatch("sceAgcCreateShader", context) &&
+            ReturnValue(context) == 0,
+        "CreateShader name dispatch failed");
+  std::array<std::byte, sizeof(std::uint64_t)> shader_destination{};
+  Check(memory.Read(kShaderDestinationByName, shader_destination) &&
+            Read64(shader_destination, 0) == kShaderHeaderByName &&
+            gpu_runtime.LookupRegisteredShader(kShaderCodeByName).has_value(),
+        "CreateShader name dispatch did not publish the shader");
+  const std::array create_shader_by_nid = {
+      kShaderDestinationByNid, kShaderHeaderByNid, kShaderCodeByNid};
+  SetArguments(context, create_shader_by_nid);
+  Check(registry.Dispatch(kajps5::hle::kAgcCreateShaderNid, context) &&
+            ReturnValue(context) == 0 &&
+            memory.Read(kShaderDestinationByNid, shader_destination) &&
+            Read64(shader_destination, 0) == kShaderHeaderByNid &&
+            gpu_runtime.LookupRegisteredShader(kShaderCodeByNid).has_value(),
+        "CreateShader NID dispatch did not publish the shader");
   const std::array nop_arguments = {kCommandBuffer, std::uint64_t{4}};
   SetArguments(context, nop_arguments);
   Check(registry.Dispatch(kajps5::hle::kAgcCbNopNid, context) &&

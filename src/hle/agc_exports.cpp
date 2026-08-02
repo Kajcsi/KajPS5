@@ -371,6 +371,23 @@ ExportRegistryStatus RegisterAgcExports(ExportRegistry& registry,
         }
         return HleContextStatus::kOk;
       });
+  Add(exports, "sceAgcCreateShader", kAgcCreateShaderNid,
+      [runtime](HleCallContext& context) {
+        const auto result = runtime->CreateShader(
+            context.Argument(0).value_or(0), context.Argument(1).value_or(0),
+            context.Argument(2).value_or(0));
+        if (result.status == gpu::ShaderRuntimeStatus::kOk) {
+          context.SetReturn(0);
+        } else if (result.status == gpu::ShaderRuntimeStatus::kResourceLimit) {
+          context.SetReturn(0);
+          return HleContextStatus::kResourceLimit;
+        } else if (result.status == gpu::ShaderRuntimeStatus::kMemoryFault) {
+          SetSignedResult(context, kGen5ErrorMemoryFault);
+        } else {
+          SetSignedResult(context, kGen5ErrorInvalidArgument);
+        }
+        return HleContextStatus::kOk;
+      });
 
   for (const auto& definition : kPacketExports) {
     Add(exports, definition.name, definition.nid,

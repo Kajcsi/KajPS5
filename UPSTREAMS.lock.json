@@ -4,13 +4,13 @@
     {
       "name": "KytyPS5",
       "repository": "https://github.com/KytyPS5/KytyPS5.git",
-      "commit": "59b8fad34189816137c5cbe1982e9fd499532b6f",
+      "commit": "fb5ecec455cf6c67154134429485ffccbfc34203",
       "role": "primary-native-architecture"
     },
     {
       "name": "SharpEmu",
       "repository": "https://github.com/sharpemu/sharpemu.git",
-      "commit": "5ee7cd1dfafdeb0ce0e458a365692df4b2e1c445",
+      "commit": "4b5ea6a79346cb4529fa531cf2c1973f3978eb22",
       "role": "behavior-and-test-reference"
     }
   ]

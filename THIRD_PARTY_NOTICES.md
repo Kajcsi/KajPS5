@@ -433,6 +433,23 @@ KytyPS5 sources and by SharpEmu
 bounds, reserved-space, packed-register ABI, stack arguments, packet words,
 modifier rules, and invalid-pointer behavior.
 
+The checked `sceAgcCreateShader` path in `src/gpu/shader_runtime.*`,
+`src/gpu/runtime.*`, `src/hle/agc_exports.*`,
+`tests/gpu_shader_runtime_test.cpp`, and `tests/hle_agc_exports_test.cpp`
+adapts the Gen5 header layout, relative-pointer relocation, and program-address
+register pairs from KytyPS5 `src/libs/agc.cpp` and
+`src/graphics/shader/shader.h` at commit
+`fb5ecec455cf6c67154134429485ffccbfc34203`. It independently re-expresses
+the checked full-table search and GS/HS front-half register-table behavior in
+SharpEmu `src/SharpEmu.Libs/Agc/AgcExports.cs` at commit
+`cf3bd0b4f2016eede08692110b6c14f08b5a912c`. The new
+`src/gpu/shader_runtime.*` source carries `GPL-2.0-only`, matching the
+directly adapted KytyPS5 algorithms; the SharpEmu behavior and test reference
+is `GPL-2.0-or-later` and states
+`Copyright (C) 2026 SharpEmu Emulator Project`. KajPS5 stores only checked
+guest addresses and scalar metadata in its existing GPU runtime; no SharpEmu
+runtime or renderer source was copied.
+
 The checked PM4 processor in `src/gpu/command_processor.*` closely adapts
 KytyPS5 `src/graphics/guest_gpu/command_processor/pm4Dispatch.cpp`,
 `src/graphics/guest_gpu/command_processor/pm4Handlers.cpp`, and

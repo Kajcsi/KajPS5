@@ -27,6 +27,7 @@ inline constexpr auto kAgcCbDispatchNid = "k3GhuSNmBLU";
 inline constexpr auto kAgcCbDispatchGetSizeNid = "Abendgtz+3o";
 inline constexpr auto kAgcGetPacketSizeNid = "Lkf86B98qPc";
 inline constexpr auto kAgcSetPacketPredicationNid = "w6Dj1VJt5qY";
+inline constexpr auto kAgcCreateShaderNid = "f3dg2CSgRKY";
 inline constexpr auto kAgcDcbSetShRegisterDirectNid = "pFLArOT53+w";
 inline constexpr auto kAgcDcbSetCxRegisterDirectNid = "LHFXRrlTPD8";
 inline constexpr auto kAgcDcbSetCxRegisterDirectGetSizeNid = "1DeUNpRIDDA";
@@ -74,7 +75,7 @@ inline constexpr auto kAgcDriverAddEqEventNid = "w2rJhmD+dsE";
 inline constexpr auto kAgcDriverDeleteEqEventNid = "DL2RXaXOy88";
 inline constexpr auto kAgcDriverGetEqEventTypeNid = "5CdQTZIQPxM";
 inline constexpr auto kAgcDriverGetEqContextIdNid = "Zw7uUVPulbw";
-inline constexpr std::size_t kRegisteredAgcFunctionCount = 51;
+inline constexpr std::size_t kRegisteredAgcFunctionCount = 52;
 
 [[nodiscard]] ExportRegistryStatus RegisterAgcExports(
     ExportRegistry& registry, gpu::GpuRuntime& gpu_runtime,

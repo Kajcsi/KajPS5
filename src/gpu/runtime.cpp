@@ -134,6 +134,7 @@ GpuRuntime::GpuRuntime(memory::GuestMemory& memory,
                        GpuSubmissionSink* submission_sink,
                        kernel::EventQueueService* event_queues) noexcept
     : memory_(memory),
+      shader_runtime_(memory_),
       submission_queue_(*this),
       submission_history_(4096),
       event_effects_(event_queues,
@@ -141,6 +142,25 @@ GpuRuntime::GpuRuntime(memory::GuestMemory& memory,
                                                 : submission_history_),
       submission_effects_(memory, event_effects_),
       submission_sink_(&submission_effects_) {}
+
+ShaderMapResult GpuRuntime::CreateShader(std::uint64_t destination_address,
+                                         std::uint64_t header_address,
+                                         std::uint64_t code_address) {
+  return shader_runtime_.CreateShader(destination_address, header_address,
+                                      code_address);
+}
+
+std::optional<RegisteredShader> GpuRuntime::LookupRegisteredShader(
+    std::uint64_t code_address) const {
+  return shader_runtime_.Lookup(code_address);
+}
+
+ShaderCompileResult GpuRuntime::RecompileRegisteredShader(
+    std::uint64_t code_address,
+    const shader::recompiler::CompileOptions& options,
+    shader::recompiler::CompileResult& result) {
+  return shader_runtime_.Recompile(code_address, options, result);
+}
 
 GpuPacketResult GpuRuntime::AppendPacket(
     std::uint64_t command_buffer, std::span<const std::uint32_t> packet) {

@@ -333,6 +333,13 @@ kajps5_deploy_msvc_asan_runtime(kajps5_gpu_submission_queue_test)
 add_test(NAME kajps5_gpu_submission_queue
          COMMAND kajps5_gpu_submission_queue_test)
 
+add_executable(kajps5_gpu_shader_runtime_test gpu_shader_runtime_test.cpp)
+target_link_libraries(kajps5_gpu_shader_runtime_test PRIVATE kajps5_core)
+kajps5_deploy_msvc_asan_runtime(kajps5_gpu_shader_runtime_test)
+
+add_test(NAME kajps5_gpu_shader_runtime
+         COMMAND kajps5_gpu_shader_runtime_test)
+
 add_executable(kajps5_gpu_spirv_builder_test gpu_spirv_builder_test.cpp)
 target_link_libraries(kajps5_gpu_spirv_builder_test PRIVATE kajps5_core)
 kajps5_deploy_msvc_asan_runtime(kajps5_gpu_spirv_builder_test)

@@ -4,8 +4,8 @@ KajPS5 uses these independent projects as references:
 
 | Project | Role | Language | License | Pinned commit |
 | --- | --- | --- | --- | --- |
-| [KytyPS5](https://github.com/KytyPS5/KytyPS5) | Primary native architecture reference | C++ | GPL-2.0-only, with original Kyty portions under MIT | `59b8fad34189816137c5cbe1982e9fd499532b6f` |
-| [SharpEmu](https://github.com/sharpemu/sharpemu) | Behavior and test reference | C# | GPL-2.0-or-later | `5ee7cd1dfafdeb0ce0e458a365692df4b2e1c445` |
+| [KytyPS5](https://github.com/KytyPS5/KytyPS5) | Primary native architecture reference | C++ | GPL-2.0-only, with original Kyty portions under MIT | `fb5ecec455cf6c67154134429485ffccbfc34203` |
+| [SharpEmu](https://github.com/sharpemu/sharpemu) | Behavior and test reference | C# | GPL-2.0-or-later | `4b5ea6a79346cb4529fa531cf2c1973f3978eb22` |
 
 The AGC command-buffer core closely adapts selected KytyPS5 algorithms. Other
 current integrations use upstream behavior as evidence. Exact provenance is
@@ -48,6 +48,29 @@ adapted paths change.
   covered by the new IR test. Renderer, audio, loader, kernel, and AGC changes
   remain recorded for their later milestones; this change does not import
   those owners.
+- SharpEmu moved from `5ee7cd1dfafdeb0ce0e458a365692df4b2e1c445`
+  to `cf3bd0b4f2016eede08692110b6c14f08b5a912c`. The review covered
+  `src/SharpEmu.Libs/Agc/AgcExports.cs`, including checked CreateShader
+  header relocation, full register-table search, and GS/HS front-half table
+  handling. KajPS5 adapts that behavior through its existing C++ GPU runtime;
+  it does not import a renderer or a second runtime.
+- KytyPS5 moved from `59b8fad34189816137c5cbe1982e9fd499532b6f`
+  to `fb5ecec455cf6c67154134429485ffccbfc34203`. The review covered the
+  AGC submission-buffer cleanup, the GPU resource-unmap ordering fix, the
+  depth-only target correction, the new renderer regressions, and the Net ABI
+  addition. The shader-header and `GraphicsCreateShader` behavior used here did
+  not change. The renderer and unmap corrections remain evidence for M8; they
+  do not justify importing a second memory or submission owner.
+- SharpEmu then moved from `cf3bd0b4f2016eede08692110b6c14f08b5a912c`
+  to `4b5ea6a79346cb4529fa531cf2c1973f3978eb22`. The review covered its
+  zero-color DCC fast-clear recognition and next-render-pass attachment clear.
+  `CreateShader` did not change. The clear behavior remains focused evidence
+  for KajPS5's later M8 renderer integration; no SharpEmu renderer code is
+  imported here.
+- Shader-registration validation: all 74 configured CTest cases passed in
+  Windows Debug, Release, and AddressSanitizer builds. This includes the new
+  public AGC export, the focused shader-runtime tests, and seven external
+  `spirv-val --target-env vulkan1.2` checks.
 - Validation: all 65 tests passed in Windows Debug, Release, and AddressSanitizer
   builds. Gitleaks, actionlint, upstream-pin, commit-email, tracked-AGENTS,
   repository-privacy, and diff checks passed.
