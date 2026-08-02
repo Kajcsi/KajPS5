@@ -357,6 +357,66 @@ kajps5_deploy_msvc_asan_runtime(kajps5_gpu_shader_ir_test)
 
 add_test(NAME kajps5_gpu_shader_ir COMMAND kajps5_gpu_shader_ir_test)
 
+add_executable(kajps5_gpu_shader_emitter_test gpu_shader_emitter_test.cpp)
+target_link_libraries(kajps5_gpu_shader_emitter_test PRIVATE kajps5_core)
+kajps5_deploy_msvc_asan_runtime(kajps5_gpu_shader_emitter_test)
+
+set(KAJPS5_GPU_SHADER_EMITTER_COMPUTE_SPIRV
+    "${CMAKE_CURRENT_BINARY_DIR}/kajps5_gpu_shader_emitter_compute.spv")
+set(KAJPS5_GPU_SHADER_EMITTER_VERTEX_SPIRV
+    "${CMAKE_CURRENT_BINARY_DIR}/kajps5_gpu_shader_emitter_vertex.spv")
+set(KAJPS5_GPU_SHADER_EMITTER_PIXEL_SPIRV
+    "${CMAKE_CURRENT_BINARY_DIR}/kajps5_gpu_shader_emitter_pixel.spv")
+set(KAJPS5_GPU_SHADER_EMITTER_RESOURCE_SPIRV
+    "${CMAKE_CURRENT_BINARY_DIR}/kajps5_gpu_shader_emitter_resource.spv")
+set(KAJPS5_GPU_SHADER_EMITTER_WAVE32_SPIRV
+    "${CMAKE_CURRENT_BINARY_DIR}/kajps5_gpu_shader_emitter_wave32.spv")
+set(KAJPS5_GPU_SHADER_EMITTER_FLOAT_SPIRV
+    "${CMAKE_CURRENT_BINARY_DIR}/kajps5_gpu_shader_emitter_float.spv")
+set(KAJPS5_GPU_SHADER_EMITTER_PIXEL_COLLISION_SPIRV
+    "${CMAKE_CURRENT_BINARY_DIR}/kajps5_gpu_shader_emitter_pixel_collision.spv")
+add_test(NAME kajps5_gpu_shader_emitter
+         COMMAND $<TARGET_FILE:kajps5_gpu_shader_emitter_test>
+                 --output-dir "${CMAKE_CURRENT_BINARY_DIR}")
+
+if(KAJPS5_SPIRV_VAL_EXECUTABLE)
+  add_test(NAME kajps5_gpu_shader_emitter_spirv_val_compute
+           COMMAND "${KAJPS5_SPIRV_VAL_EXECUTABLE}" --target-env vulkan1.2
+                   "${KAJPS5_GPU_SHADER_EMITTER_COMPUTE_SPIRV}")
+  set_tests_properties(kajps5_gpu_shader_emitter_spirv_val_compute
+                       PROPERTIES DEPENDS kajps5_gpu_shader_emitter)
+  add_test(NAME kajps5_gpu_shader_emitter_spirv_val_vertex
+           COMMAND "${KAJPS5_SPIRV_VAL_EXECUTABLE}" --target-env vulkan1.2
+                   "${KAJPS5_GPU_SHADER_EMITTER_VERTEX_SPIRV}")
+  set_tests_properties(kajps5_gpu_shader_emitter_spirv_val_vertex
+                       PROPERTIES DEPENDS kajps5_gpu_shader_emitter)
+  add_test(NAME kajps5_gpu_shader_emitter_spirv_val_pixel
+           COMMAND "${KAJPS5_SPIRV_VAL_EXECUTABLE}" --target-env vulkan1.2
+                   "${KAJPS5_GPU_SHADER_EMITTER_PIXEL_SPIRV}")
+  set_tests_properties(kajps5_gpu_shader_emitter_spirv_val_pixel
+                       PROPERTIES DEPENDS kajps5_gpu_shader_emitter)
+  add_test(NAME kajps5_gpu_shader_emitter_spirv_val_resource
+           COMMAND "${KAJPS5_SPIRV_VAL_EXECUTABLE}" --target-env vulkan1.2
+                   "${KAJPS5_GPU_SHADER_EMITTER_RESOURCE_SPIRV}")
+  set_tests_properties(kajps5_gpu_shader_emitter_spirv_val_resource
+                       PROPERTIES DEPENDS kajps5_gpu_shader_emitter)
+  add_test(NAME kajps5_gpu_shader_emitter_spirv_val_wave32
+           COMMAND "${KAJPS5_SPIRV_VAL_EXECUTABLE}" --target-env vulkan1.2
+                   "${KAJPS5_GPU_SHADER_EMITTER_WAVE32_SPIRV}")
+  set_tests_properties(kajps5_gpu_shader_emitter_spirv_val_wave32
+                       PROPERTIES DEPENDS kajps5_gpu_shader_emitter)
+  add_test(NAME kajps5_gpu_shader_emitter_spirv_val_float
+           COMMAND "${KAJPS5_SPIRV_VAL_EXECUTABLE}" --target-env vulkan1.2
+                   "${KAJPS5_GPU_SHADER_EMITTER_FLOAT_SPIRV}")
+  set_tests_properties(kajps5_gpu_shader_emitter_spirv_val_float
+                       PROPERTIES DEPENDS kajps5_gpu_shader_emitter)
+  add_test(NAME kajps5_gpu_shader_emitter_spirv_val_pixel_collision
+           COMMAND "${KAJPS5_SPIRV_VAL_EXECUTABLE}" --target-env vulkan1.2
+                   "${KAJPS5_GPU_SHADER_EMITTER_PIXEL_COLLISION_SPIRV}")
+  set_tests_properties(kajps5_gpu_shader_emitter_spirv_val_pixel_collision
+                       PROPERTIES DEPENDS kajps5_gpu_shader_emitter)
+endif()
+
 add_executable(kajps5_relocation_trace_test relocation_trace_test.cpp)
 target_link_libraries(kajps5_relocation_trace_test PRIVATE kajps5_core)
 kajps5_deploy_msvc_asan_runtime(kajps5_relocation_trace_test)

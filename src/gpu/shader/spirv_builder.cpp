@@ -1,6 +1,6 @@
 // Adapted from KytyPS5
 // src/graphics/shader/recompiler/emitter/SpirvBuilder.cpp at
-// a65d17a5d689257a35644e01e9d15539361f0bf0.
+// 59b8fad34189816137c5cbe1982e9fd499532b6f.
 // SPDX-License-Identifier: GPL-2.0-only
 
 #include "gpu/shader/spirv_builder.h"

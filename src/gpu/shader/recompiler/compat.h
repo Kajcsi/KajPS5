@@ -9,9 +9,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <exception>
 #include <limits>
 #include <map>
 #include <memory>
+#include <new>
 #include <optional>
 #include <set>
 #include <span>

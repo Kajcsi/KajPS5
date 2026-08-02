@@ -576,6 +576,24 @@ floating-point sign-modifier case follows
 
 No SharpEmu compiler source was copied.
 
+The SPIR-V emitter and public recompiler entry point under
+`src/gpu/shader/recompiler/emitter`,
+`src/gpu/shader/recompiler/ShaderRecompiler.*`, and
+`src/gpu/shader/bindings.cpp` directly adapt KytyPS5
+`src/graphics/shader/recompiler/emitter/*`,
+`src/graphics/shader/recompiler/ShaderRecompiler.*`, and
+`src/graphics/shader/shaderBindings.cpp` at commit
+`59b8fad34189816137c5cbe1982e9fd499532b6f`. They retain the
+`GPL-2.0-only` provenance headers and use KajPS5's existing C++20 SPIR-V
+section builder, checked SRT reader, and runtime resource snapshots.
+
+`tests/gpu_shader_emitter_test.cpp` applies focused behavioral coverage
+informed by SharpEmu
+`src/SharpEmu.ShaderCompiler.Vulkan/Gen5SpirvTranslator.Alu.cs` and
+`tests/SharpEmu.ShaderCompiler.Tests/Gen5ScalarSsaTests.cs` at commit
+`5ee7cd1dfafdeb0ce0e458a365692df4b2e1c445`. No SharpEmu compiler source
+was copied.
+
 ## Files
 
 The open, close, read, positioned-read, seek, stat, fstat,

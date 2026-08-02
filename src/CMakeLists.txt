@@ -10,6 +10,8 @@ add_library(kajps5_core STATIC
   cpu/native_hle_trampoline.cpp
   cpu/native_leaf_executor.cpp
   gpu/command_processor.cpp
+  gpu/shader/bindings.cpp
+  gpu/shader/recompiler/ShaderRecompiler.cpp
   gpu/format.cpp
   gpu/runtime.cpp
   gpu/shader/recompiler/cfg/ShaderCFG.cpp
@@ -32,6 +34,17 @@ add_library(kajps5_core STATIC
   gpu/shader/recompiler/ir/ShaderIROpcodes.cpp
   gpu/shader/recompiler/ir/SrtPatcher.cpp
   gpu/shader/recompiler/ir/SrtWalker.cpp
+  gpu/shader/recompiler/emitter/SpirvEmitter.cpp
+  gpu/shader/recompiler/emitter/spirvEmitterAluOps.cpp
+  gpu/shader/recompiler/emitter/spirvEmitterAnalysis.cpp
+  gpu/shader/recompiler/emitter/spirvEmitterControlFlow.cpp
+  gpu/shader/recompiler/emitter/spirvEmitterExport.cpp
+  gpu/shader/recompiler/emitter/spirvEmitterFlowOps.cpp
+  gpu/shader/recompiler/emitter/spirvEmitterImageHelpers.cpp
+  gpu/shader/recompiler/emitter/spirvEmitterImageOps.cpp
+  gpu/shader/recompiler/emitter/spirvEmitterMemory.cpp
+  gpu/shader/recompiler/emitter/spirvEmitterModule.cpp
+  gpu/shader/recompiler/emitter/spirvEmitterValues.cpp
   gpu/shader/spirv_builder.cpp
   gpu/submission_queue.cpp
   hle/agc_exports.cpp

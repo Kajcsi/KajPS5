@@ -51,6 +51,12 @@ adapted paths change.
 - Validation: all 65 tests passed in Windows Debug, Release, and AddressSanitizer
   builds. Gitleaks, actionlint, upstream-pin, commit-email, tracked-AGENTS,
   repository-privacy, and diff checks passed.
+- ShaderRecompiler validation: Debug 73/73, Release 73/73, and MSVC
+  AddressSanitizer 73/73 passed with `KAJPS5_REQUIRE_SPIRV_VAL=ON`. Seven
+  representative emitted modules were externally validated by pinned
+  `spirv-val --target-env vulkan1.2`: minimal compute, vertex, pixel,
+  descriptor/resource compute, wave-32 compute, float-modifier compute, and
+  pixel-parameter collision. Live AGC/Vulkan execution remains incomplete.
 
 ### 2026-08-01
 
