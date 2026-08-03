@@ -17,6 +17,11 @@ bool     IsSupportedTextureFormat(uint32_t format);
 bool     IsUintTextureFormat(uint32_t format);
 bool     IsFmaskTextureFormat(uint32_t format);
 
+// Returns a canonical format identifier for texture storage aliases. sRGB and
+// UNORM spellings that have identical guest bytes share this value, while the
+// original format remains the view format.
+uint32_t StorageAliasFormat(uint32_t format);
+
 } // namespace kajps5::gpu::Prospero
 
 #endif /* EMULATOR_INCLUDE_EMULATOR_GRAPHICS_GUEST_GPU_GPU_FORMAT_H_ */

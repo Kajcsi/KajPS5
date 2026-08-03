@@ -133,4 +133,18 @@ bool IsFmaskTextureFormat(uint32_t format) {
 	return format == GpuEnumValue(BufferFormat::kFmask8_S4_F4);
 }
 
+uint32_t StorageAliasFormat(uint32_t format) {
+	switch (static_cast<BufferFormat>(format)) {
+		case BufferFormat::k8Srgb: return GpuEnumValue(BufferFormat::k8UNorm);
+		case BufferFormat::k8_8Srgb: return GpuEnumValue(BufferFormat::k8_8UNorm);
+		case BufferFormat::k8_8_8_8Srgb: return GpuEnumValue(BufferFormat::k8_8_8_8UNorm);
+		case BufferFormat::kBc1Srgb: return GpuEnumValue(BufferFormat::kBc1UNorm);
+		case BufferFormat::kBc2Srgb: return GpuEnumValue(BufferFormat::kBc2UNorm);
+		case BufferFormat::kBc3Srgb: return GpuEnumValue(BufferFormat::kBc3UNorm);
+		case BufferFormat::kBc7Srgb: return GpuEnumValue(BufferFormat::kBc7UNorm);
+		default:
+			return FindFormatInfo(format) != nullptr ? format : 0;
+	}
+}
+
 } // namespace kajps5::gpu::Prospero

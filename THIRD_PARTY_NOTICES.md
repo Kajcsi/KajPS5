@@ -505,6 +505,23 @@ cannot invoke a GPU callback from fault context. The new GPU source and test use
 guest-memory source retains `GPL-2.0-or-later`. SharpEmu states
 `Copyright (C) 2026 SharpEmu Emulator Project`. No upstream source was copied.
 
+The public guest-image layout model in `src/gpu/image_layout.*`, its small
+storage-alias helper in `src/gpu/format.*`, and
+`tests/gpu_image_layout_test.cpp` adapt the non-owning image-cache layout shape
+from KytyPS5 `src/graphics/guest_gpu/gpu_format.*`,
+`src/graphics/host_gpu/renderer/image/{imageInfo,textureCommon,tiler}.*`, and
+`src/graphics/host_gpu/renderer/cache/textureCache.*` at commit
+`fb5ecec455cf6c67154134429485ffccbfc34203`. They independently re-express
+the byte-count, compressed-block, volume/array, sRGB-view, and checked failure
+behavior in SharpEmu `VulkanGuestImageByteCountTests.cs`,
+`VulkanGuestImageTypeTests.cs`, `VulkanPresentEncodeFormatTests.cs`,
+`GuestImageWriteTracker`, and `Gfx10UnifiedFormat` at commit
+`9e10d7c44a2821cfd5ccd3417c09c0cf269285a4`. The KajPS5 sources use
+`GPL-2.0-only`; SharpEmu states `Copyright (C) 2026 SharpEmu Emulator Project`
+and `GPL-2.0-or-later`. No upstream code, renderer, image cache, page table,
+or guest-memory owner was copied. The result is scalar layout metadata only;
+`GuestMemory` remains the sole guest-memory owner.
+
 The checked PM4 processor in `src/gpu/command_processor.*` closely adapts
 KytyPS5 `src/graphics/guest_gpu/command_processor/pm4Dispatch.cpp`,
 `src/graphics/guest_gpu/command_processor/pm4Handlers.cpp`, and

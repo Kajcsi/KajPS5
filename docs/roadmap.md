@@ -161,6 +161,9 @@
 - [x] Bind recompiler-produced buffer descriptor arrays, push constants, and
       host-visible Vulkan storage allocations; retain them through fence
       completion and publish GPU changes without overwriting newer CPU bytes.
+- [x] Define a checked, backend-neutral guest-image layout and storage-alias
+      model for the singular Vulkan image cache, with linear footprints only
+      until tiled detiling is proven.
 - Add shader control-flow, IR, emission, and resource tests before game tests.
 - Add an audio queue test with stable timing.
 

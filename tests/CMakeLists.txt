@@ -1,5 +1,11 @@
 find_package(Threads REQUIRED)
 
+add_executable(kajps5_gpu_image_layout_test gpu_image_layout_test.cpp)
+target_link_libraries(kajps5_gpu_image_layout_test PRIVATE kajps5_core)
+kajps5_deploy_msvc_asan_runtime(kajps5_gpu_image_layout_test)
+
+add_test(NAME kajps5_gpu_image_layout COMMAND kajps5_gpu_image_layout_test)
+
 add_executable(kajps5_project_info_test project_info_test.cpp)
 target_link_libraries(kajps5_project_info_test PRIVATE kajps5_core)
 kajps5_deploy_msvc_asan_runtime(kajps5_project_info_test)

@@ -39,6 +39,21 @@ adapted paths change.
 
 ### 2026-08-03
 
+- M8 guest-image layout work retained KytyPS5 at
+  `fb5ecec455cf6c67154134429485ffccbfc34203` after reviewing
+  `src/graphics/guest_gpu/gpu_format.*`,
+  `src/graphics/host_gpu/renderer/image/{imageInfo,textureCommon,tiler}.*`,
+  `src/graphics/host_gpu/renderer/cache/textureCache.*`, and
+  `tests/{ImagePageTableTests,ResourceTrackingTests}.cpp`. SharpEmu remained
+  at `9e10d7c44a2821cfd5ccd3417c09c0cf269285a4` after reviewing
+  `VulkanGuestImageByteCountTests.cs`, `VulkanGuestImageTypeTests.cs`,
+  `VulkanPresentEncodeFormatTests.cs`, `GuestImageWriteTracker`, and
+  `Gfx10UnifiedFormat`. KajPS5 adapts only the checked layout/alias shape and
+  re-expresses its public byte-count, dimensional, sRGB-alias, and failure
+  behavior in C++; it imports no upstream renderer, image cache, page table,
+  memory owner, or C# source. Tiled layouts now fail closed pending a proven
+  detiler.
+
 - M8 guest-buffer work retained KytyPS5 at `fb5ecec455cf6c67154134429485ffccbfc34203` after review through `d09c81d`: the relevant buffer-cache ownership model did not change. SharpEmu moved to reviewed commit `9e10d7c44a2821cfd5ccd3417c09c0cf269285a4`; `f3d9439952a40c5b81b0d0dec443184e82a683d1` and `26bda04` were also reviewed for preserving newer CPU bytes during GPU writeback and for overflow/degenerate-range guards. KajPS5 retains one GpuRuntime owner and one checked GuestMemory observer; no upstream scheduler, page manager, or address-space owner was imported.
 
 ### 2026-08-02
