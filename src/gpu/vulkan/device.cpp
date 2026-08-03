@@ -324,6 +324,19 @@ bool DiscoverCandidate(const InstanceDispatch& dispatch,
       properties.limits.maxPerStageDescriptorStorageBuffers;
   candidate.max_descriptor_set_storage_buffers =
       properties.limits.maxDescriptorSetStorageBuffers;
+  candidate.max_per_stage_descriptor_samplers =
+      properties.limits.maxPerStageDescriptorSamplers;
+  candidate.max_descriptor_set_samplers =
+      properties.limits.maxDescriptorSetSamplers;
+  candidate.max_per_stage_descriptor_sampled_images =
+      properties.limits.maxPerStageDescriptorSampledImages;
+  candidate.max_descriptor_set_sampled_images =
+      properties.limits.maxDescriptorSetSampledImages;
+  candidate.max_per_stage_descriptor_storage_images =
+      properties.limits.maxPerStageDescriptorStorageImages;
+  candidate.max_descriptor_set_storage_images =
+      properties.limits.maxDescriptorSetStorageImages;
+  candidate.max_per_stage_resources = properties.limits.maxPerStageResources;
   candidate.max_push_constants_size = properties.limits.maxPushConstantsSize;
   candidate.non_coherent_atom_size =
       std::max<std::uint64_t>(properties.limits.nonCoherentAtomSize, 1U);

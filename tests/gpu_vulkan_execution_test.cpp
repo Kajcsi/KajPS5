@@ -63,9 +63,13 @@ enum class FailurePoint {
   kEndCommandBuffer,
   kQueueSubmit,
   kCreateBuffer,
+  kCreateImage,
   kAllocateMemory,
   kBindBufferMemory,
+  kBindImageMemory,
   kMapMemory,
+  kCreateImageView,
+  kCreateSampler,
   kFlushMappedMemoryRanges,
   kCreateDescriptorSetLayout,
   kCreateDescriptorPool,
@@ -86,8 +90,27 @@ struct FakeMemoryRecord {
   bool freed = false;
 };
 
+struct FakeDescriptorWrite {
+  std::uint32_t binding = 0;
+  VkDescriptorType type = VK_DESCRIPTOR_TYPE_MAX_ENUM;
+  std::vector<VkDescriptorBufferInfo> buffers;
+  std::vector<VkDescriptorImageInfo> images;
+};
+
+struct FakeImageBarrier {
+  VkPipelineStageFlags source_stage = 0;
+  VkPipelineStageFlags destination_stage = 0;
+  VkAccessFlags source_access = 0;
+  VkAccessFlags destination_access = 0;
+  VkImageLayout old_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+  VkImageLayout new_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+};
+
 enum class CommandEvent {
+  kImageBarrier,
+  kUpload,
   kDispatch,
+  kReadback,
   kPipelineBarrier,
   kEndCommandBuffer,
 };
@@ -98,6 +121,15 @@ struct FakeVulkanState {
   const char* missing_device_function = nullptr;
   VkResult queue_submit_result = VK_SUCCESS;
   VkResult device_wait_idle_result = VK_SUCCESS;
+  std::uint32_t max_per_stage_descriptor_storage_buffers = 32;
+  std::uint32_t max_descriptor_set_storage_buffers = 32;
+  std::uint32_t max_per_stage_descriptor_samplers = 32;
+  std::uint32_t max_descriptor_set_samplers = 32;
+  std::uint32_t max_per_stage_descriptor_sampled_images = 32;
+  std::uint32_t max_descriptor_set_sampled_images = 32;
+  std::uint32_t max_per_stage_descriptor_storage_images = 32;
+  std::uint32_t max_descriptor_set_storage_images = 32;
+  std::uint32_t max_per_stage_resources = 128;
   bool poison_outputs_on_failure = false;
   bool require_wait_idle_before_retained_child_destroy = false;
   std::vector<VkResult> wait_results;
@@ -136,6 +168,13 @@ struct FakeVulkanState {
   std::uint32_t instances_destroyed = 0;
   std::vector<FakeMemoryRecord> memories;
   std::unordered_map<std::uintptr_t, VkDeviceMemory> buffer_memories;
+  std::unordered_map<std::uintptr_t, VkDeviceMemory> image_memories;
+  std::vector<VkDescriptorSetLayoutBinding> descriptor_bindings;
+  std::vector<VkDescriptorPoolSize> descriptor_pool_sizes;
+  std::vector<FakeDescriptorWrite> descriptor_writes;
+  std::vector<VkDescriptorImageInfo> descriptor_image_infos;
+  std::vector<FakeImageBarrier> image_barriers;
+  VkBuffer last_image_readback_buffer = VK_NULL_HANDLE;
   std::vector<VkDescriptorBufferInfo> descriptor_infos;
   std::vector<std::vector<VkDescriptorBufferInfo>> descriptor_history;
   std::vector<std::uint32_t> pushed_words;
@@ -145,6 +184,8 @@ struct FakeVulkanState {
   VkMappedMemoryRange flush_range{};
   VkMappedMemoryRange invalidate_range{};
   std::uint32_t buffers_created = 0, buffers_destroyed = 0;
+  std::uint32_t images_created = 0, images_destroyed = 0, views_created = 0,
+                views_destroyed = 0, samplers_created = 0, samplers_destroyed = 0;
   std::uint32_t memories_allocated = 0, memories_freed = 0, unmap_calls = 0;
   std::uint32_t descriptor_layouts_created = 0,
                 descriptor_layouts_destroyed = 0;
@@ -267,8 +308,23 @@ VKAPI_ATTR void VKAPI_CALL FakeGetPhysicalDeviceProperties(
   properties->deviceType = VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
   properties->limits.minStorageBufferOffsetAlignment = 256;
   properties->limits.maxStorageBufferRange = 4096;
-  properties->limits.maxPerStageDescriptorStorageBuffers = 32;
-  properties->limits.maxDescriptorSetStorageBuffers = 32;
+  properties->limits.maxPerStageDescriptorStorageBuffers =
+      g_fake.max_per_stage_descriptor_storage_buffers;
+  properties->limits.maxDescriptorSetStorageBuffers =
+      g_fake.max_descriptor_set_storage_buffers;
+  properties->limits.maxPerStageDescriptorSamplers =
+      g_fake.max_per_stage_descriptor_samplers;
+  properties->limits.maxDescriptorSetSamplers =
+      g_fake.max_descriptor_set_samplers;
+  properties->limits.maxPerStageDescriptorSampledImages =
+      g_fake.max_per_stage_descriptor_sampled_images;
+  properties->limits.maxDescriptorSetSampledImages =
+      g_fake.max_descriptor_set_sampled_images;
+  properties->limits.maxPerStageDescriptorStorageImages =
+      g_fake.max_per_stage_descriptor_storage_images;
+  properties->limits.maxDescriptorSetStorageImages =
+      g_fake.max_descriptor_set_storage_images;
+  properties->limits.maxPerStageResources = g_fake.max_per_stage_resources;
   properties->limits.maxPushConstantsSize = 128;
   properties->limits.nonCoherentAtomSize = 64;
   properties->limits.maxComputeWorkGroupCount[0] = 7;
@@ -302,6 +358,63 @@ VKAPI_ATTR VkResult VKAPI_CALL FakeCreateBuffer(VkDevice,
 VKAPI_ATTR void VKAPI_CALL FakeDestroyBuffer(VkDevice, VkBuffer,
                                              const VkAllocationCallbacks *) {
   ++g_fake.buffers_destroyed;
+}
+VKAPI_ATTR VkResult VKAPI_CALL FakeCreateImage(
+    VkDevice, const VkImageCreateInfo*, const VkAllocationCallbacks*, VkImage* image) {
+  if (ShouldFail(FailurePoint::kCreateImage)) {
+    *image = FailureOutputHandle<VkImage>();
+    return VK_ERROR_OUT_OF_HOST_MEMORY;
+  }
+  *image = MakeHandle<VkImage>(); ++g_fake.images_created; return VK_SUCCESS;
+}
+VKAPI_ATTR void VKAPI_CALL FakeDestroyImage(VkDevice, VkImage,
+                                             const VkAllocationCallbacks*) {
+  ++g_fake.images_destroyed;
+}
+VKAPI_ATTR void VKAPI_CALL FakeGetImageMemoryRequirements(
+    VkDevice, VkImage, VkMemoryRequirements* requirements) {
+  *requirements = {}; requirements->size = 64; requirements->alignment = 1;
+  requirements->memoryTypeBits = 1;
+}
+VKAPI_ATTR VkResult VKAPI_CALL FakeBindImageMemory(VkDevice, VkImage image,
+    VkDeviceMemory memory, VkDeviceSize) {
+  if (ShouldFail(FailurePoint::kBindImageMemory))
+    return VK_ERROR_OUT_OF_HOST_MEMORY;
+  g_fake.image_memories[reinterpret_cast<std::uintptr_t>(image)] = memory;
+  return VK_SUCCESS;
+}
+VKAPI_ATTR VkResult VKAPI_CALL FakeCreateImageView(
+    VkDevice, const VkImageViewCreateInfo*, const VkAllocationCallbacks*, VkImageView* view) {
+  if (ShouldFail(FailurePoint::kCreateImageView)) {
+    *view = FailureOutputHandle<VkImageView>();
+    return VK_ERROR_OUT_OF_HOST_MEMORY;
+  }
+  *view = MakeHandle<VkImageView>(); ++g_fake.views_created; return VK_SUCCESS;
+}
+VKAPI_ATTR void VKAPI_CALL FakeDestroyImageView(VkDevice, VkImageView,
+                                                 const VkAllocationCallbacks*) {
+  ++g_fake.views_destroyed;
+}
+VKAPI_ATTR VkResult VKAPI_CALL FakeCreateSampler(
+    VkDevice, const VkSamplerCreateInfo*, const VkAllocationCallbacks*, VkSampler* sampler) {
+  if (ShouldFail(FailurePoint::kCreateSampler)) {
+    *sampler = FailureOutputHandle<VkSampler>();
+    return VK_ERROR_OUT_OF_HOST_MEMORY;
+  }
+  *sampler = MakeHandle<VkSampler>(); ++g_fake.samplers_created; return VK_SUCCESS;
+}
+VKAPI_ATTR void VKAPI_CALL FakeDestroySampler(VkDevice, VkSampler,
+                                               const VkAllocationCallbacks*) {
+  ++g_fake.samplers_destroyed;
+}
+VKAPI_ATTR void VKAPI_CALL FakeCmdCopyBufferToImage(
+    VkCommandBuffer, VkBuffer, VkImage, VkImageLayout, std::uint32_t,
+    const VkBufferImageCopy*) { g_fake.command_events.push_back(CommandEvent::kUpload); }
+VKAPI_ATTR void VKAPI_CALL FakeCmdCopyImageToBuffer(
+    VkCommandBuffer, VkImage, VkImageLayout, VkBuffer buffer, std::uint32_t,
+    const VkBufferImageCopy*) {
+  g_fake.last_image_readback_buffer = buffer;
+  g_fake.command_events.push_back(CommandEvent::kReadback);
 }
 VKAPI_ATTR void VKAPI_CALL
 FakeGetBufferMemoryRequirements(VkDevice, VkBuffer, VkMemoryRequirements *r) {
@@ -383,12 +496,14 @@ FakeInvalidate(VkDevice, std::uint32_t, const VkMappedMemoryRange *range) {
              : VK_SUCCESS;
 }
 VKAPI_ATTR VkResult VKAPI_CALL
-FakeCreateDsl(VkDevice, const VkDescriptorSetLayoutCreateInfo *,
+FakeCreateDsl(VkDevice, const VkDescriptorSetLayoutCreateInfo *info,
               const VkAllocationCallbacks *, VkDescriptorSetLayout *h) {
   if (ShouldFail(FailurePoint::kCreateDescriptorSetLayout)) {
     *h = FailureOutputHandle<VkDescriptorSetLayout>();
     return VK_ERROR_OUT_OF_HOST_MEMORY;
   }
+  g_fake.descriptor_bindings.assign(info->pBindings,
+                                    info->pBindings + info->bindingCount);
   *h = MakeHandle<VkDescriptorSetLayout>();
   ++g_fake.descriptor_layouts_created;
   return VK_SUCCESS;
@@ -398,13 +513,15 @@ VKAPI_ATTR void VKAPI_CALL FakeDestroyDsl(VkDevice, VkDescriptorSetLayout,
   ++g_fake.descriptor_layouts_destroyed;
 }
 VKAPI_ATTR VkResult VKAPI_CALL FakeCreateDp(VkDevice,
-                                            const VkDescriptorPoolCreateInfo *,
+                                            const VkDescriptorPoolCreateInfo *info,
                                             const VkAllocationCallbacks *,
                                             VkDescriptorPool *h) {
   if (ShouldFail(FailurePoint::kCreateDescriptorPool)) {
     *h = FailureOutputHandle<VkDescriptorPool>();
     return VK_ERROR_OUT_OF_HOST_MEMORY;
   }
+  g_fake.descriptor_pool_sizes.assign(info->pPoolSizes,
+                                      info->pPoolSizes + info->poolSizeCount);
   *h = MakeHandle<VkDescriptorPool>();
   ++g_fake.descriptor_pools_created;
   return VK_SUCCESS;
@@ -422,13 +539,32 @@ VKAPI_ATTR VkResult VKAPI_CALL FakeAllocateDs(
   *h = MakeHandle<VkDescriptorSet>();
   return VK_SUCCESS;
 }
-VKAPI_ATTR void VKAPI_CALL FakeUpdateDs(VkDevice, std::uint32_t,
+VKAPI_ATTR void VKAPI_CALL FakeUpdateDs(VkDevice, std::uint32_t count,
                                         const VkWriteDescriptorSet *w,
                                         std::uint32_t,
                                         const VkCopyDescriptorSet *) {
-  g_fake.descriptor_binding = w->dstBinding;
-  g_fake.descriptor_infos.assign(w->pBufferInfo,
-                                 w->pBufferInfo + w->descriptorCount);
+  g_fake.descriptor_writes.clear();
+  g_fake.descriptor_infos.clear();
+  g_fake.descriptor_image_infos.clear();
+  for (std::uint32_t index = 0; index < count; ++index) {
+    FakeDescriptorWrite captured;
+    captured.binding = w[index].dstBinding;
+    captured.type = w[index].descriptorType;
+    g_fake.descriptor_binding = w[index].dstBinding;
+    if (w[index].pBufferInfo != nullptr) {
+      captured.buffers.assign(w[index].pBufferInfo,
+          w[index].pBufferInfo + w[index].descriptorCount);
+      g_fake.descriptor_infos.insert(g_fake.descriptor_infos.end(),
+          w[index].pBufferInfo, w[index].pBufferInfo + w[index].descriptorCount);
+    }
+    if (w[index].pImageInfo != nullptr) {
+      captured.images.assign(w[index].pImageInfo,
+          w[index].pImageInfo + w[index].descriptorCount);
+      g_fake.descriptor_image_infos.insert(g_fake.descriptor_image_infos.end(),
+          w[index].pImageInfo, w[index].pImageInfo + w[index].descriptorCount);
+    }
+    g_fake.descriptor_writes.push_back(std::move(captured));
+  }
   g_fake.descriptor_history.push_back(g_fake.descriptor_infos);
 }
 VKAPI_ATTR void VKAPI_CALL FakeCmdBindDs(VkCommandBuffer, VkPipelineBindPoint,
@@ -660,8 +796,23 @@ VKAPI_ATTR void VKAPI_CALL FakeCmdPipelineBarrier(
     VkCommandBuffer, VkPipelineStageFlags src_stage_mask,
     VkPipelineStageFlags dst_stage_mask, VkDependencyFlags,
     std::uint32_t memory_barrier_count, const VkMemoryBarrier *memory_barriers,
-    std::uint32_t, const VkBufferMemoryBarrier *, std::uint32_t,
-    const VkImageMemoryBarrier *) {
+    std::uint32_t buffer_barrier_count, const VkBufferMemoryBarrier *buffer_barriers,
+    std::uint32_t image_barrier_count,
+    const VkImageMemoryBarrier *image_barriers) {
+  if (memory_barrier_count == 0) {
+    if (image_barriers == nullptr) {
+      Check(buffer_barrier_count == 1 && buffer_barriers != nullptr,
+            "execution recorded an invalid image barrier");
+      g_fake.command_events.push_back(CommandEvent::kPipelineBarrier);
+      return;
+    }
+    Check(image_barrier_count == 1, "execution recorded an invalid image barrier count");
+    g_fake.image_barriers.push_back({src_stage_mask, dst_stage_mask,
+        image_barriers[0].srcAccessMask, image_barriers[0].dstAccessMask,
+        image_barriers[0].oldLayout, image_barriers[0].newLayout});
+    g_fake.command_events.push_back(CommandEvent::kImageBarrier);
+    return;
+  }
   Check(memory_barrier_count == 1 && memory_barriers != nullptr,
         "execution recorded an invalid memory barrier");
   ++g_fake.pipeline_barrier_calls;
@@ -811,6 +962,26 @@ VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL FakeGetDeviceProcAddr(VkDevice,
   }
   if (std::strcmp(name, "vkCreateBuffer") == 0)
     return reinterpret_cast<PFN_vkVoidFunction>(FakeCreateBuffer);
+  if (std::strcmp(name, "vkCreateImage") == 0)
+    return reinterpret_cast<PFN_vkVoidFunction>(FakeCreateImage);
+  if (std::strcmp(name, "vkDestroyImage") == 0)
+    return reinterpret_cast<PFN_vkVoidFunction>(FakeDestroyImage);
+  if (std::strcmp(name, "vkGetImageMemoryRequirements") == 0)
+    return reinterpret_cast<PFN_vkVoidFunction>(FakeGetImageMemoryRequirements);
+  if (std::strcmp(name, "vkBindImageMemory") == 0)
+    return reinterpret_cast<PFN_vkVoidFunction>(FakeBindImageMemory);
+  if (std::strcmp(name, "vkCreateImageView") == 0)
+    return reinterpret_cast<PFN_vkVoidFunction>(FakeCreateImageView);
+  if (std::strcmp(name, "vkDestroyImageView") == 0)
+    return reinterpret_cast<PFN_vkVoidFunction>(FakeDestroyImageView);
+  if (std::strcmp(name, "vkCreateSampler") == 0)
+    return reinterpret_cast<PFN_vkVoidFunction>(FakeCreateSampler);
+  if (std::strcmp(name, "vkDestroySampler") == 0)
+    return reinterpret_cast<PFN_vkVoidFunction>(FakeDestroySampler);
+  if (std::strcmp(name, "vkCmdCopyBufferToImage") == 0)
+    return reinterpret_cast<PFN_vkVoidFunction>(FakeCmdCopyBufferToImage);
+  if (std::strcmp(name, "vkCmdCopyImageToBuffer") == 0)
+    return reinterpret_cast<PFN_vkVoidFunction>(FakeCmdCopyImageToBuffer);
   if (std::strcmp(name, "vkDestroyBuffer") == 0)
     return reinterpret_cast<PFN_vkVoidFunction>(FakeDestroyBuffer);
   if (std::strcmp(name, "vkGetBufferMemoryRequirements") == 0)
@@ -2027,6 +2198,648 @@ void TestTranslatedOverlappingAliasCoalescing() {
         "teardown");
 }
 
+void TestTranslatedImageOnlyDescriptorAndCommandOrder() {
+  g_fake = {};
+  using Protection = kajps5::memory::GuestMemoryProtection;
+  kajps5::memory::GuestMemory memory(
+      0x700000, 0x1000, Protection::kRead | Protection::kWrite |
+                            Protection::kGpuRead | Protection::kGpuWrite);
+  const std::array<std::byte, 16> pixels{};
+  Check(memory.Initialize(0x700000, pixels),
+        "image-only fake fixture initialization failed");
+  kajps5::gpu::GpuRuntime runtime(memory);
+  Check(static_cast<bool>(runtime.InitializeVulkan(FakeLoader())),
+        "image-only fake Vulkan initialization failed");
+  kajps5::gpu::shader::recompiler::CompileResult compile;
+  compile.spirv.assign(kValidatedSpirv.begin(), kValidatedSpirv.end());
+  auto& p = compile.program;
+  p.stage = kajps5::gpu::ShaderType::Compute;
+  p.resource_tracking_complete = p.shader_info_complete =
+      p.binding_layout_complete = true;
+  p.bindings.descriptor_set = 0;
+  p.info.images.push_back({
+      .source = 0,
+      .kind = kajps5::gpu::shader::recompiler::IR::ResourceKind::StorageImage,
+      .dimension = kajps5::gpu::shader::recompiler::Decoder::ImageDimension::Dim2D,
+      .storage_swizzle = 0,
+      .read = true,
+      .written = true,
+  });
+  p.bindings.descriptors.push_back({
+      kajps5::gpu::shader::recompiler::IR::DescriptorBindingKind::Storage2D,
+      3, {0}});
+  kajps5::gpu::shader::recompiler::IR::DescriptorValue image;
+  image.dword_count = 8;
+  image.dwords[0] = 0x7000;
+  image.dwords[1] = kajps5::gpu::Prospero::GpuEnumValue(
+      kajps5::gpu::Prospero::BufferFormat::k8_8_8_8UNorm) << 20U;
+  image.dwords[2] = 1U | (1U << 14U);
+  image.dwords[3] = static_cast<std::uint32_t>(
+      kajps5::gpu::Prospero::ImageType::kColor2D) << 28U;
+  compile.resources.images.push_back(image);
+  const auto submitted = runtime.SubmitVulkanTranslatedCompute(compile, 1, 1, 1, 10);
+  Check(submitted && g_fake.descriptor_bindings.size() == 1 &&
+            g_fake.descriptor_bindings[0].binding == 3 &&
+            g_fake.descriptor_bindings[0].descriptorType == VK_DESCRIPTOR_TYPE_STORAGE_IMAGE &&
+            g_fake.descriptor_pool_sizes.size() == 1 &&
+            g_fake.descriptor_pool_sizes[0].type == VK_DESCRIPTOR_TYPE_STORAGE_IMAGE &&
+            g_fake.descriptor_image_infos.size() == 1 &&
+            g_fake.descriptor_image_infos[0].sampler == VK_NULL_HANDLE &&
+            g_fake.descriptor_image_infos[0].imageView != VK_NULL_HANDLE &&
+            g_fake.descriptor_image_infos[0].imageLayout == VK_IMAGE_LAYOUT_GENERAL,
+        "image-only descriptor topology was not captured");
+  Check(g_fake.command_events == std::vector<CommandEvent>{
+            CommandEvent::kImageBarrier, CommandEvent::kUpload,
+            CommandEvent::kImageBarrier, CommandEvent::kDispatch,
+            CommandEvent::kImageBarrier, CommandEvent::kReadback,
+            CommandEvent::kPipelineBarrier, CommandEvent::kEndCommandBuffer},
+        "image upload, dispatch, and readback command order differs");
+  Check(g_fake.images_created == g_fake.images_destroyed &&
+            g_fake.views_created == g_fake.views_destroyed,
+        "image-only execution did not clean completed image leases");
+}
+
+void TestTranslatedMixedAndSharedImageDescriptors() {
+  g_fake = {};
+  using Protection = kajps5::memory::GuestMemoryProtection;
+  kajps5::memory::GuestMemory memory(0x700000, 0x1000,
+      Protection::kRead | Protection::kWrite | Protection::kGpuRead |
+          Protection::kGpuWrite);
+  const std::array<std::byte, 16> bytes{};
+  Check(memory.Initialize(0x700000, bytes) && memory.Initialize(0x700200, bytes),
+        "mixed fixture guest initialization failed");
+  kajps5::gpu::GpuRuntime runtime(memory);
+  Check(static_cast<bool>(runtime.InitializeVulkan(FakeLoader())),
+        "mixed fixture Vulkan initialization failed");
+  kajps5::gpu::shader::recompiler::CompileResult compile;
+  compile.spirv.assign(kValidatedSpirv.begin(), kValidatedSpirv.end());
+  auto& p = compile.program;
+  using K = kajps5::gpu::shader::recompiler::IR::DescriptorBindingKind;
+  using R = kajps5::gpu::shader::recompiler::IR::ResourceKind;
+  p.stage = kajps5::gpu::ShaderType::Compute;
+  p.resource_tracking_complete = p.shader_info_complete = p.binding_layout_complete = true;
+  p.bindings.descriptor_set = 0;
+  p.bindings.push_constant_size = 8;
+  p.bindings.buffer_offset_dword = 1;
+  p.bindings.buffer_offset_count = 1;
+  p.bindings.user_data_registers = {0};
+  p.bindings.descriptors = {{K::Buffers, 5, {0}}, {K::Sampled2D, 2, {1}},
+                             {K::Storage2D, 3, {0}}, {K::Samplers, 4, {0}}};
+  p.info.buffers.push_back({.max_byte_extent = 16, .packed_stride = 4,
+                            .descriptor_format = 0, .read = true, .written = true});
+  kajps5::gpu::shader::recompiler::IR::DescriptorValue buffer;
+  buffer.dword_count = 4; buffer.dwords[0] = 0x700200;
+  buffer.dwords[1] = 4U << 16U; buffer.dwords[2] = 4;
+  compile.resources.buffers.push_back(buffer);
+  const auto make_image = [] {
+    kajps5::gpu::shader::recompiler::IR::DescriptorValue image;
+    image.dword_count = 8; image.dwords[0] = 0x7000;
+    image.dwords[1] = kajps5::gpu::Prospero::GpuEnumValue(
+        kajps5::gpu::Prospero::BufferFormat::k8_8_8_8UNorm) << 20U;
+    image.dwords[2] = 1U | (1U << 14U);
+    image.dwords[3] = static_cast<std::uint32_t>(
+        kajps5::gpu::Prospero::ImageType::kColor2D) << 28U;
+    return image;
+  };
+  compile.resources.images = {make_image(), make_image()};
+  p.info.images.push_back({.source = 0, .kind = R::StorageImage,
+      .dimension = kajps5::gpu::shader::recompiler::Decoder::ImageDimension::Dim2D,
+      .storage_swizzle = 0, .read = true, .written = true});
+  p.info.images.push_back({.source = 1, .kind = R::Image,
+      .dimension = kajps5::gpu::shader::recompiler::Decoder::ImageDimension::Dim2D,
+      .storage_swizzle = kajps5::gpu::shader::recompiler::IR::StorageImageIdentitySwizzle,
+      .read = true});
+  p.info.samplers.push_back({.source = 0});
+  kajps5::gpu::shader::recompiler::IR::DescriptorValue sampler;
+  sampler.dword_count = 4; compile.resources.samplers.push_back(sampler);
+  compile.resources.user_data = {0};
+  const auto submitted = runtime.SubmitVulkanTranslatedCompute(compile, 1, 1, 1, 10);
+  Check(submitted && g_fake.descriptor_bindings.size() == 4 &&
+            g_fake.descriptor_writes.size() == 4 &&
+            g_fake.descriptor_pool_sizes.size() == 4,
+        "mixed descriptor topology was not emitted");
+  Check(g_fake.descriptor_bindings[0].binding == 5 &&
+            g_fake.descriptor_bindings[0].descriptorType == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER &&
+            g_fake.descriptor_bindings[0].descriptorCount == 1 &&
+            g_fake.descriptor_bindings[1].binding == 2 &&
+            g_fake.descriptor_bindings[1].descriptorType == VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE &&
+            g_fake.descriptor_bindings[1].descriptorCount == 1 &&
+            g_fake.descriptor_bindings[2].binding == 3 &&
+            g_fake.descriptor_bindings[2].descriptorType == VK_DESCRIPTOR_TYPE_STORAGE_IMAGE &&
+            g_fake.descriptor_bindings[2].descriptorCount == 1 &&
+            g_fake.descriptor_bindings[3].binding == 4 &&
+            g_fake.descriptor_bindings[3].descriptorType == VK_DESCRIPTOR_TYPE_SAMPLER &&
+            g_fake.descriptor_bindings[3].descriptorCount == 1 &&
+            g_fake.descriptor_pool_sizes[0].type == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER &&
+            g_fake.descriptor_pool_sizes[0].descriptorCount == 1 &&
+            g_fake.descriptor_pool_sizes[1].type == VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE &&
+            g_fake.descriptor_pool_sizes[1].descriptorCount == 1 &&
+            g_fake.descriptor_pool_sizes[2].type == VK_DESCRIPTOR_TYPE_STORAGE_IMAGE &&
+            g_fake.descriptor_pool_sizes[2].descriptorCount == 1 &&
+            g_fake.descriptor_pool_sizes[3].type == VK_DESCRIPTOR_TYPE_SAMPLER &&
+            g_fake.descriptor_pool_sizes[3].descriptorCount == 1,
+        "mixed descriptor binding numbers or types differ");
+  const auto find_write = [](const std::vector<FakeDescriptorWrite>& writes,
+                             std::uint32_t binding) -> const FakeDescriptorWrite& {
+    const auto found = std::find_if(writes.begin(), writes.end(),
+        [&](const auto& write) { return write.binding == binding; });
+    Check(found != writes.end(), "mixed descriptor write was not captured");
+    return *found;
+  };
+  const auto& sampled = find_write(g_fake.descriptor_writes, 2);
+  const auto& storage = find_write(g_fake.descriptor_writes, 3);
+  const auto& sampler_write = find_write(g_fake.descriptor_writes, 4);
+  const auto& buffer_write = find_write(g_fake.descriptor_writes, 5);
+  Check(buffer_write.buffers.size() == 1 && sampled.images.size() == 1 &&
+            storage.images.size() == 1 && sampler_write.images.size() == 1 &&
+            sampled.images[0].sampler == VK_NULL_HANDLE &&
+            storage.images[0].sampler == VK_NULL_HANDLE &&
+            sampler_write.images[0].sampler != VK_NULL_HANDLE &&
+            sampler_write.images[0].imageView == VK_NULL_HANDLE &&
+            sampler_write.images[0].imageLayout == VK_IMAGE_LAYOUT_UNDEFINED &&
+            sampled.images[0].imageLayout == VK_IMAGE_LAYOUT_GENERAL &&
+            storage.images[0].imageLayout == VK_IMAGE_LAYOUT_GENERAL &&
+            sampled.images[0].imageView == storage.images[0].imageView,
+        "mixed descriptor info capture or shared-image layout differs");
+  Check(g_fake.images_created == 1 && g_fake.image_barriers.size() >= 3 &&
+            g_fake.image_barriers[1].new_layout == VK_IMAGE_LAYOUT_GENERAL &&
+            (g_fake.image_barriers[1].destination_access & VK_ACCESS_SHADER_READ_BIT) != 0 &&
+            (g_fake.image_barriers[1].destination_access & VK_ACCESS_SHADER_WRITE_BIT) != 0 &&
+            g_fake.image_barriers[1].destination_stage == VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        "shared sampled/storage image did not use GENERAL with unioned compute access");
+  const auto upload = std::find(g_fake.command_events.begin(), g_fake.command_events.end(),
+      CommandEvent::kUpload);
+  const auto dispatch = std::find(g_fake.command_events.begin(), g_fake.command_events.end(),
+      CommandEvent::kDispatch);
+  const auto readback = std::find(g_fake.command_events.begin(), g_fake.command_events.end(),
+      CommandEvent::kReadback);
+  Check(upload < dispatch && dispatch < readback &&
+            g_fake.images_created == g_fake.images_destroyed &&
+            g_fake.views_created == g_fake.views_destroyed &&
+            g_fake.samplers_created == g_fake.samplers_destroyed,
+        "mixed image command order or cleanup differs");
+}
+
+kajps5::gpu::shader::recompiler::CompileResult MakeImageLeaseCompile(
+    bool include_writable_buffer, bool writable_image) {
+  kajps5::gpu::shader::recompiler::CompileResult compile;
+  compile.spirv.assign(kValidatedSpirv.begin(), kValidatedSpirv.end());
+  auto& p = compile.program;
+  using K = kajps5::gpu::shader::recompiler::IR::DescriptorBindingKind;
+  using R = kajps5::gpu::shader::recompiler::IR::ResourceKind;
+  p.stage = kajps5::gpu::ShaderType::Compute;
+  p.resource_tracking_complete = p.shader_info_complete =
+      p.binding_layout_complete = true;
+  p.bindings.descriptor_set = 0;
+  if (include_writable_buffer) {
+    p.bindings.push_constant_size = 8;
+    p.bindings.buffer_offset_dword = 1;
+    p.bindings.buffer_offset_count = 1;
+    p.bindings.user_data_registers = {0};
+    p.bindings.descriptors.push_back({K::Buffers, 5, {0}});
+    p.info.buffers.push_back({.max_byte_extent = 16, .packed_stride = 4,
+                              .descriptor_format = 0, .read = true,
+                              .written = true});
+    kajps5::gpu::shader::recompiler::IR::DescriptorValue buffer;
+    buffer.dword_count = 4;
+    buffer.dwords[0] = 0x700200;
+    buffer.dwords[1] = 4U << 16U;
+    buffer.dwords[2] = 4;
+    compile.resources.buffers.push_back(buffer);
+    compile.resources.user_data = {0};
+  }
+  p.bindings.descriptors.push_back({writable_image ? K::Storage2D : K::Sampled2D,
+                                     3, {0}});
+  p.info.images.push_back({
+      .source = 0,
+      .kind = writable_image ? R::StorageImage : R::Image,
+      .dimension = kajps5::gpu::shader::recompiler::Decoder::ImageDimension::Dim2D,
+      .storage_swizzle = writable_image
+                             ? 0
+                             : kajps5::gpu::shader::recompiler::IR::StorageImageIdentitySwizzle,
+      .read = true,
+      .written = writable_image,
+  });
+  kajps5::gpu::shader::recompiler::IR::DescriptorValue image;
+  image.dword_count = 8;
+  image.dwords[0] = 0x7000;
+  image.dwords[1] = kajps5::gpu::Prospero::GpuEnumValue(
+      kajps5::gpu::Prospero::BufferFormat::k8_8_8_8UNorm) << 20U;
+  image.dwords[2] = 1U | (1U << 14U);
+  image.dwords[3] = static_cast<std::uint32_t>(
+      kajps5::gpu::Prospero::ImageType::kColor2D) << 28U;
+  compile.resources.images.push_back(image);
+  return compile;
+}
+
+kajps5::gpu::shader::recompiler::CompileResult MakeImageLeaseSamplerCompile() {
+  auto compile = MakeImageLeaseCompile(false, false);
+  compile.program.info.samplers.push_back({.source = 0});
+  compile.program.bindings.descriptors.push_back(
+      {kajps5::gpu::shader::recompiler::IR::DescriptorBindingKind::Samplers,
+       4, {0}});
+  kajps5::gpu::shader::recompiler::IR::DescriptorValue sampler;
+  sampler.dword_count = 4;
+  compile.resources.samplers.push_back(sampler);
+  return compile;
+}
+
+void TestTranslatedPreparedDescriptorMismatchRollback() {
+  using Protection = kajps5::memory::GuestMemoryProtection;
+  const auto run = [&](const kajps5::gpu::shader::recompiler::CompileResult& compile,
+                       auto corrupt, const char* message) {
+    g_fake = {};
+    kajps5::memory::GuestMemory memory(
+        0x700000, 0x1000, Protection::kRead | Protection::kWrite |
+                              Protection::kGpuRead | Protection::kGpuWrite);
+    const std::array<std::byte, 16> bytes{};
+    Check(memory.Initialize(0x700000, bytes) && memory.Initialize(0x700200, bytes),
+          "prepared-descriptor mismatch guest initialization failed");
+    kajps5::gpu::GpuRuntime runtime(memory);
+    auto context = CreateContext();
+    vk::VulkanGuestBufferCache buffers(*context.context, memory,
+                                       runtime.resource_coherence());
+    vk::VulkanGuestImageCache images(*context.context, memory,
+                                     runtime.resource_coherence());
+    auto buffer_preparation = buffers.Prepare(compile);
+    auto image_preparation = images.PrepareTranslated(compile);
+    Check(buffer_preparation && image_preparation,
+          "prepared-descriptor mismatch fixture did not obtain valid leases");
+    corrupt(image_preparation);
+    auto execution = CreateExecution(*context.context);
+    const auto failed = execution->SubmitTranslated(
+        compile, buffers, std::move(buffer_preparation), images,
+        std::move(image_preparation), 1, 1, 1, 10);
+    Check(failed.status == vk::VulkanComputeStatus::kInvalidArgument &&
+              HasDiagnostic(failed, vk::VulkanComputeDiagnosticCode::kInputRejected,
+                            vk::VulkanDiagnosticSeverity::kError) &&
+              g_fake.queue_submit_calls == 0 &&
+              g_fake.images_created == g_fake.images_destroyed &&
+              g_fake.views_created == g_fake.views_destroyed &&
+              g_fake.samplers_created == g_fake.samplers_destroyed &&
+              g_fake.buffers_created == g_fake.buffers_destroyed &&
+              g_fake.memories_allocated == g_fake.memories_freed &&
+              g_fake.descriptor_layouts_created == g_fake.descriptor_layouts_destroyed &&
+              g_fake.descriptor_pools_created == g_fake.descriptor_pools_destroyed &&
+              !runtime.resource_coherence().Query(1) &&
+              !runtime.resource_coherence().Query(2),
+          message);
+  };
+
+  run(MakeImageLeaseCompile(true, true),
+      [](auto& preparation) {
+        preparation.status = vk::VulkanGuestImageSetStatus::kInvalidSpecialization;
+      },
+      "absent prepared image leases did not fail and clean transactionally");
+  run(MakeImageLeaseCompile(true, true),
+      [](auto& preparation) { preparation.image_descriptors.clear(); },
+      "missing prepared image descriptors did not fail and clean transactionally");
+  run(MakeImageLeaseCompile(true, true),
+      [](auto& preparation) {
+        preparation.image_descriptors.push_back(preparation.image_descriptors.front());
+      },
+      "extra prepared image descriptors did not fail and clean transactionally");
+  run(MakeImageLeaseCompile(true, true),
+      [](auto& preparation) {
+        preparation.image_descriptors.front().preparation_index =
+            static_cast<std::uint32_t>(preparation.images.size());
+      },
+      "invalid prepared image lease index did not fail and clean transactionally");
+  run(MakeImageLeaseCompile(true, true),
+      [](auto& preparation) { preparation.image_descriptors.front().binding = 99; },
+      "wrong prepared image binding did not fail and clean transactionally");
+  run(MakeImageLeaseSamplerCompile(),
+      [](auto& preparation) { preparation.sampler_descriptors.front().binding = 99; },
+      "wrong prepared sampler binding did not fail and clean transactionally");
+}
+
+void TestTranslatedImageLeaseTimeoutAndPoll() {
+  g_fake = {};
+  using Protection = kajps5::memory::GuestMemoryProtection;
+  kajps5::memory::GuestMemory memory(
+      0x700000, 0x1000, Protection::kRead | Protection::kWrite |
+                            Protection::kGpuRead | Protection::kGpuWrite);
+  std::array<std::byte, 16> image_bytes{};
+  image_bytes[0] = std::byte{0x21};
+  const std::array<std::byte, 16> buffer_bytes{};
+  Check(memory.Initialize(0x700000, image_bytes) &&
+            memory.Initialize(0x700200, buffer_bytes),
+        "image timeout fixture guest initialization failed");
+  kajps5::gpu::GpuRuntime runtime(memory);
+  Check(static_cast<bool>(runtime.InitializeVulkan(FakeLoader())),
+        "image timeout fixture Vulkan initialization failed");
+  g_fake.wait_results = {VK_TIMEOUT};
+  const auto timed_out = runtime.SubmitVulkanTranslatedCompute(
+      MakeImageLeaseCompile(true, true), 1, 1, 1, 0);
+  std::array<std::byte, 16> unchanged{};
+  Check(timed_out.status == vk::VulkanComputeStatus::kFenceWaitTimedOut &&
+            timed_out.retained_submission_count == 1 &&
+            g_fake.images_created > g_fake.images_destroyed &&
+            g_fake.buffers_created > g_fake.buffers_destroyed &&
+            g_fake.last_image_readback_buffer != VK_NULL_HANDLE &&
+            memory.Read(0x700000, unchanged) && unchanged == image_bytes,
+        "timed-out mixed image lease did not retain handles and guest bytes");
+  BytesForBuffer(g_fake.last_image_readback_buffer)[0] = std::byte{0xac};
+  SignalFence(g_fake.submitted_fences.front());
+  const auto completed = runtime.PollVulkanCompute();
+  Check(completed && completed.reclaimed_submission_count == 1 &&
+            completed.retained_submission_count == 0 &&
+            memory.Read(0x700000, unchanged) &&
+            unchanged[0] == std::byte{0xac} &&
+            g_fake.images_created == g_fake.images_destroyed,
+        "signalled poll did not publish image readback and reclaim mixed leases");
+}
+
+void TestTranslatedImageReadbackRetry() {
+  g_fake = {};
+  using Protection = kajps5::memory::GuestMemoryProtection;
+  kajps5::memory::GuestMemory memory(
+      0x700000, 0x1000, Protection::kRead | Protection::kWrite |
+                            Protection::kGpuRead | Protection::kGpuWrite);
+  const std::array<std::byte, 16> initial{};
+  Check(memory.Initialize(0x700000, initial),
+        "image retry fixture guest initialization failed");
+  kajps5::gpu::GpuRuntime runtime(memory);
+  Check(static_cast<bool>(runtime.InitializeVulkan(FakeLoader())),
+        "image retry fixture Vulkan initialization failed");
+  g_fake.wait_results = {VK_TIMEOUT};
+  const auto timed_out = runtime.SubmitVulkanTranslatedCompute(
+      MakeImageLeaseCompile(false, true), 1, 1, 1, 0);
+  Check(timed_out.status == vk::VulkanComputeStatus::kFenceWaitTimedOut &&
+            g_fake.last_image_readback_buffer != VK_NULL_HANDLE,
+        "image retry fixture did not reach retained timeout state");
+  BytesForBuffer(g_fake.last_image_readback_buffer)[0] = std::byte{0x7c};
+  SignalFence(g_fake.submitted_fences.front());
+  g_fake.failure = FailurePoint::kInvalidateMappedMemoryRanges;
+  const auto failed = runtime.PollVulkanCompute();
+  std::array<std::byte, 16> unchanged{};
+  Check(failed.status == vk::VulkanComputeStatus::kReadbackFailed &&
+            failed.retained_submission_count == 1 &&
+            memory.Read(0x700000, unchanged) && unchanged == initial,
+        "failed image completion did not retain its signalled lease");
+  g_fake.failure = FailurePoint::kNone;
+  const auto retried = runtime.PollVulkanCompute();
+  Check(retried && retried.reclaimed_submission_count == 1 &&
+            retried.retained_submission_count == 0 &&
+            memory.Read(0x700000, unchanged) &&
+            unchanged[0] == std::byte{0x7c} &&
+            g_fake.images_created == g_fake.images_destroyed,
+        "retry did not publish and reclaim the image readback lease");
+}
+
+void TestTranslatedImageDeviceLossPaths() {
+  using Protection = kajps5::memory::GuestMemoryProtection;
+  const auto initialize_writable = [](kajps5::memory::GuestMemory& memory) {
+    const std::array<std::byte, 16> bytes{};
+    return memory.Initialize(0x700000, bytes) &&
+           memory.Initialize(0x700200, bytes);
+  };
+
+  g_fake = {};
+  {
+    kajps5::memory::GuestMemory memory(
+        0x700000, 0x1000, Protection::kRead | Protection::kWrite |
+                              Protection::kGpuRead | Protection::kGpuWrite);
+    Check(initialize_writable(memory), "queue-loss image fixture initialization failed");
+    const std::array<std::byte, 16> bytes{};
+    Check(memory.Initialize(0x700100, bytes) && memory.Initialize(0x700300, bytes),
+          "queue-loss second submission initialization failed");
+    kajps5::gpu::GpuRuntime runtime(memory);
+    Check(static_cast<bool>(runtime.InitializeVulkan(FakeLoader())),
+          "queue-loss image fixture Vulkan initialization failed");
+    g_fake.wait_results = {VK_TIMEOUT};
+    const auto retained = runtime.SubmitVulkanTranslatedCompute(
+        MakeImageLeaseCompile(true, true), 1, 1, 1, 0);
+    g_fake.queue_submit_result = VK_ERROR_DEVICE_LOST;
+    auto second_compile = MakeImageLeaseCompile(true, true);
+    second_compile.resources.images[0].dwords[0] = 0x7001;
+    second_compile.resources.buffers[0].dwords[0] = 0x700300;
+    const auto lost = runtime.SubmitVulkanTranslatedCompute(
+        second_compile, 1, 1, 1, 0);
+    const auto rejected = runtime.SubmitVulkanTranslatedCompute(
+        MakeImageLeaseCompile(true, true), 1, 1, 1, 0);
+    const auto buffer_state = runtime.resource_coherence().Query(1);
+    const auto image_state = runtime.resource_coherence().Query(2);
+    Check(retained.status == vk::VulkanComputeStatus::kFenceWaitTimedOut,
+          "queue-loss fixture did not retain its first mixed submission");
+    Check(lost.status == vk::VulkanComputeStatus::kDeviceLost,
+          "queue-submit device loss was not terminal for translated work");
+    Check(lost.retained_submission_count == 0 &&
+              lost.lost_dirty_resource_count == 2,
+          "queue-submit device loss lost mixed dirty-resource accounting");
+    Check(rejected.status == vk::VulkanComputeStatus::kDeviceLost &&
+              buffer_state && buffer_state->gpu_write_pending && image_state &&
+              image_state->gpu_write_pending &&
+              g_fake.images_created == g_fake.images_destroyed &&
+              g_fake.buffers_created == g_fake.buffers_destroyed,
+          "queue-submit device loss stranded mixed retained resource IDs");
+  }
+
+  g_fake = {};
+  {
+    kajps5::memory::GuestMemory memory(
+        0x700000, 0x1000, Protection::kRead | Protection::kWrite |
+                              Protection::kGpuRead | Protection::kGpuWrite);
+    Check(initialize_writable(memory), "wait-loss image fixture initialization failed");
+    kajps5::gpu::GpuRuntime runtime(memory);
+    Check(static_cast<bool>(runtime.InitializeVulkan(FakeLoader())),
+          "wait-loss image fixture Vulkan initialization failed");
+    g_fake.wait_results = {VK_ERROR_DEVICE_LOST};
+    const auto lost = runtime.SubmitVulkanTranslatedCompute(
+        MakeImageLeaseCompile(true, true), 1, 1, 1, 10);
+    const auto buffer_state = runtime.resource_coherence().Query(1);
+    const auto image_state = runtime.resource_coherence().Query(2);
+    Check(lost.status == vk::VulkanComputeStatus::kDeviceLost &&
+              lost.retained_submission_count == 0 &&
+              lost.lost_dirty_resource_count == 2 &&
+              buffer_state && buffer_state->gpu_write_pending && image_state &&
+              image_state->gpu_write_pending &&
+              g_fake.images_created == g_fake.images_destroyed &&
+              g_fake.buffers_created == g_fake.buffers_destroyed,
+          "post-submit wait device loss lost mixed dirty-resource accounting");
+  }
+
+  g_fake = {};
+  {
+    kajps5::memory::GuestMemory memory(
+        0x700000, 0x1000, Protection::kRead | Protection::kWrite |
+                              Protection::kGpuRead | Protection::kGpuWrite);
+    Check(initialize_writable(memory), "poll-loss image fixture initialization failed");
+    kajps5::gpu::GpuRuntime runtime(memory);
+    Check(static_cast<bool>(runtime.InitializeVulkan(FakeLoader())),
+          "poll-loss image fixture Vulkan initialization failed");
+    g_fake.wait_results = {VK_TIMEOUT};
+    const auto timed_out = runtime.SubmitVulkanTranslatedCompute(
+        MakeImageLeaseCompile(true, true), 1, 1, 1, 0);
+    FindFence(g_fake.submitted_fences.front())->status = VK_ERROR_DEVICE_LOST;
+    const auto lost = runtime.PollVulkanCompute();
+    const auto stable = runtime.PollVulkanCompute();
+    Check(timed_out.status == vk::VulkanComputeStatus::kFenceWaitTimedOut &&
+              lost.status == vk::VulkanComputeStatus::kDeviceLost &&
+              lost.retained_submission_count == 0 &&
+              lost.lost_dirty_resource_count == 2 &&
+              stable.status == vk::VulkanComputeStatus::kDeviceLost &&
+              stable.lost_dirty_resource_count == 2,
+          "fence-status device loss did not retain combined dirty-resource state exactly once");
+  }
+
+  g_fake = {};
+  {
+    kajps5::memory::GuestMemory memory(
+        0x700000, 0x1000, Protection::kRead | Protection::kGpuRead);
+    kajps5::gpu::GpuRuntime runtime(memory);
+    Check(static_cast<bool>(runtime.InitializeVulkan(FakeLoader())),
+          "read-only image loss fixture Vulkan initialization failed");
+    g_fake.wait_results = {VK_ERROR_DEVICE_LOST};
+    const auto lost = runtime.SubmitVulkanTranslatedCompute(
+        MakeImageLeaseCompile(false, false), 1, 1, 1, 10);
+    Check(lost.status == vk::VulkanComputeStatus::kDeviceLost &&
+              lost.lost_dirty_resource_count == 0 &&
+              g_fake.images_created == g_fake.images_destroyed,
+          "read-only image device loss produced a dirty image record");
+  }
+}
+
+void TestTranslatedDescriptorLimits() {
+  using Protection = kajps5::memory::GuestMemoryProtection;
+  const auto submit = [](const kajps5::gpu::shader::recompiler::CompileResult& compile) {
+    kajps5::memory::GuestMemory memory(
+        0x700000, 0x1000, Protection::kRead | Protection::kWrite |
+                              Protection::kGpuRead | Protection::kGpuWrite);
+    const std::array<std::byte, 16> bytes{};
+    Check(memory.Initialize(0x700000, bytes) && memory.Initialize(0x700200, bytes),
+          "descriptor-limit guest initialization failed");
+    kajps5::gpu::GpuRuntime runtime(memory);
+    Check(static_cast<bool>(runtime.InitializeVulkan(FakeLoader())),
+          "descriptor-limit Vulkan initialization failed");
+    const auto result = runtime.SubmitVulkanTranslatedCompute(compile, 1, 1, 1, 10);
+    Check(g_fake.descriptor_layouts_created == 0 &&
+              g_fake.descriptor_pools_created == 0 &&
+              g_fake.pipelines_created == 0 &&
+              g_fake.command_pools_created == 0 && g_fake.fences_created == 0,
+          "descriptor-limit rejection reached unsafe submission creation");
+    return result;
+  };
+
+  g_fake = {};
+  g_fake.max_per_stage_descriptor_storage_buffers = 0;
+  const auto zero_buffer = submit(MakeImageLeaseCompile(true, true));
+  Check(zero_buffer.status == vk::VulkanComputeStatus::kResourceLimit &&
+            HasDiagnostic(zero_buffer, vk::VulkanComputeDiagnosticCode::kResourceLimit,
+                          vk::VulkanDiagnosticSeverity::kError) &&
+            g_fake.buffers_created == 0 && g_fake.images_created == 0,
+        "zero buffer descriptor limit did not reject before cache resource creation");
+
+  g_fake = {};
+  g_fake.max_descriptor_set_sampled_images = 0;
+  const auto zero_sampled = submit(MakeImageLeaseCompile(false, false));
+  Check(zero_sampled.status == vk::VulkanComputeStatus::kResourceLimit &&
+            HasDiagnostic(zero_sampled, vk::VulkanComputeDiagnosticCode::kResourceLimit,
+                          vk::VulkanDiagnosticSeverity::kError) &&
+            g_fake.images_created == 0 && g_fake.samplers_created == 0,
+        "zero sampled-image descriptor limit did not reject before cache resource creation");
+
+  g_fake = {};
+  g_fake.max_per_stage_descriptor_storage_images = 0;
+  const auto zero_storage = submit(MakeImageLeaseCompile(false, true));
+  Check(zero_storage.status == vk::VulkanComputeStatus::kResourceLimit &&
+            HasDiagnostic(zero_storage, vk::VulkanComputeDiagnosticCode::kResourceLimit,
+                          vk::VulkanDiagnosticSeverity::kError) &&
+            g_fake.images_created == 0 && g_fake.samplers_created == 0,
+        "zero storage-image descriptor limit did not reject before cache resource creation");
+
+  g_fake = {};
+  g_fake.max_descriptor_set_samplers = 0;
+  auto sampled_with_sampler = MakeImageLeaseCompile(false, false);
+  sampled_with_sampler.program.info.samplers.push_back({.source = 0});
+  sampled_with_sampler.program.bindings.descriptors.push_back(
+      {kajps5::gpu::shader::recompiler::IR::DescriptorBindingKind::Samplers, 4, {0}});
+  kajps5::gpu::shader::recompiler::IR::DescriptorValue sampler;
+  sampler.dword_count = 4;
+  sampled_with_sampler.resources.samplers.push_back(sampler);
+  const auto zero_sampler = submit(sampled_with_sampler);
+  Check(zero_sampler.status == vk::VulkanComputeStatus::kResourceLimit &&
+            HasDiagnostic(zero_sampler, vk::VulkanComputeDiagnosticCode::kResourceLimit,
+                          vk::VulkanDiagnosticSeverity::kError) &&
+            g_fake.images_created == 0 && g_fake.samplers_created == 0,
+        "zero sampler descriptor limit did not reject before cache resource creation");
+
+  g_fake = {};
+  g_fake.max_per_stage_resources = 1;
+  const auto combined = submit(MakeImageLeaseCompile(true, true));
+  Check(combined.status == vk::VulkanComputeStatus::kResourceLimit &&
+            HasDiagnostic(combined, vk::VulkanComputeDiagnosticCode::kResourceLimit,
+                          vk::VulkanDiagnosticSeverity::kError) &&
+            g_fake.images_created == g_fake.images_destroyed &&
+            g_fake.views_created == g_fake.views_destroyed &&
+            !g_fake.queue_submit_calls,
+        "combined per-stage descriptor limit did not reject and clean prepared leases");
+}
+
+void TestTranslatedImageSamplerTransactionalRollback() {
+  using Protection = kajps5::memory::GuestMemoryProtection;
+  const auto mixed_compile = [] {
+    auto compile = MakeImageLeaseCompile(true, true);
+    compile.program.info.samplers.push_back({.source = 0});
+    compile.program.bindings.descriptors.push_back(
+        {kajps5::gpu::shader::recompiler::IR::DescriptorBindingKind::Samplers,
+         4, {0}});
+    kajps5::gpu::shader::recompiler::IR::DescriptorValue sampler;
+    sampler.dword_count = 4;
+    compile.resources.samplers.push_back(sampler);
+    return compile;
+  };
+  const auto run = [&](FailurePoint failure,
+                       const kajps5::gpu::shader::recompiler::CompileResult& compile,
+                       const char* message) {
+    g_fake = {};
+    g_fake.failure = failure;
+    g_fake.poison_outputs_on_failure = true;
+    kajps5::memory::GuestMemory memory(
+        0x700000, 0x1000, Protection::kRead | Protection::kWrite |
+                              Protection::kGpuRead | Protection::kGpuWrite);
+    const std::array<std::byte, 16> bytes{};
+    Check(memory.Initialize(0x700000, bytes) && memory.Initialize(0x700200, bytes),
+          "transactional image rollback guest initialization failed");
+    kajps5::gpu::GpuRuntime runtime(memory);
+    Check(static_cast<bool>(runtime.InitializeVulkan(FakeLoader())),
+          "transactional image rollback Vulkan initialization failed");
+    const auto failed = runtime.SubmitVulkanTranslatedCompute(compile, 1, 1, 1, 10);
+    Check(!failed && failed.retained_submission_count == 0 &&
+              g_fake.images_created == g_fake.images_destroyed &&
+              g_fake.views_created == g_fake.views_destroyed &&
+              g_fake.samplers_created == g_fake.samplers_destroyed &&
+              g_fake.buffers_created == g_fake.buffers_destroyed &&
+              g_fake.memories_allocated == g_fake.memories_freed &&
+              g_fake.descriptor_layouts_created == g_fake.descriptor_layouts_destroyed &&
+              !runtime.resource_coherence().Query(1) &&
+              !runtime.resource_coherence().Query(2),
+          message);
+  };
+
+  const auto image_only = [&] {
+    auto compile = MakeImageLeaseCompile(false, true);
+    compile.program.info.samplers.push_back({.source = 0});
+    compile.program.bindings.descriptors.push_back(
+        {kajps5::gpu::shader::recompiler::IR::DescriptorBindingKind::Samplers,
+         4, {0}});
+    kajps5::gpu::shader::recompiler::IR::DescriptorValue sampler;
+    sampler.dword_count = 4;
+    compile.resources.samplers.push_back(sampler);
+    return compile;
+  }();
+  for (const FailurePoint failure : {FailurePoint::kCreateImage,
+                                     FailurePoint::kAllocateMemory,
+                                     FailurePoint::kBindImageMemory,
+                                     FailurePoint::kCreateImageView,
+                                     FailurePoint::kCreateSampler}) {
+    run(failure, image_only,
+        "image or sampler poisoned-output rollback leaked an adopted handle or coherence lease");
+  }
+  run(FailurePoint::kCreateDescriptorSetLayout, mixed_compile(),
+      "post-preparation descriptor failure did not roll back mixed image/sampler leases");
+}
+
 }  // namespace
 
 int main() {
@@ -2050,5 +2863,13 @@ int main() {
   TestTranslatedInFlightVersionSeparation();
   TestTranslatedBackingBound();
   TestTranslatedOverlappingAliasCoalescing();
+  TestTranslatedImageOnlyDescriptorAndCommandOrder();
+  TestTranslatedMixedAndSharedImageDescriptors();
+  TestTranslatedPreparedDescriptorMismatchRollback();
+  TestTranslatedImageLeaseTimeoutAndPoll();
+  TestTranslatedImageReadbackRetry();
+  TestTranslatedImageDeviceLossPaths();
+  TestTranslatedDescriptorLimits();
+  TestTranslatedImageSamplerTransactionalRollback();
   return 0;
 }

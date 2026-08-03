@@ -593,6 +593,28 @@ VulkanGuestImageSetPreparation VulkanGuestImageCache::PrepareTranslated(
               "translated image or sampler count exceeds the fixed bound");
       return set;
     }
+    std::size_t sampled_count = 0;
+    std::size_t storage_count = 0;
+    std::size_t sampler_count = 0;
+    for (const auto& group : program.bindings.descriptors) {
+      using K = shader::recompiler::IR::DescriptorBindingKind;
+      if (group.kind == K::Samplers) sampler_count += group.resources.size();
+      else if (IsImageBinding(group.kind)) {
+        if (IsStorageBinding(group.kind)) storage_count += group.resources.size();
+        else sampled_count += group.resources.size();
+      }
+    }
+    const auto& limits = context_.properties();
+    if (sampled_count > limits.max_per_stage_descriptor_sampled_images ||
+        sampled_count > limits.max_descriptor_set_sampled_images ||
+        storage_count > limits.max_per_stage_descriptor_storage_images ||
+        storage_count > limits.max_descriptor_set_storage_images ||
+        sampler_count > limits.max_per_stage_descriptor_samplers ||
+        sampler_count > limits.max_descriptor_set_samplers) {
+      FailSet(set, VulkanGuestImageSetStatus::kResourceLimit,
+              "image or sampler descriptor count exceeds selected Vulkan device limits");
+      return set;
+    }
     std::vector<std::uint32_t> bindings;
     std::vector<std::uint32_t> image_preparation(program.info.images.size(), UINT32_MAX);
     std::vector<std::uint32_t> sampler_lease(program.info.samplers.size(), UINT32_MAX);
@@ -1070,6 +1092,7 @@ bool VulkanGuestImageCache::RecordReadback(
 }
 
 bool VulkanGuestImageCache::MarkSubmitted(VulkanGuestImagePreparation& p) noexcept {
+  if (p && !p.writable) return true;
   if (!p || !p.writable || !p.readback_recorded || p.gpu_dirty || p.resource == 0 ||
       !coherence_.MarkGpuWrite(p.resource)) return false;
   p.gpu_dirty = true;
@@ -1078,6 +1101,7 @@ bool VulkanGuestImageCache::MarkSubmitted(VulkanGuestImagePreparation& p) noexce
 
 bool VulkanGuestImageCache::Complete(VulkanGuestImagePreparation& p) noexcept {
   try {
+    if (p && !p.writable) return true;
     const auto state = p.resource ? coherence_.Query(p.resource) : std::nullopt;
     if (!p || !p.gpu_dirty || !p.readback_recorded || !state || !state->mapped ||
         state->mapping_changed || !state->gpu_write_pending ||

@@ -282,31 +282,63 @@ vulkan::VulkanComputeResult GpuRuntime::SubmitVulkanTranslatedCompute(
     vulkan_buffer_cache_ = std::make_unique<vulkan::VulkanGuestBufferCache>(
         *vulkan_context_, memory_, *resource_coherence_);
   }
-  auto prepared = vulkan_buffer_cache_->Prepare(compile);
-  if (!prepared) {
-    result.status = vulkan::VulkanComputeStatus::kInvalidArgument;
+  if (vulkan_image_cache_ == nullptr) {
+    vulkan_image_cache_ = std::make_unique<vulkan::VulkanGuestImageCache>(
+        *vulkan_context_, memory_, *resource_coherence_);
+  }
+  // Both preparations are leases.  Do not let one cache's partial success
+  // escape if the other cache rejects the immutable specialization.
+  auto buffers = vulkan_buffer_cache_->Prepare(compile);
+  if (!buffers) {
+    const bool resource_limit =
+        buffers.status == vulkan::VulkanGuestBufferStatus::kResourceLimit;
+    result.status = resource_limit ? vulkan::VulkanComputeStatus::kResourceLimit
+                                   : vulkan::VulkanComputeStatus::kInvalidArgument;
     const std::string message =
-        prepared.diagnostics.empty()
+        buffers.diagnostics.empty()
             ? "translated compute guest-buffer preparation failed"
-            : prepared.diagnostics.front().message;
+            : buffers.diagnostics.front().message;
     result.diagnostics.push_back(
         {vulkan::VulkanDiagnosticSeverity::kError,
-         vulkan::VulkanComputeDiagnosticCode::kInputRejected, 0, VK_SUCCESS,
+         resource_limit ? vulkan::VulkanComputeDiagnosticCode::kResourceLimit
+                        : vulkan::VulkanComputeDiagnosticCode::kInputRejected,
+         0, VK_SUCCESS,
          message});
-    vulkan_buffer_cache_->Discard(prepared);
+    vulkan_buffer_cache_->Discard(buffers);
+    return result;
+  }
+  auto images = vulkan_image_cache_->PrepareTranslated(compile);
+  if (!images) {
+    const bool resource_limit =
+        images.status == vulkan::VulkanGuestImageSetStatus::kResourceLimit;
+    result.status = resource_limit ? vulkan::VulkanComputeStatus::kResourceLimit
+                                   : vulkan::VulkanComputeStatus::kInvalidArgument;
+    const std::string message = images.diagnostics.empty()
+        ? "translated compute guest-image preparation failed"
+        : images.diagnostics.front().message;
+    result.diagnostics.push_back(
+        {vulkan::VulkanDiagnosticSeverity::kError,
+         resource_limit ? vulkan::VulkanComputeDiagnosticCode::kResourceLimit
+                        : vulkan::VulkanComputeDiagnosticCode::kInputRejected,
+         0, VK_SUCCESS,
+         message});
+    vulkan_image_cache_->Discard(images);
+    vulkan_buffer_cache_->Discard(buffers);
     return result;
   }
   if (vulkan_execution_ == nullptr) {
     auto created = vulkan::VulkanComputeExecution::Create(*vulkan_context_);
     if (!created) {
-      vulkan_buffer_cache_->Discard(prepared);
+      vulkan_image_cache_->Discard(images);
+      vulkan_buffer_cache_->Discard(buffers);
       return std::move(created.initialization);
     }
     vulkan_execution_ = std::move(created.execution);
   }
   return vulkan_execution_->SubmitTranslated(
-      compile, *vulkan_buffer_cache_, std::move(prepared), group_count_x,
-      group_count_y, group_count_z, timeout_ns);
+      compile, *vulkan_buffer_cache_, std::move(buffers),
+      *vulkan_image_cache_, std::move(images), group_count_x, group_count_y,
+      group_count_z, timeout_ns);
 }
 
 bool GpuRuntime::has_vulkan_compute_execution() const noexcept {

@@ -18,6 +18,7 @@
 
 #include "gpu/vulkan/buffer_cache.h"
 #include "gpu/vulkan/device.h"
+#include "gpu/vulkan/image_cache.h"
 
 namespace kajps5::gpu::vulkan {
 
@@ -145,11 +146,31 @@ class VulkanComputeExecution final {
       std::uint32_t group_count_z,
       std::uint64_t timeout_ns = kDefaultVulkanComputeFenceWaitNanoseconds);
 
+  // The runtime prepares both cache groups before entering this common
+  // executor.  The immutable CompileResult remains the binding contract.
+  [[nodiscard]] VulkanComputeResult SubmitTranslated(
+      const shader::recompiler::CompileResult &compile,
+      VulkanGuestBufferCache &buffer_cache,
+      VulkanGuestBufferPreparation buffer_preparation,
+      VulkanGuestImageCache &image_cache,
+      VulkanGuestImageSetPreparation image_preparation,
+      std::uint32_t group_count_x, std::uint32_t group_count_y,
+      std::uint32_t group_count_z,
+      std::uint64_t timeout_ns = kDefaultVulkanComputeFenceWaitNanoseconds);
+
   // Nonblocking fence polling for retained timed-out work. Reclamation never
   // resets or frees a command resource before its individual fence signals.
   [[nodiscard]] VulkanComputeResult PollCompleted();
 
  private:
+  [[nodiscard]] VulkanComputeResult SubmitTranslatedPrepared(
+      const shader::recompiler::CompileResult &compile,
+      VulkanGuestBufferCache &buffer_cache,
+      VulkanGuestBufferPreparation buffer_preparation,
+      VulkanGuestImageCache *image_cache,
+      VulkanGuestImageSetPreparation image_preparation,
+      std::uint32_t group_count_x, std::uint32_t group_count_y,
+      std::uint32_t group_count_z, std::uint64_t timeout_ns);
   struct Impl;
 
   explicit VulkanComputeExecution(std::unique_ptr<Impl> impl) noexcept;

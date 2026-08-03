@@ -58,6 +58,14 @@ adapted paths change.
   fields, alias ownership, and Vulkan lease topology; no renderer, cache, or
   memory owner was copied.
 
+- M8 translated descriptor execution additionally reviewed KytyPS5
+  `renderer/pipeline/descriptors.cpp`, `renderer/renderCompute.cpp`, and
+  synchronization ownership at `fb5ecec455cf6c67154134429485ffccbfc34203`,
+  alongside SharpEmu's guest-image write tracking and finite-fence behavior.
+  KajPS5 keeps those operations within its existing runtime, cache, and
+  coherence owners: grouped Vulkan descriptors, image transfer commands, and
+  fence-complete checked readback are not a renderer or a second memory owner.
+
 - M8 guest-image layout work retained KytyPS5 at
   `fb5ecec455cf6c67154134429485ffccbfc34203` after reviewing
   `src/graphics/guest_gpu/gpu_format.*`,

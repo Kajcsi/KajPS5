@@ -22,6 +22,7 @@
 #include "gpu/vulkan/buffer_cache.h"
 #include "gpu/vulkan/device.h"
 #include "gpu/vulkan/execution.h"
+#include "gpu/vulkan/image_cache.h"
 
 namespace kajps5::memory {
 class GuestMemory;
@@ -213,6 +214,7 @@ private:
   // Declared before execution so destruction releases retained execution
   // leases before the guest buffer cache and then the device context.
   std::unique_ptr<vulkan::VulkanGuestBufferCache> vulkan_buffer_cache_;
+  std::unique_ptr<vulkan::VulkanGuestImageCache> vulkan_image_cache_;
   // Declared after the context so destruction reverses this order: retained
   // execution resources are dealt with before the Vulkan device disappears.
   std::unique_ptr<vulkan::VulkanComputeExecution> vulkan_execution_;

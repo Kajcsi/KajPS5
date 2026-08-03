@@ -703,7 +703,7 @@ was copied.
 
 The optional Vulkan owner in `src/gpu/vulkan/{loader,device,execution}.*`,
 `src/gpu/vulkan/vulkan_types.h`, `src/gpu/runtime.*`, and
-`tests/gpu_vulkan_{device,execution,smoke,compute_smoke}_test.cpp` adapts
+`tests/gpu_vulkan_{device,execution,smoke,compute_smoke,guest_buffer_smoke,guest_image_smoke}_test.cpp` adapts
 KytyPS5's instance, physical-device, universal queue, logical-device,
 queue-mutex, command-scheduler, and completion-ownership shape from
 `src/graphics/host_gpu/vulkanInstance.h`,
@@ -714,6 +714,10 @@ non-surface renderer-ready core feature baseline, but intentionally does not
 import a window, surface, allocator, renderer, global dispatch table, or a
 second GPU runtime. The child compute owner accepts precompiled SPIR-V and
 owns one command/fence/pipeline transaction per dispatch until completion.
+Translated descriptor submission re-expresses KytyPS5's grouped descriptor,
+compute-recording, and synchronization shape using the existing KajPS5 guest
+buffer/image caches and resource-coherence owner; no renderer or cache was
+imported.
 Device ranking, capability diagnostics, finite timeout retention, later fence
 status collection, and focused injected tests re-express the device-scoring,
 capability reporting, and abandoned-submission behavior in SharpEmu

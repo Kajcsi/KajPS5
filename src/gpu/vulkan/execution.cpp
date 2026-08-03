@@ -16,6 +16,7 @@
 #include <mutex>
 #include <optional>
 #include <utility>
+#include <vector>
 
 namespace kajps5::gpu::vulkan {
 namespace {
@@ -62,6 +63,8 @@ struct Submission {
   VkDescriptorSet descriptor_set = VK_NULL_HANDLE;
   VulkanGuestBufferCache *guest_cache = nullptr;
   std::optional<VulkanGuestBufferPreparation> guest_preparation;
+  VulkanGuestImageCache *image_cache = nullptr;
+  std::optional<VulkanGuestImageSetPreparation> image_preparation;
   std::uint64_t timeline = 0;
 };
 
@@ -92,6 +95,12 @@ void DestroySubmission(const ComputeDispatch& dispatch,
     submission.guest_cache->Discard(*submission.guest_preparation);
     submission.guest_preparation.reset();
     submission.guest_cache = nullptr;
+  }
+  if (submission.image_preparation.has_value() &&
+      submission.image_cache != nullptr) {
+    submission.image_cache->Discard(*submission.image_preparation);
+    submission.image_preparation.reset();
+    submission.image_cache = nullptr;
   }
   if (submission.descriptor_pool != VK_NULL_HANDLE &&
       dispatch.destroy_descriptor_pool != nullptr) {
@@ -359,11 +368,14 @@ void DestroyRetainedSubmissions(ExecutionImpl& impl) noexcept {
 template <typename ExecutionImpl>
 void DestroyLostRetainedSubmissions(ExecutionImpl &impl) noexcept {
   VulkanGuestBufferCache *cache = nullptr;
+  VulkanGuestImageCache *image_cache = nullptr;
   for (std::optional<Submission> &retained_submission : impl.retained) {
     if (!retained_submission.has_value())
       continue;
     if (retained_submission->guest_cache != nullptr)
       cache = retained_submission->guest_cache;
+    if (retained_submission->image_cache != nullptr)
+      image_cache = retained_submission->image_cache;
     DestroySubmission(impl.dispatch, impl.context.device(),
                       *retained_submission);
     retained_submission.reset();
@@ -371,6 +383,9 @@ void DestroyLostRetainedSubmissions(ExecutionImpl &impl) noexcept {
   if (cache != nullptr) {
     impl.lost_dirty_resource_count = std::max(
         impl.lost_dirty_resource_count, cache->lost_dirty_resource_count());
+  }
+  if (image_cache != nullptr) {
+    impl.lost_dirty_resource_count += image_cache->lost_dirty_resource_count();
   }
 }
 
@@ -409,6 +424,21 @@ bool ReclaimCompletedLocked(ExecutionImpl& impl,
             retained_submission->timeline);
         SnapshotExecutionState(impl, result);
         return false;
+      }
+      if (retained_submission->image_preparation.has_value() &&
+          retained_submission->image_cache != nullptr) {
+        for (VulkanGuestImagePreparation& image :
+             retained_submission->image_preparation->images) {
+          if (!retained_submission->image_cache->Complete(image)) {
+            result.status = VulkanComputeStatus::kReadbackFailed;
+            AddDiagnostic(result, VulkanDiagnosticSeverity::kError,
+                          VulkanComputeDiagnosticCode::kReadbackFailed,
+                          "Vulkan guest-image completion could not publish readback",
+                          retained_submission->timeline);
+            SnapshotExecutionState(impl, result);
+            return false;
+          }
+        }
       }
       impl.completed_timeline =
           std::max(impl.completed_timeline, retained_submission->timeline);
@@ -797,14 +827,80 @@ VulkanComputeResult VulkanComputeExecution::SubmitTranslated(
     VulkanGuestBufferCache &cache, VulkanGuestBufferPreparation preparation,
     std::uint32_t group_count_x, std::uint32_t group_count_y,
     std::uint32_t group_count_z, std::uint64_t timeout_ns) {
+  return SubmitTranslatedPrepared(compile, cache, std::move(preparation),
+                                  nullptr, {}, group_count_x, group_count_y,
+                                  group_count_z, timeout_ns);
+}
+
+VulkanComputeResult VulkanComputeExecution::SubmitTranslated(
+    const shader::recompiler::CompileResult &compile,
+    VulkanGuestBufferCache &buffer_cache,
+    VulkanGuestBufferPreparation buffer_preparation,
+    VulkanGuestImageCache &image_cache,
+    VulkanGuestImageSetPreparation image_preparation,
+    std::uint32_t group_count_x, std::uint32_t group_count_y,
+    std::uint32_t group_count_z, std::uint64_t timeout_ns) {
+  return SubmitTranslatedPrepared(compile, buffer_cache,
+                                  std::move(buffer_preparation), &image_cache,
+                                  std::move(image_preparation), group_count_x,
+                                  group_count_y, group_count_z, timeout_ns);
+}
+
+VulkanComputeResult VulkanComputeExecution::SubmitTranslatedPrepared(
+    const shader::recompiler::CompileResult &compile,
+    VulkanGuestBufferCache &cache, VulkanGuestBufferPreparation preparation,
+    VulkanGuestImageCache *image_cache,
+    VulkanGuestImageSetPreparation image_preparation,
+    std::uint32_t group_count_x, std::uint32_t group_count_y,
+    std::uint32_t group_count_z, std::uint64_t timeout_ns) {
   VulkanComputeResult result;
   const auto &layout = compile.program.bindings;
   const auto &descriptors = layout.descriptors;
-  const bool descriptor_shape =
-      descriptors.size() == 1 &&
-      descriptors.front().kind ==
-          shader::recompiler::IR::DescriptorBindingKind::Buffers &&
-      descriptors.front().resources.size() == preparation.views.size();
+  using DescriptorKind = shader::recompiler::IR::DescriptorBindingKind;
+  std::size_t buffer_count = 0;
+  std::size_t sampled_count = 0;
+  std::size_t storage_count = 0;
+  std::size_t sampler_count = 0;
+  bool descriptor_shape = true;
+  std::vector<std::uint32_t> seen_bindings;
+  for (const auto& group : descriptors) {
+    if (std::find(seen_bindings.begin(), seen_bindings.end(), group.binding) !=
+        seen_bindings.end()) descriptor_shape = false;
+    seen_bindings.push_back(group.binding);
+    if (group.kind == DescriptorKind::Buffers) {
+      ++buffer_count;
+      descriptor_shape = descriptor_shape &&
+          group.resources.size() == preparation.views.size();
+    } else if (group.kind == DescriptorKind::Samplers) {
+      sampler_count += group.resources.size();
+    } else if (group.kind >= DescriptorKind::Sampled1D &&
+               group.kind <= DescriptorKind::StorageUint3D) {
+      const bool storage = group.kind >= DescriptorKind::Storage1D &&
+                           group.kind <= DescriptorKind::StorageUint3D;
+      (storage ? storage_count : sampled_count) += group.resources.size();
+    } else {
+      descriptor_shape = false;
+    }
+  }
+  if (buffer_count > 1 || (buffer_count == 0 && !preparation.views.empty()) ||
+      (image_cache == nullptr && (sampled_count != 0 || storage_count != 0 ||
+                                  sampler_count != 0))) {
+    descriptor_shape = false;
+  }
+  const bool image_descriptors_requested =
+      sampled_count != 0 || storage_count != 0 || sampler_count != 0;
+  const bool prepared_image_leases_missing =
+      image_cache != nullptr && image_descriptors_requested && !image_preparation;
+  const bool prepared_image_descriptor_count_mismatch =
+      image_cache != nullptr && image_preparation &&
+      (image_preparation.image_descriptors.size() != sampled_count + storage_count ||
+       image_preparation.sampler_descriptors.size() != sampler_count);
+  const bool image_cache_missing =
+      image_cache == nullptr && image_descriptors_requested;
+  if (image_cache != nullptr) {
+    descriptor_shape = descriptor_shape && !prepared_image_leases_missing &&
+        !prepared_image_descriptor_count_mismatch;
+  }
   const std::uint64_t push_end =
       static_cast<std::uint64_t>(layout.push_constant_offset) +
       static_cast<std::uint64_t>(layout.push_constant_size);
@@ -823,26 +919,51 @@ VulkanComputeResult VulkanComputeExecution::SubmitTranslated(
         view.descriptor_range <=
             impl_->context.properties().max_storage_buffer_range;
   }
+  const bool descriptor_limit_exceeded =
+      preparation.views.size() >
+          impl_->context.properties().max_per_stage_descriptor_storage_buffers ||
+      preparation.views.size() >
+          impl_->context.properties().max_descriptor_set_storage_buffers ||
+      sampled_count >
+          impl_->context.properties().max_per_stage_descriptor_sampled_images ||
+      sampled_count >
+          impl_->context.properties().max_descriptor_set_sampled_images ||
+      storage_count >
+          impl_->context.properties().max_per_stage_descriptor_storage_images ||
+      storage_count >
+          impl_->context.properties().max_descriptor_set_storage_images ||
+      sampler_count >
+          impl_->context.properties().max_per_stage_descriptor_samplers ||
+      sampler_count >
+          impl_->context.properties().max_descriptor_set_samplers ||
+      preparation.views.size() + sampled_count + storage_count + sampler_count >
+          impl_->context.properties().max_per_stage_resources;
   if (!preparation || compile.spirv.empty() || group_count_x == 0 ||
       group_count_y == 0 || group_count_z == 0 ||
       timeout_ns == std::numeric_limits<std::uint64_t>::max() ||
-      layout.descriptor_set != 0 || !descriptor_shape || !view_shape ||
-      preparation.views.empty() ||
-      preparation.views.size() >
-          impl_->context.properties()
-              .max_per_stage_descriptor_storage_buffers ||
-      preparation.views.size() >
-          impl_->context.properties().max_descriptor_set_storage_buffers ||
+      layout.descriptor_set != 0 || image_cache_missing || !descriptor_shape || !view_shape ||
+      descriptor_limit_exceeded ||
       (layout.push_constant_offset & 3U) != 0 ||
       (layout.push_constant_size & 3U) != 0 ||
       push_end > impl_->context.properties().max_push_constants_size ||
       layout.push_constant_size !=
           preparation.shader_data_dwords.size() * sizeof(std::uint32_t)) {
-    result.status = VulkanComputeStatus::kInvalidArgument;
+    result.status = descriptor_limit_exceeded ? VulkanComputeStatus::kResourceLimit
+                                              : VulkanComputeStatus::kInvalidArgument;
     AddDiagnostic(result, VulkanDiagnosticSeverity::kError,
-                  VulkanComputeDiagnosticCode::kInputRejected,
-                  "translated compute layout, limits, or prepared guest "
-                  "buffers are invalid");
+                  descriptor_limit_exceeded
+                      ? VulkanComputeDiagnosticCode::kResourceLimit
+                      : VulkanComputeDiagnosticCode::kInputRejected,
+                  descriptor_limit_exceeded
+                      ? "translated descriptor resources exceed selected Vulkan device limits"
+                      : prepared_image_leases_missing
+                          ? "translated image or sampler descriptors are missing prepared image leases"
+                          : prepared_image_descriptor_count_mismatch
+                              ? "prepared image or sampler descriptor counts do not match the translated layout"
+                              : image_cache_missing
+                                  ? "translated image or sampler descriptors require prepared image leases"
+                                  : "translated compute layout or prepared guest buffers are invalid");
+    if (image_cache != nullptr) image_cache->Discard(image_preparation);
     cache.Discard(preparation);
     return result;
   }
@@ -852,6 +973,7 @@ VulkanComputeResult VulkanComputeExecution::SubmitTranslated(
     AddDiagnostic(result, VulkanDiagnosticSeverity::kError,
                   VulkanComputeDiagnosticCode::kDeviceLost,
                   "translated Vulkan compute is unavailable after device loss");
+    if (image_cache != nullptr) image_cache->Discard(image_preparation);
     cache.Discard(preparation);
     return result;
   }
@@ -864,12 +986,14 @@ VulkanComputeResult VulkanComputeExecution::SubmitTranslated(
           kMaximumVulkanComputeRetainedSubmissions) {
     if (result.status == VulkanComputeStatus::kOk)
       result.status = VulkanComputeStatus::kResourceLimit;
+    if (image_cache != nullptr) image_cache->Discard(image_preparation);
     cache.Discard(preparation);
     return result;
   }
   auto *slot = FindFreeRetainedSlot(*impl_);
   if (slot == nullptr) {
     result.status = VulkanComputeStatus::kResourceLimit;
+    if (image_cache != nullptr) image_cache->Discard(image_preparation);
     cache.Discard(preparation);
     return result;
   }
@@ -889,6 +1013,7 @@ VulkanComputeResult VulkanComputeExecution::SubmitTranslated(
                   VulkanComputeDiagnosticCode::kDeviceFunctionUnavailable,
                   "translated Vulkan compute is missing descriptor or "
                   "push-constant entry points");
+    if (image_cache != nullptr) image_cache->Discard(image_preparation);
     cache.Discard(preparation);
     return result;
   }
@@ -897,29 +1022,66 @@ VulkanComputeResult VulkanComputeExecution::SubmitTranslated(
   Submission &submission = transaction.submission();
   submission.guest_cache = &cache;
   submission.guest_preparation.emplace(std::move(preparation));
+  submission.image_cache = image_cache;
+  if (image_cache != nullptr)
+    submission.image_preparation.emplace(std::move(image_preparation));
   const auto fail = [&](VulkanComputeStatus status,
                         VulkanComputeDiagnosticCode code, const char *name,
                         VkResult value) {
-    result.status =
-        IsDeviceLost(value) ? VulkanComputeStatus::kDeviceLost : status;
-    if (IsDeviceLost(value))
-      impl_->MarkDeviceLost();
+    if (IsDeviceLost(value)) {
+      AddDeviceLostDiagnostic(
+          *impl_, result,
+          std::string(name) + " reported device loss for translated Vulkan compute",
+          0, value);
+      SnapshotExecutionState(*impl_, result);
+      return result;
+    }
+    result.status = status;
     AddDiagnostic(result, VulkanDiagnosticSeverity::kError,
-                  IsDeviceLost(value) ? VulkanComputeDiagnosticCode::kDeviceLost
-                                      : code,
+                  code,
                   std::string(name) + " failed", 0, value);
     return result;
   };
-  VkDescriptorSetLayoutBinding binding{};
-  binding.binding = compile.program.bindings.descriptors.front().binding;
-  binding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-  binding.descriptorCount =
-      static_cast<std::uint32_t>(submission.guest_preparation->views.size());
-  binding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+  const auto reject_prepared_descriptor = [&](const char* message) {
+    result.status = VulkanComputeStatus::kInvalidArgument;
+    AddDiagnostic(result, VulkanDiagnosticSeverity::kError,
+                  VulkanComputeDiagnosticCode::kInputRejected, message);
+    return result;
+  };
+  std::vector<VkDescriptorSetLayoutBinding> bindings;
+  std::vector<VkDescriptorPoolSize> pool_sizes;
+  bindings.reserve(descriptors.size());
+  const auto add_pool = [&](VkDescriptorType type, std::uint32_t count) {
+    if (count == 0) return;
+    for (auto& size : pool_sizes) {
+      if (size.type == type) { size.descriptorCount += count; return; }
+    }
+    pool_sizes.push_back({type, count});
+  };
+  for (const auto& group : descriptors) {
+    VkDescriptorType type = VK_DESCRIPTOR_TYPE_MAX_ENUM;
+    if (group.kind == DescriptorKind::Buffers) type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    else if (group.kind == DescriptorKind::Samplers) type = VK_DESCRIPTOR_TYPE_SAMPLER;
+    else if (group.kind >= DescriptorKind::Storage1D &&
+             group.kind <= DescriptorKind::StorageUint3D) type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    else if (group.kind >= DescriptorKind::Sampled1D &&
+             group.kind <= DescriptorKind::SampledUint3D) type = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+    if (type == VK_DESCRIPTOR_TYPE_MAX_ENUM || group.resources.empty()) {
+      result.status = VulkanComputeStatus::kInvalidArgument;
+      AddDiagnostic(result, VulkanDiagnosticSeverity::kError,
+                    VulkanComputeDiagnosticCode::kInputRejected,
+                    "translated descriptor group is empty or unsupported");
+      return result;
+    }
+    bindings.push_back({group.binding, type,
+                        static_cast<std::uint32_t>(group.resources.size()),
+                        VK_SHADER_STAGE_COMPUTE_BIT, nullptr});
+    add_pool(type, static_cast<std::uint32_t>(group.resources.size()));
+  }
   VkDescriptorSetLayoutCreateInfo set_layout_info{};
   set_layout_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-  set_layout_info.bindingCount = 1;
-  set_layout_info.pBindings = &binding;
+  set_layout_info.bindingCount = static_cast<std::uint32_t>(bindings.size());
+  set_layout_info.pBindings = bindings.empty() ? nullptr : bindings.data();
   VkDescriptorSetLayout descriptor_set_layout = VK_NULL_HANDLE;
   VkResult api = impl_->dispatch.create_descriptor_set_layout(
       device, &set_layout_info, nullptr, &descriptor_set_layout);
@@ -928,13 +1090,11 @@ VulkanComputeResult VulkanComputeExecution::SubmitTranslated(
                 VulkanComputeDiagnosticCode::kPipelineLayoutCreationFailed,
                 "vkCreateDescriptorSetLayout", api);
   submission.descriptor_set_layout = descriptor_set_layout;
-  VkDescriptorPoolSize pool_size{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
-                                 binding.descriptorCount};
   VkDescriptorPoolCreateInfo pool_info{};
   pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
   pool_info.maxSets = 1;
-  pool_info.poolSizeCount = 1;
-  pool_info.pPoolSizes = &pool_size;
+  pool_info.poolSizeCount = static_cast<std::uint32_t>(pool_sizes.size());
+  pool_info.pPoolSizes = pool_sizes.empty() ? nullptr : pool_sizes.data();
   VkDescriptorPool descriptor_pool = VK_NULL_HANDLE;
   api = impl_->dispatch.create_descriptor_pool(device, &pool_info, nullptr,
                                                &descriptor_pool);
@@ -956,26 +1116,84 @@ VulkanComputeResult VulkanComputeExecution::SubmitTranslated(
                 VulkanComputeDiagnosticCode::kPipelineLayoutCreationFailed,
                 "vkAllocateDescriptorSets", api);
   submission.descriptor_set = descriptor_set;
-  std::array<VkDescriptorBufferInfo,
-             kMaximumVulkanComputeRetainedSubmissions * 4>
-      infos{};
-  if (binding.descriptorCount > infos.size()) {
-    result.status = VulkanComputeStatus::kResourceLimit;
-    return result;
+  std::vector<VkDescriptorBufferInfo> buffer_infos;
+  std::vector<VkDescriptorImageInfo> image_infos;
+  std::vector<VkWriteDescriptorSet> writes;
+  buffer_infos.reserve(submission.guest_preparation->views.size());
+  image_infos.reserve(sampled_count + storage_count + sampler_count);
+  writes.reserve(bindings.size());
+  for (const auto& binding : bindings) {
+    VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    write.dstSet = submission.descriptor_set;
+    write.dstBinding = binding.binding;
+    write.descriptorCount = binding.descriptorCount;
+    write.descriptorType = binding.descriptorType;
+    if (binding.descriptorType == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER) {
+      const auto group = std::find_if(descriptors.begin(), descriptors.end(),
+          [&](const auto& candidate) { return candidate.binding == binding.binding; });
+      const std::size_t first = buffer_infos.size();
+      for (std::size_t i = 0; i < group->resources.size(); ++i) {
+        const auto& view = submission.guest_preparation->views[i];
+        buffer_infos.push_back({submission.guest_preparation->buffer,
+                                view.descriptor_offset, view.descriptor_range});
+      }
+      write.pBufferInfo = buffer_infos.data() + first;
+    } else {
+      const std::size_t first = image_infos.size();
+      if (submission.image_preparation == std::nullopt)
+        return reject_prepared_descriptor(
+            "translated image or sampler binding is missing prepared image leases");
+      if (binding.descriptorType == VK_DESCRIPTOR_TYPE_SAMPLER) {
+        for (const auto& descriptor : submission.image_preparation->sampler_descriptors) {
+          if (descriptor.binding != binding.binding) continue;
+          if (descriptor.array_index != image_infos.size() - first ||
+              descriptor.sampler == VK_NULL_HANDLE) {
+            result.status = VulkanComputeStatus::kInvalidArgument;
+            AddDiagnostic(result, VulkanDiagnosticSeverity::kError,
+                          VulkanComputeDiagnosticCode::kInputRejected,
+                          "prepared sampler descriptor does not match its binding");
+            return result;
+          }
+          image_infos.push_back({descriptor.sampler, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED});
+        }
+      } else {
+        for (const auto& descriptor : submission.image_preparation->image_descriptors) {
+          if (descriptor.binding != binding.binding) continue;
+          if (descriptor.array_index != image_infos.size() - first ||
+              descriptor.descriptor_type != binding.descriptorType ||
+              descriptor.view == VK_NULL_HANDLE) {
+            result.status = VulkanComputeStatus::kInvalidArgument;
+            AddDiagnostic(result, VulkanDiagnosticSeverity::kError,
+                          VulkanComputeDiagnosticCode::kInputRejected,
+                          "prepared image descriptor does not match its binding");
+            return result;
+          }
+          VkImageLayout resolved = descriptor.layout;
+          if (descriptor.preparation_index >=
+              submission.image_preparation->images.size())
+            return reject_prepared_descriptor(
+                "prepared image descriptor references an invalid image lease");
+          for (const auto& other : submission.image_preparation->image_descriptors) {
+            if (other.preparation_index == descriptor.preparation_index &&
+                other.descriptor_type == VK_DESCRIPTOR_TYPE_STORAGE_IMAGE) {
+              resolved = VK_IMAGE_LAYOUT_GENERAL;
+              break;
+            }
+          }
+          image_infos.push_back({VK_NULL_HANDLE, descriptor.view, resolved});
+        }
+      }
+      if (image_infos.size() - first != binding.descriptorCount)
+        return reject_prepared_descriptor(
+            "prepared image or sampler descriptors are missing or extra for a binding");
+      write.pImageInfo = image_infos.data() + first;
+    }
+    writes.push_back(write);
   }
-  for (std::size_t i = 0; i < binding.descriptorCount; ++i) {
-    const auto &view = submission.guest_preparation->views[i];
-    infos[i] = {submission.guest_preparation->buffer, view.descriptor_offset,
-                view.descriptor_range};
-  }
-  VkWriteDescriptorSet write{};
-  write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-  write.dstSet = submission.descriptor_set;
-  write.dstBinding = binding.binding;
-  write.descriptorCount = binding.descriptorCount;
-  write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-  write.pBufferInfo = infos.data();
-  impl_->dispatch.update_descriptor_sets(device, 1, &write, 0, nullptr);
+  if (!writes.empty())
+    impl_->dispatch.update_descriptor_sets(device,
+                                           static_cast<std::uint32_t>(writes.size()),
+                                           writes.data(), 0, nullptr);
   VkPushConstantRange push{};
   push.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
   push.offset = layout.push_constant_offset;
@@ -1078,8 +1296,46 @@ VulkanComputeResult VulkanComputeExecution::SubmitTranslated(
             submission.guest_preparation->shader_data_dwords.size() * 4),
         submission.guest_preparation->shader_data_dwords.data());
   }
+  if (submission.image_preparation.has_value()) {
+    for (std::size_t index = 0;
+         index < submission.image_preparation->images.size(); ++index) {
+      VkImageLayout image_layout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+      VkAccessFlags access = 0;
+      for (const auto& descriptor : submission.image_preparation->image_descriptors) {
+        if (descriptor.preparation_index != index) continue;
+        if (descriptor.descriptor_type == VK_DESCRIPTOR_TYPE_STORAGE_IMAGE)
+          image_layout = VK_IMAGE_LAYOUT_GENERAL;
+        if (descriptor.shader_reads) access |= VK_ACCESS_SHADER_READ_BIT;
+        if (descriptor.shader_writes) access |= VK_ACCESS_SHADER_WRITE_BIT;
+      }
+      if (access == 0) access = VK_ACCESS_SHADER_READ_BIT;
+      if (!submission.image_cache->RecordUpload(
+              submission.command_buffer,
+              submission.image_preparation->images[index], image_layout,
+              VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, access)) {
+        result.status = VulkanComputeStatus::kReadbackFailed;
+        AddDiagnostic(result, VulkanDiagnosticSeverity::kError,
+                      VulkanComputeDiagnosticCode::kReadbackFailed,
+                      "Vulkan guest-image upload recording failed");
+        return result;
+      }
+    }
+  }
   impl_->dispatch.cmd_dispatch(submission.command_buffer, group_count_x,
                                group_count_y, group_count_z);
+  if (submission.image_preparation.has_value()) {
+    for (auto& image : submission.image_preparation->images) {
+      if (image.writable && !submission.image_cache->RecordReadback(
+          submission.command_buffer, image, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+          VK_ACCESS_SHADER_WRITE_BIT)) {
+        result.status = VulkanComputeStatus::kReadbackFailed;
+        AddDiagnostic(result, VulkanDiagnosticSeverity::kError,
+                      VulkanComputeDiagnosticCode::kReadbackFailed,
+                      "Vulkan guest-image readback recording failed");
+        return result;
+      }
+    }
+  }
   const bool shader_writes = std::any_of(
       submission.guest_preparation->views.begin(),
       submission.guest_preparation->views.end(),
@@ -1124,6 +1380,19 @@ VulkanComputeResult VulkanComputeExecution::SubmitTranslated(
     SnapshotExecutionState(*impl_, result);
     return result;
   }
+  if (submitted.image_preparation.has_value()) {
+    for (auto& image : submitted.image_preparation->images) {
+      if (!submitted.image_cache->MarkSubmitted(image)) {
+        result.status = VulkanComputeStatus::kReadbackFailed;
+        AddDiagnostic(result, VulkanDiagnosticSeverity::kError,
+                      VulkanComputeDiagnosticCode::kReadbackFailed,
+                      "submitted Vulkan guest image could not be marked GPU-dirty",
+                      result.timeline);
+        SnapshotExecutionState(*impl_, result);
+        return result;
+      }
+    }
+  }
   const VkFence submitted_fence = submitted.fence;
   api = impl_->dispatch.wait_for_fences(device, 1, &submitted_fence, VK_TRUE,
                                         timeout_ns);
@@ -1137,6 +1406,19 @@ VulkanComputeResult VulkanComputeExecution::SubmitTranslated(
                     submitted.timeline);
       SnapshotExecutionState(*impl_, result);
       return result;
+    }
+    if (submitted.image_preparation.has_value()) {
+      for (auto& image : submitted.image_preparation->images) {
+        if (!submitted.image_cache->Complete(image)) {
+          result.status = VulkanComputeStatus::kReadbackFailed;
+          AddDiagnostic(result, VulkanDiagnosticSeverity::kError,
+                        VulkanComputeDiagnosticCode::kReadbackFailed,
+                        "signalled Vulkan guest-image submission retained after readback failure",
+                        submitted.timeline);
+          SnapshotExecutionState(*impl_, result);
+          return result;
+        }
+      }
     }
     impl_->completed_timeline =
         std::max(impl_->completed_timeline, submitted.timeline);

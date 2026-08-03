@@ -11,6 +11,7 @@
 
 #include "core/memory/guest_memory.h"
 #include "gpu/runtime.h"
+#include "gpu/vulkan/buffer_cache.h"
 #include "gpu/vulkan/image_cache.h"
 #include "gpu/vulkan/loader.h"
 
@@ -90,6 +91,15 @@ struct FakeState {
   bool coherent = false;
   bool commands_available = true;
   bool invalidate_available = true;
+  std::uint32_t max_per_stage_descriptor_storage_buffers = 16;
+  std::uint32_t max_descriptor_set_storage_buffers = 16;
+  std::uint32_t max_per_stage_descriptor_samplers = 16;
+  std::uint32_t max_descriptor_set_samplers = 16;
+  std::uint32_t max_per_stage_descriptor_sampled_images = 16;
+  std::uint32_t max_descriptor_set_sampled_images = 16;
+  std::uint32_t max_per_stage_descriptor_storage_images = 16;
+  std::uint32_t max_descriptor_set_storage_images = 16;
+  std::uint32_t max_per_stage_resources = 64;
   std::uintptr_t next_handle = 0x1000;
   std::uint32_t image_allocations = 0;
   std::uint32_t buffer_binds = 0;
@@ -170,8 +180,15 @@ VKAPI_ATTR void VKAPI_CALL FakeGetPhysicalDeviceProperties(VkPhysicalDevice,
   properties->limits.maxImageArrayLayers = 256;
   properties->limits.minStorageBufferOffsetAlignment = 1;
   properties->limits.maxStorageBufferRange = 4096;
-  properties->limits.maxPerStageDescriptorStorageBuffers = 16;
-  properties->limits.maxDescriptorSetStorageBuffers = 16;
+  properties->limits.maxPerStageDescriptorStorageBuffers = g.max_per_stage_descriptor_storage_buffers;
+  properties->limits.maxDescriptorSetStorageBuffers = g.max_descriptor_set_storage_buffers;
+  properties->limits.maxPerStageDescriptorSamplers = g.max_per_stage_descriptor_samplers;
+  properties->limits.maxDescriptorSetSamplers = g.max_descriptor_set_samplers;
+  properties->limits.maxPerStageDescriptorSampledImages = g.max_per_stage_descriptor_sampled_images;
+  properties->limits.maxDescriptorSetSampledImages = g.max_descriptor_set_sampled_images;
+  properties->limits.maxPerStageDescriptorStorageImages = g.max_per_stage_descriptor_storage_images;
+  properties->limits.maxDescriptorSetStorageImages = g.max_descriptor_set_storage_images;
+  properties->limits.maxPerStageResources = g.max_per_stage_resources;
   properties->limits.maxPushConstantsSize = 128;
   properties->limits.nonCoherentAtomSize = 64;
   properties->limits.maxComputeWorkGroupCount[0] = 16;
@@ -918,6 +935,78 @@ void TestTranslatedImageSamplerSet() {
   }
 }
 
+void TestTranslatedDescriptorDeviceLimits() {
+  using Protection = kajps5::memory::GuestMemoryProtection;
+  const auto reject = [](const char* message,
+                         const kajps5::gpu::shader::recompiler::CompileResult& compile) {
+    auto context = Context();
+    kajps5::memory::GuestMemory memory(
+        0x1000, 0x1000, Protection::kRead | Protection::kWrite |
+                            Protection::kGpuRead | Protection::kGpuWrite);
+    Check(memory.InitializeFill(0x1000, 16, std::byte{0x10}),
+          "descriptor-limit guest initialization failed");
+    kajps5::gpu::GpuRuntime runtime(memory);
+    vk::VulkanGuestImageCache cache(*context, memory,
+                                    runtime.resource_coherence());
+    const auto prepared = cache.PrepareTranslated(compile);
+    Check(!prepared && prepared.status == vk::VulkanGuestImageSetStatus::kResourceLimit &&
+              g.issued.empty() && !runtime.resource_coherence().Query(1),
+          message);
+  };
+
+  Reset();
+  g.max_per_stage_descriptor_storage_buffers = 0;
+  {
+    auto context = Context();
+    kajps5::memory::GuestMemory memory(
+        0x1000, 0x1000, Protection::kRead | Protection::kWrite |
+                            Protection::kGpuRead | Protection::kGpuWrite);
+    Check(memory.InitializeFill(0x1000, 16, std::byte{0x10}),
+          "zero buffer-limit guest initialization failed");
+    kajps5::gpu::GpuRuntime runtime(memory);
+    vk::VulkanGuestBufferCache cache(*context, memory,
+                                     runtime.resource_coherence());
+    kajps5::gpu::shader::recompiler::CompileResult compile;
+    auto& program = compile.program;
+    program.stage = kajps5::gpu::ShaderType::Compute;
+    program.resource_tracking_complete = program.shader_info_complete =
+        program.binding_layout_complete = true;
+    program.bindings.descriptor_set = 0;
+    program.bindings.push_constant_size = 4;
+    program.bindings.buffer_offset_count = 1;
+    program.bindings.descriptors.push_back(
+        {ir::DescriptorBindingKind::Buffers, 3, {0}});
+    program.info.buffers.push_back({.source = 0, .max_byte_extent = 16,
+                                    .packed_stride = 4, .descriptor_format = 0,
+                                    .read = true});
+    ir::DescriptorValue descriptor;
+    descriptor.dword_count = 4;
+    descriptor.dwords[0] = 0x1000;
+    descriptor.dwords[1] = 4U << 16U;
+    descriptor.dwords[2] = 4;
+    compile.resources.buffers.push_back(descriptor);
+    const auto prepared = cache.Prepare(compile);
+    Check(!prepared && prepared.status == vk::VulkanGuestBufferStatus::kResourceLimit &&
+              g.issued.empty() && !runtime.resource_coherence().Query(1),
+          "zero storage-buffer descriptor limit reached unsafe buffer preparation");
+  }
+
+  Reset();
+  g.max_per_stage_descriptor_sampled_images = 0;
+  reject("zero sampled-image limit reached unsafe image preparation",
+         SampledImageCompile());
+
+  Reset();
+  g.max_descriptor_set_storage_images = 0;
+  reject("zero storage-image limit reached unsafe image preparation",
+         SampledImageCompile(true));
+
+  Reset();
+  g.max_per_stage_descriptor_samplers = 0;
+  reject("zero sampler limit reached unsafe sampler preparation",
+         SampledImageCompile());
+}
+
 void TestTranslatedAliasesAndInvalidInputs() {
   using Protection = kajps5::memory::GuestMemoryProtection;
   Reset();
@@ -1356,6 +1445,7 @@ int main() {
   TestCoherentCompletion();
   TestMissingCommandFunctionsAreSideEffectFree();
   TestTranslatedImageSamplerSet();
+  TestTranslatedDescriptorDeviceLimits();
   TestTranslatedAliasesAndInvalidInputs();
   TestTranslatedSamplerMatrixAndRollback();
   TestTranslatedFormatAliasesAndStorageCompatibility();

@@ -285,6 +285,16 @@ VKAPI_ATTR void VKAPI_CALL FakeGetPhysicalDeviceProperties(
   std::strncpy(properties->deviceName, "Fake RTX 4090",
                VK_MAX_PHYSICAL_DEVICE_NAME_SIZE - 1);
   properties->limits.minStorageBufferOffsetAlignment = 256;
+  properties->limits.maxStorageBufferRange = 8192;
+  properties->limits.maxPerStageDescriptorStorageBuffers = 7;
+  properties->limits.maxDescriptorSetStorageBuffers = 8;
+  properties->limits.maxPerStageDescriptorSampledImages = 9;
+  properties->limits.maxDescriptorSetSampledImages = 10;
+  properties->limits.maxPerStageDescriptorStorageImages = 11;
+  properties->limits.maxDescriptorSetStorageImages = 12;
+  properties->limits.maxPerStageDescriptorSamplers = 13;
+  properties->limits.maxDescriptorSetSamplers = 14;
+  properties->limits.maxPerStageResources = 15;
 }
 
 VKAPI_ATTR void VKAPI_CALL FakeGetPhysicalDeviceProperties2(
@@ -494,6 +504,7 @@ void TestInjectedTransactionality() {
           "retry after failure did not create a complete Vulkan context");
     const auto& supported = runtime.vulkan_context()->supported_capabilities();
     const auto& enabled = runtime.vulkan_context()->enabled_capabilities();
+    const auto& limits = runtime.vulkan_context()->properties();
     Check(g_fake.saw_renderer_ready_features &&
               supported.vertex_pipeline_stores_and_atomics &&
               supported.shader_int64 && supported.texture_compression_bc &&
@@ -507,7 +518,17 @@ void TestInjectedTransactionality() {
               enabled.shader_image_gather_extended && enabled.independent_blend &&
               enabled.tessellation_shader &&
               enabled.vertex_pipeline_stores_and_atomics && enabled.shader_int64 &&
-              enabled.texture_compression_bc,
+              enabled.texture_compression_bc &&
+              limits.max_storage_buffer_range == 8192 &&
+              limits.max_per_stage_descriptor_storage_buffers == 7 &&
+              limits.max_descriptor_set_storage_buffers == 8 &&
+              limits.max_per_stage_descriptor_sampled_images == 9 &&
+              limits.max_descriptor_set_sampled_images == 10 &&
+              limits.max_per_stage_descriptor_storage_images == 11 &&
+              limits.max_descriptor_set_storage_images == 12 &&
+              limits.max_per_stage_descriptor_samplers == 13 &&
+              limits.max_descriptor_set_samplers == 14 &&
+              limits.max_per_stage_resources == 15,
           "created logical device did not report its exact renderer-ready and optional enablement");
     const std::uint32_t instances_before_duplicate = g_fake.instances_created;
     const auto duplicate = runtime.InitializeVulkan(FakeLoader());

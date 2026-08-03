@@ -192,34 +192,36 @@ VulkanGuestBufferPreparation VulkanGuestBufferCache::Prepare(
     return result;
   }
   const auto &layout = program.bindings;
-  if (layout.descriptor_set != 0 || !snapshot.images.empty() ||
-      !snapshot.samplers.empty() || !snapshot.addresses.empty() ||
+  if (layout.descriptor_set != 0 || !snapshot.addresses.empty() ||
       !snapshot.flattened_srt.empty()) {
     Fail(result, VulkanGuestBufferStatus::kUnsupportedTopology,
-         "only descriptor-set zero storage-buffer compute shaders are "
-         "supported");
+         "translated compute uses an unsupported descriptor address space");
     return result;
   }
   const shader::recompiler::IR::DescriptorBinding *buffers = nullptr;
   for (const auto &binding : layout.descriptors) {
-    if (binding.kind !=
-        shader::recompiler::IR::DescriptorBindingKind::Buffers) {
+    using K = shader::recompiler::IR::DescriptorBindingKind;
+    if (binding.kind == K::Buffers) {
+      if (buffers != nullptr) {
+        Fail(result, VulkanGuestBufferStatus::kUnsupportedTopology,
+             "translated compute contains more than one buffer descriptor binding");
+        return result;
+      }
+      buffers = &binding;
+      continue;
+    }
+    const bool image_or_sampler = binding.kind == K::Samplers ||
+        (binding.kind >= K::Sampled1D && binding.kind <= K::StorageUint3D);
+    if (!image_or_sampler) {
       Fail(result, VulkanGuestBufferStatus::kUnsupportedTopology,
-           "translated compute contains a descriptor kind other than buffers");
+           "translated compute contains an unsupported non-buffer descriptor");
       return result;
     }
-    if (buffers != nullptr) {
-      Fail(result, VulkanGuestBufferStatus::kUnsupportedTopology,
-           "translated compute contains more than one buffer descriptor "
-           "binding");
-      return result;
-    }
-    buffers = &binding;
   }
-  if (buffers == nullptr || buffers->resources.empty() ||
+  if ((buffers != nullptr && (buffers->resources.empty() ||
       buffers->resources.size() > kMaximumGuestBufferViews ||
-      layout.buffer_offset_count != buffers->resources.size() ||
-      layout.push_constant_size == 0 ||
+      layout.buffer_offset_count != buffers->resources.size())) ||
+      (buffers == nullptr && layout.buffer_offset_count != 0) ||
       snapshot.user_data.size() < layout.user_data_registers.size()) {
     Fail(result, VulkanGuestBufferStatus::kUnsupportedTopology,
          "translated compute buffer layout is incomplete or exceeds fixed "
@@ -228,7 +230,8 @@ VulkanGuestBufferPreparation VulkanGuestBufferCache::Prepare(
   }
 
   try {
-    result.views.reserve(buffers->resources.size());
+    if (buffers != nullptr)
+      result.views.reserve(buffers->resources.size());
     if (layout.ShaderDataDwords() > 256 ||
         layout.buffer_offset_dword > std::numeric_limits<std::uint32_t>::max() -
                                          layout.buffer_offset_count) {
@@ -248,6 +251,22 @@ VulkanGuestBufferPreparation VulkanGuestBufferCache::Prepare(
       }
       result.shader_data_dwords[index] =
           snapshot.user_data[reg - program.user_data_base];
+    }
+    // Image-only compute still has a valid (often empty) push-data layout.
+    // The image cache owns all non-buffer descriptor groups in that case.
+    if (buffers == nullptr) {
+      result.status = VulkanGuestBufferStatus::kOk;
+      rollback.armed = false;
+      return result;
+    }
+    if (context_ != nullptr &&
+        (buffers->resources.size() >
+             context_->properties().max_per_stage_descriptor_storage_buffers ||
+         buffers->resources.size() >
+             context_->properties().max_descriptor_set_storage_buffers)) {
+      Fail(result, VulkanGuestBufferStatus::kResourceLimit,
+           "buffer descriptor count exceeds selected Vulkan device limits");
+      return result;
     }
     std::uint64_t total_bytes = 0;
     for (std::size_t index = 0; index < buffers->resources.size(); ++index) {
@@ -610,6 +629,11 @@ bool VulkanGuestBufferCache::MarkSubmitted(
 
 bool VulkanGuestBufferCache::Complete(
     VulkanGuestBufferPreparation &preparation) noexcept {
+  // Image-only translated work deliberately has no buffer allocation or
+  // mapped backing. Its image cache owns completion for that submission.
+  if (preparation.views.empty()) {
+    return true;
+  }
   if (context_ == nullptr || preparation.mapped == nullptr) {
     return false;
   }
