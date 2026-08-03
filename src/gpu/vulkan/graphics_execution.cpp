@@ -38,9 +38,18 @@ struct Dispatch {
   PFN_vkDestroyShaderModule destroy_shader_module = nullptr;
   PFN_vkCreatePipelineLayout create_pipeline_layout = nullptr;
   PFN_vkDestroyPipelineLayout destroy_pipeline_layout = nullptr;
+  PFN_vkCreateDescriptorSetLayout create_descriptor_set_layout = nullptr;
+  PFN_vkDestroyDescriptorSetLayout destroy_descriptor_set_layout = nullptr;
+  PFN_vkCreateDescriptorPool create_descriptor_pool = nullptr;
+  PFN_vkDestroyDescriptorPool destroy_descriptor_pool = nullptr;
+  PFN_vkAllocateDescriptorSets allocate_descriptor_sets = nullptr;
+  PFN_vkUpdateDescriptorSets update_descriptor_sets = nullptr;
   PFN_vkCreateGraphicsPipelines create_graphics_pipelines = nullptr;
   PFN_vkDestroyPipeline destroy_pipeline = nullptr;
   PFN_vkCmdBindPipeline cmd_bind_pipeline = nullptr;
+  PFN_vkCmdBindDescriptorSets cmd_bind_descriptor_sets = nullptr;
+  PFN_vkCmdPushConstants cmd_push_constants = nullptr;
+  PFN_vkCmdPipelineBarrier cmd_pipeline_barrier = nullptr;
   PFN_vkCmdSetViewport cmd_set_viewport = nullptr;
   PFN_vkCmdSetScissor cmd_set_scissor = nullptr;
   PFN_vkCmdBeginRendering cmd_begin_rendering = nullptr;
@@ -80,12 +89,30 @@ bool Load(VulkanDeviceContext& context, Dispatch& dispatch) {
       Resolve<PFN_vkCreatePipelineLayout>(context, "vkCreatePipelineLayout");
   dispatch.destroy_pipeline_layout = Resolve<PFN_vkDestroyPipelineLayout>(
       context, "vkDestroyPipelineLayout");
+  dispatch.create_descriptor_set_layout = Resolve<PFN_vkCreateDescriptorSetLayout>(
+      context, "vkCreateDescriptorSetLayout");
+  dispatch.destroy_descriptor_set_layout = Resolve<PFN_vkDestroyDescriptorSetLayout>(
+      context, "vkDestroyDescriptorSetLayout");
+  dispatch.create_descriptor_pool = Resolve<PFN_vkCreateDescriptorPool>(
+      context, "vkCreateDescriptorPool");
+  dispatch.destroy_descriptor_pool = Resolve<PFN_vkDestroyDescriptorPool>(
+      context, "vkDestroyDescriptorPool");
+  dispatch.allocate_descriptor_sets = Resolve<PFN_vkAllocateDescriptorSets>(
+      context, "vkAllocateDescriptorSets");
+  dispatch.update_descriptor_sets = Resolve<PFN_vkUpdateDescriptorSets>(
+      context, "vkUpdateDescriptorSets");
   dispatch.create_graphics_pipelines = Resolve<PFN_vkCreateGraphicsPipelines>(
       context, "vkCreateGraphicsPipelines");
   dispatch.destroy_pipeline =
       Resolve<PFN_vkDestroyPipeline>(context, "vkDestroyPipeline");
   dispatch.cmd_bind_pipeline =
       Resolve<PFN_vkCmdBindPipeline>(context, "vkCmdBindPipeline");
+  dispatch.cmd_bind_descriptor_sets = Resolve<PFN_vkCmdBindDescriptorSets>(
+      context, "vkCmdBindDescriptorSets");
+  dispatch.cmd_push_constants = Resolve<PFN_vkCmdPushConstants>(
+      context, "vkCmdPushConstants");
+  dispatch.cmd_pipeline_barrier = Resolve<PFN_vkCmdPipelineBarrier>(
+      context, "vkCmdPipelineBarrier");
   dispatch.cmd_set_viewport =
       Resolve<PFN_vkCmdSetViewport>(context, "vkCmdSetViewport");
   dispatch.cmd_set_scissor =
@@ -103,8 +130,12 @@ bool Load(VulkanDeviceContext& context, Dispatch& dispatch) {
          dispatch.get_fence_status && dispatch.queue_submit &&
          dispatch.create_shader_module && dispatch.destroy_shader_module &&
          dispatch.create_pipeline_layout && dispatch.destroy_pipeline_layout &&
+         dispatch.create_descriptor_set_layout && dispatch.destroy_descriptor_set_layout &&
+         dispatch.create_descriptor_pool && dispatch.destroy_descriptor_pool &&
+         dispatch.allocate_descriptor_sets && dispatch.update_descriptor_sets &&
          dispatch.create_graphics_pipelines && dispatch.destroy_pipeline &&
-         dispatch.cmd_bind_pipeline && dispatch.cmd_set_viewport &&
+         dispatch.cmd_bind_pipeline && dispatch.cmd_bind_descriptor_sets &&
+         dispatch.cmd_push_constants && dispatch.cmd_pipeline_barrier && dispatch.cmd_set_viewport &&
          dispatch.cmd_set_scissor && dispatch.cmd_begin_rendering &&
          dispatch.cmd_end_rendering && dispatch.cmd_draw;
 }
@@ -155,15 +186,6 @@ VkFrontFace ToFrontFace(VulkanGraphicsFrontFace front_face) noexcept {
              : VK_FRONT_FACE_COUNTER_CLOCKWISE;
 }
 
-bool IsDescriptorFree(const shader::recompiler::CompileResult& result) {
-  const auto& info = result.program.info;
-  return result.program.bindings.ShaderDataDwords() == 0 &&
-         info.buffers.empty() && info.addresses.empty() && info.images.empty() &&
-         info.samplers.empty() && result.resources.buffers.empty() &&
-         result.resources.images.empty() && result.resources.samplers.empty() &&
-         result.resources.addresses.empty() && result.resources.user_data.empty();
-}
-
 bool IsValidViewport(const VulkanGraphicsViewportState& viewport) noexcept {
   return std::isfinite(viewport.x) && std::isfinite(viewport.y) &&
          std::isfinite(viewport.width) && std::isfinite(viewport.height) &&
@@ -195,6 +217,34 @@ bool EqualBlend(const VulkanGraphicsBlendState& left,
          left.alpha_op == right.alpha_op && left.write_mask == right.write_mask;
 }
 
+bool EqualSetLayouts(const std::vector<VulkanGraphicsDescriptorSetPlan>& left,
+                     const std::vector<VulkanGraphicsDescriptorSetPlan>& right) noexcept {
+  if (left.size() != right.size()) return false;
+  for (std::size_t set = 0; set < left.size(); ++set) {
+    if (left[set].set != right[set].set ||
+        left[set].bindings.size() != right[set].bindings.size()) return false;
+    for (std::size_t binding = 0; binding < left[set].bindings.size(); ++binding) {
+      const auto& a = left[set].bindings[binding].layout;
+      const auto& b = right[set].bindings[binding].layout;
+      if (a.binding != b.binding || a.descriptorType != b.descriptorType ||
+          a.descriptorCount != b.descriptorCount || a.stageFlags != b.stageFlags)
+        return false;
+    }
+  }
+  return true;
+}
+
+bool EqualPushRanges(const std::vector<VulkanGraphicsPushConstantPlan>& left,
+                     const std::vector<VulkanGraphicsPushConstantPlan>& right) noexcept {
+  if (left.size() != right.size()) return false;
+  for (std::size_t i = 0; i < left.size(); ++i) {
+    if (left[i].range.stageFlags != right[i].range.stageFlags ||
+        left[i].range.offset != right[i].range.offset ||
+        left[i].range.size != right[i].range.size) return false;
+  }
+  return true;
+}
+
 }  // namespace
 
 struct VulkanGraphicsExecution::Impl {
@@ -206,6 +256,9 @@ struct VulkanGraphicsExecution::Impl {
     VkCullModeFlags cull_mode = VK_CULL_MODE_NONE;
     VkFrontFace front_face = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     VulkanGraphicsBlendState blend{};
+    std::vector<VulkanGraphicsDescriptorSetPlan> set_layouts;
+    std::vector<VulkanGraphicsPushConstantPlan> push_constants;
+    std::vector<VkDescriptorSetLayout> descriptor_set_layouts;
     VkPipelineLayout layout = VK_NULL_HANDLE;
     VkPipeline pipeline = VK_NULL_HANDLE;
   };
@@ -214,8 +267,16 @@ struct VulkanGraphicsExecution::Impl {
     VkCommandPool command_pool = VK_NULL_HANDLE;
     VkCommandBuffer command_buffer = VK_NULL_HANDLE;
     VkFence fence = VK_NULL_HANDLE;
+    VkDescriptorPool descriptor_pool = VK_NULL_HANDLE;
+    std::vector<VkDescriptorSet> descriptor_sets;
+    VulkanGuestBufferCache* buffer_cache = nullptr;
+    std::optional<VulkanGuestBufferPreparation> vertex_buffers;
+    std::optional<VulkanGuestBufferPreparation> pixel_buffers;
     VulkanGuestImageCache* image_cache = nullptr;
+    std::optional<VulkanGuestImageSetPreparation> vertex_images;
+    std::optional<VulkanGuestImageSetPreparation> pixel_images;
     std::optional<VulkanGuestImagePreparation> target;
+    VulkanGraphicsBindingPlan plan;
     std::uint64_t timeline = 0;
   };
 
@@ -225,6 +286,18 @@ struct VulkanGraphicsExecution::Impl {
     if (submission.fence != VK_NULL_HANDLE) {
       dispatch.destroy_fence(context.device(), submission.fence, nullptr);
     }
+    if (submission.descriptor_pool != VK_NULL_HANDLE) {
+      dispatch.destroy_descriptor_pool(context.device(), submission.descriptor_pool,
+                                      nullptr);
+    }
+    if (submission.vertex_buffers.has_value() && submission.buffer_cache != nullptr)
+      submission.buffer_cache->Discard(*submission.vertex_buffers);
+    if (submission.pixel_buffers.has_value() && submission.buffer_cache != nullptr)
+      submission.buffer_cache->Discard(*submission.pixel_buffers);
+    if (submission.vertex_images.has_value() && submission.image_cache != nullptr)
+      submission.image_cache->Discard(*submission.vertex_images);
+    if (submission.pixel_images.has_value() && submission.image_cache != nullptr)
+      submission.image_cache->Discard(*submission.pixel_images);
     if (submission.target.has_value() && submission.image_cache != nullptr) {
       submission.image_cache->Discard(*submission.target);
     }
@@ -248,16 +321,22 @@ struct VulkanGraphicsExecution::Impl {
 
   void DestroyLostSubmissions() noexcept {
     VulkanGuestImageCache* image_cache = nullptr;
+    VulkanGuestBufferCache* buffer_cache = nullptr;
     for (Submission& submission : retained) {
       image_cache = submission.image_cache != nullptr ? submission.image_cache
                                                        : image_cache;
+      buffer_cache = submission.buffer_cache != nullptr ? submission.buffer_cache
+                                                         : buffer_cache;
       DestroySubmission(submission);
     }
     retained.clear();
-    if (image_cache != nullptr) {
-      lost_dirty_resource_count = std::max(
-          lost_dirty_resource_count, image_cache->lost_dirty_resource_count());
-    }
+    // Image sets and the target share one image-cache ledger, so account it
+    // once; buffers use their own ledger and may be added without overlap.
+    const std::size_t image_lost = image_cache == nullptr
+        ? 0 : image_cache->lost_dirty_resource_count();
+    const std::size_t buffer_lost = buffer_cache == nullptr
+        ? 0 : buffer_cache->lost_dirty_resource_count();
+    lost_dirty_resource_count = image_lost + buffer_lost;
   }
 
   VulkanDeviceContext& context;
@@ -298,6 +377,12 @@ VulkanGraphicsExecution::~VulkanGraphicsExecution() {
     if (pipeline.layout != VK_NULL_HANDLE) {
       impl_->dispatch.destroy_pipeline_layout(impl_->context.device(),
                                               pipeline.layout, nullptr);
+    }
+    for (VkDescriptorSetLayout set_layout : pipeline.descriptor_set_layouts) {
+      if (set_layout != VK_NULL_HANDLE) {
+        impl_->dispatch.destroy_descriptor_set_layout(impl_->context.device(),
+                                                      set_layout, nullptr);
+      }
     }
   }
   if (impl_->owns_context_execution_slot) {
@@ -363,11 +448,23 @@ VulkanGraphicsResult VulkanGraphicsExecution::PollCompleted() {
       continue;
     }
     if (status == VK_SUCCESS) {
-      if (!it->image_cache->Complete(*it->target)) {
+      const bool vertex_buffers_complete =
+          it->buffer_cache->Complete(*it->vertex_buffers);
+      const bool pixel_buffers_complete =
+          it->buffer_cache->Complete(*it->pixel_buffers);
+      bool vertex_images_complete = true;
+      for (auto& image : it->vertex_images->images)
+        vertex_images_complete = it->image_cache->Complete(image) && vertex_images_complete;
+      bool pixel_images_complete = true;
+      for (auto& image : it->pixel_images->images)
+        pixel_images_complete = it->image_cache->Complete(image) && pixel_images_complete;
+      if (!vertex_buffers_complete || !pixel_buffers_complete ||
+          !vertex_images_complete || !pixel_images_complete ||
+          !it->image_cache->Complete(*it->target)) {
         result.status = VulkanGraphicsStatus::kReadbackFailed;
         Add(result, VulkanGraphicsDiagnosticSeverity::kError,
             VulkanGraphicsDiagnosticCode::kReadbackFailed,
-            "completed Vulkan graphics draw could not publish its color target",
+            "completed Vulkan graphics draw could not publish all retained guest resources",
             it->timeline);
         impl_->Snapshot(result);
         return result;
@@ -405,11 +502,21 @@ VulkanGraphicsResult VulkanGraphicsExecution::PollCompleted() {
 }
 
 VulkanGraphicsResult VulkanGraphicsExecution::Submit(
-    const VulkanTranslatedDrawRequest& request, VulkanGuestImageCache& cache,
-    VulkanGuestImagePreparation target) {
+    const VulkanTranslatedDrawRequest& request, VulkanGuestBufferCache& buffer_cache,
+    VulkanGuestBufferPreparation vertex_buffers,
+    VulkanGuestBufferPreparation pixel_buffers, VulkanGuestImageCache& image_cache,
+    VulkanGuestImageSetPreparation vertex_images,
+    VulkanGuestImageSetPreparation pixel_images, VulkanGuestImagePreparation target,
+    VulkanGraphicsBindingPlan plan) {
   VulkanGraphicsResult result;
   std::lock_guard lock(impl_->mutex);
-  const auto discard = [&] { cache.Discard(target); };
+  const auto discard = [&] {
+    buffer_cache.Discard(vertex_buffers);
+    buffer_cache.Discard(pixel_buffers);
+    image_cache.Discard(vertex_images);
+    image_cache.Discard(pixel_images);
+    image_cache.Discard(target);
+  };
   const auto reject = [&](VulkanGraphicsStatus status,
                           VulkanGraphicsDiagnosticCode code,
                           std::string message) {
@@ -436,11 +543,10 @@ VulkanGraphicsResult VulkanGraphicsExecution::Submit(
   }
   if (request.vertex->program.stage != ShaderType::Vertex ||
       request.pixel->program.stage != ShaderType::Pixel ||
-      request.vertex->spirv.empty() || request.pixel->spirv.empty() ||
-      !IsDescriptorFree(*request.vertex) || !IsDescriptorFree(*request.pixel)) {
+      request.vertex->spirv.empty() || request.pixel->spirv.empty() || !plan) {
     return reject(VulkanGraphicsStatus::kUnsupported,
                   VulkanGraphicsDiagnosticCode::kUnsupportedState,
-                  "M8 graphics accepts only descriptor-free vertex and pixel SPIR-V");
+                  "translated Vulkan graphics requires a complete binding plan");
   }
   if (!IsValidViewport(request.viewport) || !IsValidBlend(request.blend) ||
       ToTopology(request.topology) == VK_PRIMITIVE_TOPOLOGY_MAX_ENUM ||
@@ -469,6 +575,36 @@ VulkanGraphicsResult VulkanGraphicsExecution::Submit(
                   "the retained Vulkan graphics submission limit is exhausted");
   }
 
+  const auto overlaps_target = [&](std::uint64_t address, std::uint64_t size) {
+    const auto target_address = target.layout.storage_key.guest_address;
+    const auto target_size = target.layout.storage_key.byte_count;
+    return size != 0 && target_size != 0 &&
+        address <= std::numeric_limits<std::uint64_t>::max() - size &&
+        target_address <= std::numeric_limits<std::uint64_t>::max() - target_size &&
+        address < target_address + target_size && target_address < address + size;
+  };
+  for (const auto& view : vertex_buffers.views) {
+    if (overlaps_target(view.guest_address, view.size)) {
+      return reject(VulkanGraphicsStatus::kInvalidArgument,
+                    VulkanGraphicsDiagnosticCode::kInputRejected,
+                    "color target overlaps a planned vertex buffer guest range");
+    }
+  }
+  for (const auto& view : pixel_buffers.views) {
+    if (overlaps_target(view.guest_address, view.size)) {
+      return reject(VulkanGraphicsStatus::kInvalidArgument,
+                    VulkanGraphicsDiagnosticCode::kInputRejected,
+                    "color target overlaps a planned pixel buffer guest range");
+    }
+  }
+  for (const auto& upload : plan.image_uploads) {
+    if (overlaps_target(upload.guest_address, upload.guest_size)) {
+      return reject(VulkanGraphicsStatus::kInvalidArgument,
+                    VulkanGraphicsDiagnosticCode::kInputRejected,
+                    "color target overlaps a planned shader image guest range");
+    }
+  }
+
   const VkPrimitiveTopology topology = ToTopology(request.topology);
   const VkCullModeFlags cull_mode = ToCullMode(request.cull_mode);
   const VkFrontFace front_face = ToFrontFace(request.front_face);
@@ -478,7 +614,9 @@ VulkanGraphicsResult VulkanGraphicsExecution::Submit(
         pipeline.pixel_spirv == request.pixel->spirv &&
         pipeline.format == target.format.format && pipeline.topology == topology &&
         pipeline.cull_mode == cull_mode && pipeline.front_face == front_face &&
-        EqualBlend(pipeline.blend, request.blend)) {
+        EqualBlend(pipeline.blend, request.blend) &&
+        EqualSetLayouts(pipeline.set_layouts, plan.set_layouts) &&
+        EqualPushRanges(pipeline.push_constants, plan.push_constants)) {
       cached_pipeline = &pipeline;
       break;
     }
@@ -493,11 +631,15 @@ VulkanGraphicsResult VulkanGraphicsExecution::Submit(
   if (cached_pipeline == nullptr) {
     VkShaderModule vertex_module = VK_NULL_HANDLE;
     VkShaderModule pixel_module = VK_NULL_HANDLE;
+    std::vector<VkDescriptorSetLayout> descriptor_set_layouts;
     VkPipelineLayout layout = VK_NULL_HANDLE;
     VkPipeline pipeline = VK_NULL_HANDLE;
     const auto cleanup = [&] {
       if (pipeline != VK_NULL_HANDLE) impl_->dispatch.destroy_pipeline(device, pipeline, nullptr);
       if (layout != VK_NULL_HANDLE) impl_->dispatch.destroy_pipeline_layout(device, layout, nullptr);
+      for (VkDescriptorSetLayout set_layout : descriptor_set_layouts)
+        if (set_layout != VK_NULL_HANDLE)
+          impl_->dispatch.destroy_descriptor_set_layout(device, set_layout, nullptr);
       if (pixel_module != VK_NULL_HANDLE) impl_->dispatch.destroy_shader_module(device, pixel_module, nullptr);
       if (vertex_module != VK_NULL_HANDLE) impl_->dispatch.destroy_shader_module(device, vertex_module, nullptr);
     };
@@ -530,8 +672,30 @@ VulkanGraphicsResult VulkanGraphicsExecution::Submit(
     api = impl_->dispatch.create_shader_module(device, &module_info, nullptr,
                                                 &pixel_module);
     if (api != VK_SUCCESS) return fail_pipeline(api, "vkCreateShaderModule(pixel)");
+    descriptor_set_layouts.reserve(plan.set_layouts.size());
+    for (const auto& set_plan : plan.set_layouts) {
+      std::vector<VkDescriptorSetLayoutBinding> bindings;
+      bindings.reserve(set_plan.bindings.size());
+      for (const auto& binding : set_plan.bindings) bindings.push_back(binding.layout);
+      VkDescriptorSetLayoutCreateInfo set_info{};
+      set_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+      set_info.bindingCount = static_cast<std::uint32_t>(bindings.size());
+      set_info.pBindings = bindings.empty() ? nullptr : bindings.data();
+      VkDescriptorSetLayout set_layout = VK_NULL_HANDLE;
+      api = impl_->dispatch.create_descriptor_set_layout(device, &set_info, nullptr,
+                                                         &set_layout);
+      if (api != VK_SUCCESS) return fail_pipeline(api, "vkCreateDescriptorSetLayout");
+      descriptor_set_layouts.push_back(set_layout);
+    }
+    std::vector<VkPushConstantRange> push_ranges;
+    push_ranges.reserve(plan.push_constants.size());
+    for (const auto& push : plan.push_constants) push_ranges.push_back(push.range);
     VkPipelineLayoutCreateInfo layout_info{};
     layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    layout_info.setLayoutCount = static_cast<std::uint32_t>(descriptor_set_layouts.size());
+    layout_info.pSetLayouts = descriptor_set_layouts.empty() ? nullptr : descriptor_set_layouts.data();
+    layout_info.pushConstantRangeCount = static_cast<std::uint32_t>(push_ranges.size());
+    layout_info.pPushConstantRanges = push_ranges.empty() ? nullptr : push_ranges.data();
     api = impl_->dispatch.create_pipeline_layout(device, &layout_info, nullptr, &layout);
     if (api != VK_SUCCESS) return fail_pipeline(api, "vkCreatePipelineLayout");
 
@@ -600,14 +764,21 @@ VulkanGraphicsResult VulkanGraphicsExecution::Submit(
     if (api != VK_SUCCESS) return fail_pipeline(api, "vkCreateGraphicsPipelines");
     impl_->dispatch.destroy_shader_module(device, pixel_module, nullptr);
     impl_->dispatch.destroy_shader_module(device, vertex_module, nullptr);
-    cached_pipeline = &impl_->pipelines.emplace_back(
-        Impl::Pipeline{request.vertex->spirv, request.pixel->spirv, target.format.format,
-                       topology, cull_mode, front_face, request.blend, layout, pipeline});
+    cached_pipeline = &impl_->pipelines.emplace_back(Impl::Pipeline{
+        request.vertex->spirv, request.pixel->spirv, target.format.format,
+        topology, cull_mode, front_face, request.blend, plan.set_layouts,
+        plan.push_constants, std::move(descriptor_set_layouts), layout, pipeline});
   }
 
   Impl::Submission submission;
-  submission.image_cache = &cache;
+  submission.buffer_cache = &buffer_cache;
+  submission.vertex_buffers.emplace(std::move(vertex_buffers));
+  submission.pixel_buffers.emplace(std::move(pixel_buffers));
+  submission.image_cache = &image_cache;
+  submission.vertex_images.emplace(std::move(vertex_images));
+  submission.pixel_images.emplace(std::move(pixel_images));
   submission.target.emplace(std::move(target));
+  submission.plan = std::move(plan);
   const auto fail_submission = [&](VulkanGraphicsStatus status,
                                    VulkanGraphicsDiagnosticCode code,
                                    const char* step, VkResult api_result) {
@@ -648,6 +819,48 @@ VulkanGraphicsResult VulkanGraphicsExecution::Submit(
   if (api != VK_SUCCESS) return fail_submission(VulkanGraphicsStatus::kResourceLimit,
                                                  VulkanGraphicsDiagnosticCode::kResourceLimit,
                                                  "vkCreateFence", api);
+  VkDescriptorPoolCreateInfo descriptor_pool_info{};
+  descriptor_pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+  descriptor_pool_info.maxSets = static_cast<std::uint32_t>(
+      cached_pipeline->descriptor_set_layouts.size());
+  descriptor_pool_info.poolSizeCount = static_cast<std::uint32_t>(
+      submission.plan.pool_sizes.size());
+  descriptor_pool_info.pPoolSizes = submission.plan.pool_sizes.empty()
+      ? nullptr : submission.plan.pool_sizes.data();
+  api = impl_->dispatch.create_descriptor_pool(device, &descriptor_pool_info, nullptr,
+                                                &submission.descriptor_pool);
+  if (api != VK_SUCCESS) return fail_submission(VulkanGraphicsStatus::kResourceLimit,
+                                                 VulkanGraphicsDiagnosticCode::kResourceLimit,
+                                                 "vkCreateDescriptorPool", api);
+  submission.descriptor_sets.resize(cached_pipeline->descriptor_set_layouts.size());
+  VkDescriptorSetAllocateInfo descriptor_set_info{};
+  descriptor_set_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+  descriptor_set_info.descriptorPool = submission.descriptor_pool;
+  descriptor_set_info.descriptorSetCount = static_cast<std::uint32_t>(
+      cached_pipeline->descriptor_set_layouts.size());
+  descriptor_set_info.pSetLayouts = cached_pipeline->descriptor_set_layouts.data();
+  api = impl_->dispatch.allocate_descriptor_sets(device, &descriptor_set_info,
+                                                 submission.descriptor_sets.data());
+  if (api != VK_SUCCESS) return fail_submission(VulkanGraphicsStatus::kResourceLimit,
+                                                 VulkanGraphicsDiagnosticCode::kResourceLimit,
+                                                 "vkAllocateDescriptorSets", api);
+  std::vector<VkWriteDescriptorSet> writes;
+  for (std::size_t set_index = 0; set_index < submission.plan.set_layouts.size(); ++set_index) {
+    const auto& set = submission.plan.set_layouts[set_index];
+    for (const auto& binding : set.bindings) {
+      VkWriteDescriptorSet write{};
+      write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+      write.dstSet = submission.descriptor_sets[set_index];
+      write.dstBinding = binding.layout.binding;
+      write.descriptorCount = binding.layout.descriptorCount;
+      write.descriptorType = binding.layout.descriptorType;
+      write.pBufferInfo = binding.buffer_infos.empty() ? nullptr : binding.buffer_infos.data();
+      write.pImageInfo = binding.image_infos.empty() ? nullptr : binding.image_infos.data();
+      writes.push_back(write);
+    }
+  }
+  if (!writes.empty()) impl_->dispatch.update_descriptor_sets(
+      device, static_cast<std::uint32_t>(writes.size()), writes.data(), 0, nullptr);
   VkCommandBufferBeginInfo begin_info{};
   begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
   begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
@@ -655,7 +868,24 @@ VulkanGraphicsResult VulkanGraphicsExecution::Submit(
   if (api != VK_SUCCESS) return fail_submission(VulkanGraphicsStatus::kFenceWaitFailed,
                                                  VulkanGraphicsDiagnosticCode::kInputRejected,
                                                  "vkBeginCommandBuffer", api);
-  if (!cache.RecordUpload(submission.command_buffer, *submission.target,
+  for (const auto& upload : submission.plan.image_uploads) {
+    auto& images = upload.stage_set == 0 ? *submission.vertex_images
+                                         : *submission.pixel_images;
+    if (upload.preparation_index >= images.images.size()) {
+      return fail_submission(VulkanGraphicsStatus::kInvalidArgument,
+                             VulkanGraphicsDiagnosticCode::kInputRejected,
+                             "binding plan image preparation index", VK_SUCCESS);
+    }
+    auto& image = images.images[upload.preparation_index];
+    if (!image.upload_recorded && !image_cache.RecordUpload(
+            submission.command_buffer, image, upload.layout, upload.shader_stages,
+            upload.shader_access)) {
+      return fail_submission(VulkanGraphicsStatus::kReadbackFailed,
+                             VulkanGraphicsDiagnosticCode::kReadbackFailed,
+                             "shader image upload recording", VK_SUCCESS);
+    }
+  }
+  if (!image_cache.RecordUpload(submission.command_buffer, *submission.target,
                           VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
                           VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
                           VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
@@ -683,6 +913,17 @@ VulkanGraphicsResult VulkanGraphicsExecution::Submit(
   impl_->dispatch.cmd_bind_pipeline(submission.command_buffer,
                                     VK_PIPELINE_BIND_POINT_GRAPHICS,
                                     cached_pipeline->pipeline);
+  if (!submission.descriptor_sets.empty()) {
+    impl_->dispatch.cmd_bind_descriptor_sets(submission.command_buffer,
+        VK_PIPELINE_BIND_POINT_GRAPHICS, cached_pipeline->layout, 0,
+        static_cast<std::uint32_t>(submission.descriptor_sets.size()),
+        submission.descriptor_sets.data(), 0, nullptr);
+  }
+  for (const auto& push : submission.plan.push_constants) {
+    impl_->dispatch.cmd_push_constants(submission.command_buffer,
+        cached_pipeline->layout, push.range.stageFlags, push.range.offset,
+        push.range.size, push.data_dwords.data());
+  }
   impl_->dispatch.cmd_set_viewport(submission.command_buffer, 0, 1, &viewport);
   impl_->dispatch.cmd_set_scissor(submission.command_buffer, 0, 1,
                                    &request.viewport.scissor);
@@ -690,7 +931,44 @@ VulkanGraphicsResult VulkanGraphicsExecution::Submit(
                            request.instance_count, request.first_vertex,
                            request.first_instance);
   impl_->dispatch.cmd_end_rendering(submission.command_buffer);
-  if (!cache.RecordReadback(submission.command_buffer, *submission.target,
+  for (const auto& upload : submission.plan.image_uploads) {
+    auto& images = upload.stage_set == 0 ? *submission.vertex_images
+                                         : *submission.pixel_images;
+    auto& image = images.images[upload.preparation_index];
+    if (image.writable && !image.readback_recorded && !image_cache.RecordReadback(
+            submission.command_buffer, image, upload.shader_stages,
+            upload.shader_access)) {
+      return fail_submission(VulkanGraphicsStatus::kReadbackFailed,
+                             VulkanGraphicsDiagnosticCode::kReadbackFailed,
+                             "shader image readback recording", VK_SUCCESS);
+    }
+  }
+  std::vector<VkBufferMemoryBarrier> host_read_barriers;
+  const auto append_host_read_barrier = [&](const VulkanGuestBufferPreparation& buffers) {
+    if (buffers.buffer == VK_NULL_HANDLE ||
+        std::none_of(buffers.views.begin(), buffers.views.end(),
+                     [](const auto& view) { return view.shader_writes; })) return;
+    VkBufferMemoryBarrier barrier{};
+    barrier.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+    barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.buffer = buffers.buffer;
+    barrier.offset = 0;
+    barrier.size = buffers.logical_size;
+    host_read_barriers.push_back(barrier);
+  };
+  append_host_read_barrier(*submission.vertex_buffers);
+  append_host_read_barrier(*submission.pixel_buffers);
+  if (!host_read_barriers.empty()) {
+    impl_->dispatch.cmd_pipeline_barrier(submission.command_buffer,
+        VK_PIPELINE_STAGE_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+        VK_PIPELINE_STAGE_HOST_BIT, 0, 0, nullptr,
+        static_cast<std::uint32_t>(host_read_barriers.size()), host_read_barriers.data(),
+        0, nullptr);
+  }
+  if (!image_cache.RecordReadback(submission.command_buffer, *submission.target,
                             VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
                             VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT)) {
     return fail_submission(VulkanGraphicsStatus::kReadbackFailed,
@@ -714,12 +992,19 @@ VulkanGraphicsResult VulkanGraphicsExecution::Submit(
   if (api != VK_SUCCESS) return fail_submission(VulkanGraphicsStatus::kFenceWaitFailed,
                                                  VulkanGraphicsDiagnosticCode::kInputRejected,
                                                  "vkQueueSubmit", api);
-  if (!cache.MarkSubmitted(*submission.target)) {
+  bool marked = buffer_cache.MarkSubmitted(*submission.vertex_buffers);
+  marked = buffer_cache.MarkSubmitted(*submission.pixel_buffers) && marked;
+  for (auto& image : submission.vertex_images->images)
+    marked = image_cache.MarkSubmitted(image) && marked;
+  for (auto& image : submission.pixel_images->images)
+    marked = image_cache.MarkSubmitted(image) && marked;
+  marked = image_cache.MarkSubmitted(*submission.target) && marked;
+  if (!marked) {
     result.status = VulkanGraphicsStatus::kReadbackFailed;
     result.timeline = submission.timeline;
     Add(result, VulkanGraphicsDiagnosticSeverity::kError,
         VulkanGraphicsDiagnosticCode::kReadbackFailed,
-        "submitted color target could not be marked GPU-dirty", result.timeline);
+        "submitted graphics resource could not be marked GPU-dirty", result.timeline);
     impl_->retained.push_back(std::move(submission));
     impl_->Snapshot(result);
     return result;
@@ -728,11 +1013,22 @@ VulkanGraphicsResult VulkanGraphicsExecution::Submit(
   const VkFence fence = submission.fence;
   api = impl_->dispatch.wait_for_fences(device, 1, &fence, VK_TRUE, request.timeout_ns);
   if (api == VK_SUCCESS) {
-    if (!cache.Complete(*submission.target)) {
+    const bool vertex_buffers_complete =
+        buffer_cache.Complete(*submission.vertex_buffers);
+    const bool pixel_buffers_complete = buffer_cache.Complete(*submission.pixel_buffers);
+    bool vertex_images_complete = true;
+    for (auto& image : submission.vertex_images->images)
+      vertex_images_complete = image_cache.Complete(image) && vertex_images_complete;
+    bool pixel_images_complete = true;
+    for (auto& image : submission.pixel_images->images)
+      pixel_images_complete = image_cache.Complete(image) && pixel_images_complete;
+    if (!vertex_buffers_complete || !pixel_buffers_complete ||
+        !vertex_images_complete || !pixel_images_complete ||
+        !image_cache.Complete(*submission.target)) {
       result.status = VulkanGraphicsStatus::kReadbackFailed;
       Add(result, VulkanGraphicsDiagnosticSeverity::kError,
           VulkanGraphicsDiagnosticCode::kReadbackFailed,
-          "signalled color target could not publish guest readback", result.timeline);
+          "signalled graphics work could not publish every guest readback", result.timeline);
       impl_->retained.push_back(std::move(submission));
       impl_->Snapshot(result);
       return result;

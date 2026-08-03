@@ -14,7 +14,7 @@
 #include <vector>
 
 #include "gpu/shader/recompiler/ShaderRecompiler.h"
-#include "gpu/vulkan/image_cache.h"
+#include "gpu/vulkan/graphics_bindings.h"
 
 namespace kajps5::gpu::vulkan {
 
@@ -132,8 +132,14 @@ class VulkanGraphicsExecution final {
   VulkanGraphicsExecution(const VulkanGraphicsExecution&) = delete;
   VulkanGraphicsExecution& operator=(const VulkanGraphicsExecution&) = delete;
   [[nodiscard]] VulkanGraphicsResult Submit(
-      const VulkanTranslatedDrawRequest& request, VulkanGuestImageCache& cache,
-      VulkanGuestImagePreparation target);
+      const VulkanTranslatedDrawRequest& request,
+      VulkanGuestBufferCache& buffer_cache,
+      VulkanGuestBufferPreparation vertex_buffers,
+      VulkanGuestBufferPreparation pixel_buffers,
+      VulkanGuestImageCache& image_cache,
+      VulkanGuestImageSetPreparation vertex_images,
+      VulkanGuestImageSetPreparation pixel_images,
+      VulkanGuestImagePreparation target, VulkanGraphicsBindingPlan plan);
   [[nodiscard]] VulkanGraphicsResult PollCompleted();
 
  private:

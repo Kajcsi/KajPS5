@@ -20,16 +20,6 @@
 namespace kajps5::gpu {
 namespace {
 
-bool IsDescriptorFreeGraphicsProgram(
-    const shader::recompiler::CompileResult& result) {
-  const auto& info = result.program.info;
-  return result.program.bindings.ShaderDataDwords() == 0 &&
-         info.buffers.empty() && info.addresses.empty() && info.images.empty() &&
-         info.samplers.empty() && result.resources.buffers.empty() &&
-         result.resources.images.empty() && result.resources.samplers.empty() &&
-         result.resources.addresses.empty() && result.resources.user_data.empty();
-}
-
 bool HasValidGraphicsPreflight(
     const vulkan::VulkanTranslatedDrawRequest& request) {
   const auto& viewport = request.viewport;
@@ -57,8 +47,7 @@ bool HasValidGraphicsPreflight(
          request.vertex->program.stage == ShaderType::Vertex &&
          request.pixel->program.stage == ShaderType::Pixel &&
          !request.vertex->spirv.empty() && !request.pixel->spirv.empty() &&
-         IsDescriptorFreeGraphicsProgram(*request.vertex) &&
-         IsDescriptorFreeGraphicsProgram(*request.pixel) && request.vertex_count != 0 &&
+         request.vertex_count != 0 &&
          request.instance_count != 0 && request.timeout_ns != 0 &&
          request.timeout_ns != std::numeric_limits<std::uint64_t>::max() &&
          std::isfinite(viewport.x) && std::isfinite(viewport.y) &&
@@ -335,9 +324,71 @@ vulkan::VulkanGraphicsResult GpuRuntime::SubmitVulkanTranslatedDraw(
          "translated draw color-target format is not a supported color attachment"});
     return result;
   }
+  if (vulkan_buffer_cache_ == nullptr) {
+    vulkan_buffer_cache_ = std::make_unique<vulkan::VulkanGuestBufferCache>(
+        *vulkan_context_, memory_, *resource_coherence_);
+  }
   if (vulkan_image_cache_ == nullptr) {
     vulkan_image_cache_ = std::make_unique<vulkan::VulkanGuestImageCache>(
         *vulkan_context_, memory_, *resource_coherence_);
+  }
+  auto vertex_buffers = vulkan_buffer_cache_->Prepare(*request.vertex);
+  if (!vertex_buffers) {
+    result.status = vertex_buffers.status == vulkan::VulkanGuestBufferStatus::kResourceLimit
+        ? vulkan::VulkanGraphicsStatus::kResourceLimit : vulkan::VulkanGraphicsStatus::kInvalidArgument;
+    result.diagnostics.push_back({vulkan::VulkanGraphicsDiagnosticSeverity::kError,
+        result.status == vulkan::VulkanGraphicsStatus::kResourceLimit
+            ? vulkan::VulkanGraphicsDiagnosticCode::kResourceLimit
+            : vulkan::VulkanGraphicsDiagnosticCode::kInputRejected, 0, VK_SUCCESS,
+        vertex_buffers.diagnostics.empty() ? "vertex buffer preparation failed"
+                                           : vertex_buffers.diagnostics.front().message});
+    vulkan_buffer_cache_->Discard(vertex_buffers);
+    return result;
+  }
+  auto pixel_buffers = vulkan_buffer_cache_->Prepare(*request.pixel);
+  if (!pixel_buffers) {
+    vulkan_buffer_cache_->Discard(vertex_buffers);
+    result.status = pixel_buffers.status == vulkan::VulkanGuestBufferStatus::kResourceLimit
+        ? vulkan::VulkanGraphicsStatus::kResourceLimit : vulkan::VulkanGraphicsStatus::kInvalidArgument;
+    result.diagnostics.push_back({vulkan::VulkanGraphicsDiagnosticSeverity::kError,
+        result.status == vulkan::VulkanGraphicsStatus::kResourceLimit
+            ? vulkan::VulkanGraphicsDiagnosticCode::kResourceLimit
+            : vulkan::VulkanGraphicsDiagnosticCode::kInputRejected, 0, VK_SUCCESS,
+        pixel_buffers.diagnostics.empty() ? "pixel buffer preparation failed"
+                                          : pixel_buffers.diagnostics.front().message});
+    vulkan_buffer_cache_->Discard(pixel_buffers);
+    return result;
+  }
+  auto vertex_images = vulkan_image_cache_->PrepareTranslated(*request.vertex);
+  if (!vertex_images) {
+    vulkan_buffer_cache_->Discard(vertex_buffers);
+    vulkan_buffer_cache_->Discard(pixel_buffers);
+    result.status = vertex_images.status == vulkan::VulkanGuestImageSetStatus::kResourceLimit
+        ? vulkan::VulkanGraphicsStatus::kResourceLimit : vulkan::VulkanGraphicsStatus::kInvalidArgument;
+    result.diagnostics.push_back({vulkan::VulkanGraphicsDiagnosticSeverity::kError,
+        result.status == vulkan::VulkanGraphicsStatus::kResourceLimit
+            ? vulkan::VulkanGraphicsDiagnosticCode::kResourceLimit
+            : vulkan::VulkanGraphicsDiagnosticCode::kInputRejected, 0, VK_SUCCESS,
+        vertex_images.diagnostics.empty() ? "vertex image preparation failed"
+                                          : vertex_images.diagnostics.front().message});
+    vulkan_image_cache_->Discard(vertex_images);
+    return result;
+  }
+  auto pixel_images = vulkan_image_cache_->PrepareTranslated(*request.pixel);
+  if (!pixel_images) {
+    vulkan_buffer_cache_->Discard(vertex_buffers);
+    vulkan_buffer_cache_->Discard(pixel_buffers);
+    vulkan_image_cache_->Discard(vertex_images);
+    result.status = pixel_images.status == vulkan::VulkanGuestImageSetStatus::kResourceLimit
+        ? vulkan::VulkanGraphicsStatus::kResourceLimit : vulkan::VulkanGraphicsStatus::kInvalidArgument;
+    result.diagnostics.push_back({vulkan::VulkanGraphicsDiagnosticSeverity::kError,
+        result.status == vulkan::VulkanGraphicsStatus::kResourceLimit
+            ? vulkan::VulkanGraphicsDiagnosticCode::kResourceLimit
+            : vulkan::VulkanGraphicsDiagnosticCode::kInputRejected, 0, VK_SUCCESS,
+        pixel_images.diagnostics.empty() ? "pixel image preparation failed"
+                                         : pixel_images.diagnostics.front().message});
+    vulkan_image_cache_->Discard(pixel_images);
+    return result;
   }
   vulkan::VulkanGuestImageRequest target_request;
   target_request.input = request.color_target;
@@ -357,18 +408,50 @@ vulkan::VulkanGraphicsResult GpuRuntime::SubmitVulkanTranslatedDraw(
             ? "translated draw color-target preparation failed"
             : target.diagnostics.front().message});
     vulkan_image_cache_->Discard(target);
+    vulkan_buffer_cache_->Discard(vertex_buffers);
+    vulkan_buffer_cache_->Discard(pixel_buffers);
+    vulkan_image_cache_->Discard(vertex_images);
+    vulkan_image_cache_->Discard(pixel_images);
+    return result;
+  }
+  vulkan::VulkanGraphicsBindingPlan plan;
+  const auto plan_status = vulkan::BuildVulkanGraphicsBindingPlan(
+      vulkan_context_->properties(), {request.vertex, &vertex_buffers, &vertex_images},
+      {request.pixel, &pixel_buffers, &pixel_images}, plan);
+  if (plan_status != vulkan::VulkanGraphicsBindingStatus::kOk) {
+    result.status = plan_status == vulkan::VulkanGraphicsBindingStatus::kDeviceResourceLimit ||
+                    plan_status == vulkan::VulkanGraphicsBindingStatus::kAllocationFailure
+        ? vulkan::VulkanGraphicsStatus::kResourceLimit
+        : vulkan::VulkanGraphicsStatus::kInvalidArgument;
+    result.diagnostics.push_back({vulkan::VulkanGraphicsDiagnosticSeverity::kError,
+        result.status == vulkan::VulkanGraphicsStatus::kResourceLimit
+            ? vulkan::VulkanGraphicsDiagnosticCode::kResourceLimit
+            : vulkan::VulkanGraphicsDiagnosticCode::kInputRejected, 0, VK_SUCCESS,
+        plan.diagnostics.empty() ? "graphics binding plan failed"
+                                 : plan.diagnostics.front().message});
+    vulkan_image_cache_->Discard(target);
+    vulkan_buffer_cache_->Discard(vertex_buffers);
+    vulkan_buffer_cache_->Discard(pixel_buffers);
+    vulkan_image_cache_->Discard(vertex_images);
+    vulkan_image_cache_->Discard(pixel_images);
     return result;
   }
   if (vulkan_graphics_execution_ == nullptr) {
     auto created = vulkan::VulkanGraphicsExecution::Create(*vulkan_context_);
     if (!created) {
       vulkan_image_cache_->Discard(target);
+      vulkan_buffer_cache_->Discard(vertex_buffers);
+      vulkan_buffer_cache_->Discard(pixel_buffers);
+      vulkan_image_cache_->Discard(vertex_images);
+      vulkan_image_cache_->Discard(pixel_images);
       return std::move(created.initialization);
     }
     vulkan_graphics_execution_ = std::move(created.execution);
   }
-  return vulkan_graphics_execution_->Submit(request, *vulkan_image_cache_,
-                                             std::move(target));
+  return vulkan_graphics_execution_->Submit(
+      request, *vulkan_buffer_cache_, std::move(vertex_buffers),
+      std::move(pixel_buffers), *vulkan_image_cache_, std::move(vertex_images),
+      std::move(pixel_images), std::move(target), std::move(plan));
 }
 
 vulkan::VulkanGraphicsResult GpuRuntime::PollVulkanGraphics() {

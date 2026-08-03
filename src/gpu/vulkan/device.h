@@ -180,6 +180,7 @@ struct VulkanDeviceCandidate {
   std::uint32_t max_per_stage_descriptor_storage_images = 0;
   std::uint32_t max_descriptor_set_storage_images = 0;
   std::uint32_t max_per_stage_resources = 0;
+  std::uint32_t max_bound_descriptor_sets = 0;
   std::uint32_t max_push_constants_size = 0;
   std::uint64_t non_coherent_atom_size = 1;
   // Copied from VkPhysicalDeviceLimits so compute execution can reject an

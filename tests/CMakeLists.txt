@@ -369,6 +369,13 @@ kajps5_deploy_msvc_asan_runtime(kajps5_gpu_vulkan_graphics_execution_test)
 add_test(NAME kajps5_gpu_vulkan_graphics_execution
          COMMAND kajps5_gpu_vulkan_graphics_execution_test)
 
+add_executable(kajps5_gpu_vulkan_graphics_bindings_test
+               gpu_vulkan_graphics_bindings_test.cpp)
+target_link_libraries(kajps5_gpu_vulkan_graphics_bindings_test PRIVATE kajps5_core)
+kajps5_deploy_msvc_asan_runtime(kajps5_gpu_vulkan_graphics_bindings_test)
+add_test(NAME kajps5_gpu_vulkan_graphics_bindings
+         COMMAND kajps5_gpu_vulkan_graphics_bindings_test)
+
 add_executable(kajps5_gpu_vulkan_buffer_cache_test
                gpu_vulkan_buffer_cache_test.cpp)
 target_link_libraries(kajps5_gpu_vulkan_buffer_cache_test PRIVATE kajps5_core)

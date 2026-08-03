@@ -176,11 +176,14 @@ VulkanGuestBufferPreparation VulkanGuestBufferCache::Prepare(
   } rollback{*this, result};
   const auto &program = compile.program;
   const auto &snapshot = compile.resources;
-  if (program.stage != ShaderType::Compute ||
+  const bool supported_stage = program.stage == ShaderType::Compute ||
+      program.stage == ShaderType::Vertex || program.stage == ShaderType::Pixel;
+  const std::uint32_t expected_set = program.stage == ShaderType::Pixel ? 1U : 0U;
+  if (!supported_stage ||
       !program.binding_layout_complete || !program.resource_tracking_complete ||
       !program.shader_info_complete) {
     Fail(result, VulkanGuestBufferStatus::kUnsupportedTopology,
-         "translated compute requires a complete compute binding layout and "
+         "translated stage requires a complete supported binding layout and "
          "resource snapshot");
     return result;
   }
@@ -192,10 +195,10 @@ VulkanGuestBufferPreparation VulkanGuestBufferCache::Prepare(
     return result;
   }
   const auto &layout = program.bindings;
-  if (layout.descriptor_set != 0 || !snapshot.addresses.empty() ||
+  if (layout.descriptor_set != expected_set || !snapshot.addresses.empty() ||
       !snapshot.flattened_srt.empty()) {
     Fail(result, VulkanGuestBufferStatus::kUnsupportedTopology,
-         "translated compute uses an unsupported descriptor address space");
+         "translated stage uses an unsupported descriptor address space");
     return result;
   }
   const shader::recompiler::IR::DescriptorBinding *buffers = nullptr;
@@ -204,7 +207,7 @@ VulkanGuestBufferPreparation VulkanGuestBufferCache::Prepare(
     if (binding.kind == K::Buffers) {
       if (buffers != nullptr) {
         Fail(result, VulkanGuestBufferStatus::kUnsupportedTopology,
-             "translated compute contains more than one buffer descriptor binding");
+             "translated stage contains more than one buffer descriptor binding");
         return result;
       }
       buffers = &binding;

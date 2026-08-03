@@ -343,6 +343,7 @@ bool DiscoverCandidate(const InstanceDispatch& dispatch,
       properties.limits.maxDescriptorSetStorageImages;
   candidate.max_per_stage_resources = properties.limits.maxPerStageResources;
   candidate.max_push_constants_size = properties.limits.maxPushConstantsSize;
+  candidate.max_bound_descriptor_sets = properties.limits.maxBoundDescriptorSets;
   candidate.non_coherent_atom_size =
       std::max<std::uint64_t>(properties.limits.nonCoherentAtomSize, 1U);
   candidate.max_compute_work_group_count = {

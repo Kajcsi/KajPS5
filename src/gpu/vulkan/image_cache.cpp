@@ -580,7 +580,10 @@ VulkanGuestImageSetPreparation VulkanGuestImageCache::PrepareTranslated(
     std::string error;
     const auto& program = result.program;
     const auto& snapshot = result.resources;
-    if (program.stage != ShaderType::Compute || program.bindings.descriptor_set != 0 ||
+    const bool supported_stage = program.stage == ShaderType::Compute ||
+        program.stage == ShaderType::Vertex || program.stage == ShaderType::Pixel;
+    const std::uint32_t expected_set = program.stage == ShaderType::Pixel ? 1U : 0U;
+    if (!supported_stage || program.bindings.descriptor_set != expected_set ||
         !program.binding_layout_complete || !program.shader_info_complete ||
         !shader::recompiler::IR::ValidateResourceSpecialization(program, snapshot, &error)) {
       FailSet(set, VulkanGuestImageSetStatus::kInvalidSpecialization,

@@ -15,6 +15,10 @@ kajps5::gpu::shader::recompiler::CompileResult Program(ShaderType stage) {
   kajps5::gpu::shader::recompiler::CompileResult result;
   result.spirv = {0x07230203U, 0x00010600U, 0x0008000bU, 1U, 0U};
   result.program.stage = stage;
+  result.program.resource_tracking_complete = true;
+  result.program.shader_info_complete = true;
+  result.program.binding_layout_complete = true;
+  result.program.bindings.descriptor_set = stage == ShaderType::Pixel ? 1U : 0U;
   return result;
 }
 
@@ -44,6 +48,36 @@ vk::VulkanTranslatedDrawRequest Draw(
   request.first_vertex = 3;
   request.first_instance = 5;
   return request;
+}
+
+kajps5::gpu::shader::recompiler::CompileResult ResourceProgram(
+    ShaderType stage, bool storage, std::uint32_t buffer_address,
+    std::uint32_t image_address) {
+  auto result = SampledImageCompile(storage);
+  result.spirv = {0x07230203U, 0x00010600U, 0x0008000bU,
+                  stage == ShaderType::Vertex ? 7U : 8U, 0U};
+  result.program.stage = stage;
+  result.program.bindings.descriptor_set = stage == ShaderType::Pixel ? 1U : 0U;
+  result.program.bindings.push_constant_offset = stage == ShaderType::Pixel ? 8U : 0U;
+  result.program.bindings.push_constant_size = 8;
+  result.program.bindings.buffer_offset_dword = 1;
+  result.program.bindings.buffer_offset_count = 1;
+  result.program.bindings.user_data_registers = {0};
+  result.program.bindings.descriptors.insert(
+      result.program.bindings.descriptors.begin(),
+      {kajps5::gpu::shader::recompiler::IR::DescriptorBindingKind::Buffers, 1, {0}});
+  result.program.info.buffers.push_back({.source = 0, .max_byte_extent = 16,
+      .packed_stride = 4, .descriptor_format = 0, .read = true,
+      .written = storage});
+  kajps5::gpu::shader::recompiler::IR::DescriptorValue buffer;
+  buffer.dword_count = 4;
+  buffer.dwords[0] = buffer_address;
+  buffer.dwords[1] = 4U << 16U;
+  buffer.dwords[2] = 4;
+  result.resources.buffers.push_back(buffer);
+  result.resources.user_data = {stage == ShaderType::Vertex ? 0x1234U : 0x5678U};
+  result.resources.images[0].dwords[0] = image_address >> 8U;
+  return result;
 }
 
 std::unique_ptr<kajps5::gpu::GpuRuntime> Runtime(
@@ -90,7 +124,7 @@ void TestGraphicsRuntimePath() {
             g.graphics_draw == std::array<std::uint32_t, 4>{4, 2, 3, 5},
         "dynamic draw state, attachment contract, or draw arguments differ");
   Check(g.graphics_commands == std::vector<std::string_view>{
-            "begin-command", "begin-rendering", "bind", "viewport", "scissor",
+            "begin-command", "begin-rendering", "bind", "bind-descriptors", "viewport", "scissor",
             "draw", "end-rendering", "end-command", "submit"},
         "graphics command order differs after image upload recording");
   Check(g.command_operations.size() == 6 &&
@@ -192,10 +226,43 @@ void TestEarlyRejectionAndRetention() {
         "signalled retained graphics draw was not reclaimed by poll");
 }
 
+void TestResourcefulGraphicsRuntimePath() {
+  Reset();
+  using Protection = kajps5::memory::GuestMemoryProtection;
+  kajps5::memory::GuestMemory memory(
+      0x1000, 0x1000, Protection::kRead | Protection::kWrite |
+                         Protection::kGpuRead | Protection::kGpuWrite);
+  Check(memory.InitializeFill(0x1000, 0x900, std::byte{0x2a}),
+        "resourceful graphics fixture initialization failed");
+  auto runtime = Runtime(memory);
+  const auto vertex = ResourceProgram(ShaderType::Vertex, false, 0x1600, 0x1000);
+  const auto pixel = ResourceProgram(ShaderType::Pixel, true, 0x1700, 0x1400);
+  auto request = Draw(vertex, pixel);
+  request.color_target.guest_address = 0x1800;
+  const auto submitted = runtime->SubmitVulkanTranslatedDraw(request);
+  Check(static_cast<bool>(submitted) && g.graphics_descriptor_pools == 1 &&
+            g.graphics_descriptor_layouts == 2 &&
+            g.graphics_descriptor_writes.size() == 6 &&
+            g.graphics_descriptor_binds == 1 && g.graphics_pushes == 2,
+        "resourceful graphics draw did not allocate, write, bind, and push its plan");
+  Check(g.graphics_descriptor_writes[0].descriptorType == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER &&
+            g.graphics_descriptor_writes[1].descriptorType == VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE &&
+            g.graphics_descriptor_writes[2].descriptorType == VK_DESCRIPTOR_TYPE_SAMPLER &&
+            g.graphics_descriptor_writes[3].descriptorType == VK_DESCRIPTOR_TYPE_STORAGE_BUFFER &&
+            g.graphics_descriptor_writes[4].descriptorType == VK_DESCRIPTOR_TYPE_STORAGE_IMAGE &&
+            g.graphics_descriptor_writes[5].descriptorType == VK_DESCRIPTOR_TYPE_SAMPLER,
+        "resourceful graphics draw wrote the wrong descriptor kinds");
+  Check(g.command_operations.size() >= 14 &&
+            g.command_operations.front() == FakeCommandOperation::kImageBarrier &&
+            g.command_operations.back() == FakeCommandOperation::kBufferBarrier,
+        "resourceful graphics draw did not record stage upload and readback barriers");
+}
+
 }  // namespace
 
 int main() {
   TestGraphicsRuntimePath();
   TestEarlyRejectionAndRetention();
+  TestResourcefulGraphicsRuntimePath();
   return 0;
 }

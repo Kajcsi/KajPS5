@@ -130,6 +130,13 @@ struct FakeState {
   std::uint32_t graphics_shader_modules = 0;
   std::uint32_t graphics_pipeline_layouts = 0;
   std::uint32_t graphics_pipelines = 0;
+  std::uint32_t graphics_descriptor_layouts = 0;
+  std::uint32_t graphics_descriptor_pools = 0;
+  std::uint32_t graphics_descriptor_binds = 0;
+  std::uint32_t graphics_pushes = 0;
+  std::vector<VkDescriptorSetLayoutBinding> graphics_descriptor_bindings;
+  std::vector<VkWriteDescriptorSet> graphics_descriptor_writes;
+  std::vector<std::uint32_t> graphics_push_words;
   std::uint32_t graphics_command_pools = 0;
   std::uint32_t graphics_fences = 0;
   VkGraphicsPipelineCreateInfo graphics_pipeline_info{};
@@ -211,6 +218,7 @@ VKAPI_ATTR void VKAPI_CALL FakeGetPhysicalDeviceProperties(VkPhysicalDevice,
   properties->limits.maxDescriptorSetStorageImages = g.max_descriptor_set_storage_images;
   properties->limits.maxPerStageResources = g.max_per_stage_resources;
   properties->limits.maxPushConstantsSize = 128;
+  properties->limits.maxBoundDescriptorSets = 4;
   properties->limits.nonCoherentAtomSize = 64;
   properties->limits.maxComputeWorkGroupCount[0] = 16;
   properties->limits.maxComputeWorkGroupCount[1] = 16;
@@ -417,6 +425,38 @@ VKAPI_ATTR VkResult VKAPI_CALL FakeCreateShaderModule(VkDevice,
 }
 VKAPI_ATTR void VKAPI_CALL FakeDestroyShaderModule(
     VkDevice, VkShaderModule, const VkAllocationCallbacks*) {}
+VKAPI_ATTR VkResult VKAPI_CALL FakeCreateDescriptorSetLayout(
+    VkDevice, const VkDescriptorSetLayoutCreateInfo* info,
+    const VkAllocationCallbacks*, VkDescriptorSetLayout* layout) {
+  g.graphics_descriptor_bindings.clear();
+  if (info->bindingCount != 0) g.graphics_descriptor_bindings.assign(
+      info->pBindings, info->pBindings + info->bindingCount);
+  *layout = Handle<VkDescriptorSetLayout>(g.next_handle++);
+  ++g.graphics_descriptor_layouts;
+  return VK_SUCCESS;
+}
+VKAPI_ATTR void VKAPI_CALL FakeDestroyDescriptorSetLayout(
+    VkDevice, VkDescriptorSetLayout, const VkAllocationCallbacks*) {}
+VKAPI_ATTR VkResult VKAPI_CALL FakeCreateDescriptorPool(
+    VkDevice, const VkDescriptorPoolCreateInfo*, const VkAllocationCallbacks*,
+    VkDescriptorPool* pool) {
+  *pool = Handle<VkDescriptorPool>(g.next_handle++);
+  ++g.graphics_descriptor_pools;
+  return VK_SUCCESS;
+}
+VKAPI_ATTR void VKAPI_CALL FakeDestroyDescriptorPool(
+    VkDevice, VkDescriptorPool, const VkAllocationCallbacks*) {}
+VKAPI_ATTR VkResult VKAPI_CALL FakeAllocateDescriptorSets(
+    VkDevice, const VkDescriptorSetAllocateInfo* info, VkDescriptorSet* sets) {
+  for (std::uint32_t index = 0; index < info->descriptorSetCount; ++index)
+    sets[index] = Handle<VkDescriptorSet>(g.next_handle++);
+  return VK_SUCCESS;
+}
+VKAPI_ATTR void VKAPI_CALL FakeUpdateDescriptorSets(
+    VkDevice, std::uint32_t count, const VkWriteDescriptorSet* writes,
+    std::uint32_t, const VkCopyDescriptorSet*) {
+  g.graphics_descriptor_writes.assign(writes, writes + count);
+}
 VKAPI_ATTR VkResult VKAPI_CALL FakeCreatePipelineLayout(VkDevice,
     const VkPipelineLayoutCreateInfo*, const VkAllocationCallbacks*, VkPipelineLayout* layout) {
   *layout = Handle<VkPipelineLayout>(g.next_handle++);
@@ -445,6 +485,20 @@ VKAPI_ATTR void VKAPI_CALL FakeDestroyPipeline(
     VkDevice, VkPipeline, const VkAllocationCallbacks*) {}
 VKAPI_ATTR void VKAPI_CALL FakeCmdBindPipeline(VkCommandBuffer, VkPipelineBindPoint,
                                                  VkPipeline) { g.graphics_commands.push_back("bind"); }
+VKAPI_ATTR void VKAPI_CALL FakeCmdBindDescriptorSets(
+    VkCommandBuffer, VkPipelineBindPoint, VkPipelineLayout, std::uint32_t,
+    std::uint32_t, const VkDescriptorSet*, std::uint32_t, const std::uint32_t*) {
+  ++g.graphics_descriptor_binds;
+  g.graphics_commands.push_back("bind-descriptors");
+}
+VKAPI_ATTR void VKAPI_CALL FakeCmdPushConstants(
+    VkCommandBuffer, VkPipelineLayout, VkShaderStageFlags, std::uint32_t,
+    std::uint32_t size, const void* values) {
+  g.graphics_push_words.assign(static_cast<const std::uint32_t*>(values),
+      static_cast<const std::uint32_t*>(values) + size / sizeof(std::uint32_t));
+  ++g.graphics_pushes;
+  g.graphics_commands.push_back("push");
+}
 VKAPI_ATTR void VKAPI_CALL FakeCmdSetViewport(VkCommandBuffer, std::uint32_t,
     std::uint32_t, const VkViewport* viewport) { g.graphics_viewport = *viewport; g.graphics_commands.push_back("viewport"); }
 VKAPI_ATTR void VKAPI_CALL FakeCmdSetScissor(VkCommandBuffer, std::uint32_t,
@@ -495,11 +549,19 @@ VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL FakeGetDeviceProcAddr(VkDevice, const c
   if (std::strcmp(name, "vkQueueSubmit") == 0) return reinterpret_cast<PFN_vkVoidFunction>(FakeQueueSubmit);
   if (std::strcmp(name, "vkCreateShaderModule") == 0) return reinterpret_cast<PFN_vkVoidFunction>(FakeCreateShaderModule);
   if (std::strcmp(name, "vkDestroyShaderModule") == 0) return reinterpret_cast<PFN_vkVoidFunction>(FakeDestroyShaderModule);
+  if (std::strcmp(name, "vkCreateDescriptorSetLayout") == 0) return reinterpret_cast<PFN_vkVoidFunction>(FakeCreateDescriptorSetLayout);
+  if (std::strcmp(name, "vkDestroyDescriptorSetLayout") == 0) return reinterpret_cast<PFN_vkVoidFunction>(FakeDestroyDescriptorSetLayout);
+  if (std::strcmp(name, "vkCreateDescriptorPool") == 0) return reinterpret_cast<PFN_vkVoidFunction>(FakeCreateDescriptorPool);
+  if (std::strcmp(name, "vkDestroyDescriptorPool") == 0) return reinterpret_cast<PFN_vkVoidFunction>(FakeDestroyDescriptorPool);
+  if (std::strcmp(name, "vkAllocateDescriptorSets") == 0) return reinterpret_cast<PFN_vkVoidFunction>(FakeAllocateDescriptorSets);
+  if (std::strcmp(name, "vkUpdateDescriptorSets") == 0) return reinterpret_cast<PFN_vkVoidFunction>(FakeUpdateDescriptorSets);
   if (std::strcmp(name, "vkCreatePipelineLayout") == 0) return reinterpret_cast<PFN_vkVoidFunction>(FakeCreatePipelineLayout);
   if (std::strcmp(name, "vkDestroyPipelineLayout") == 0) return reinterpret_cast<PFN_vkVoidFunction>(FakeDestroyPipelineLayout);
   if (std::strcmp(name, "vkCreateGraphicsPipelines") == 0) return reinterpret_cast<PFN_vkVoidFunction>(FakeCreateGraphicsPipelines);
   if (std::strcmp(name, "vkDestroyPipeline") == 0) return reinterpret_cast<PFN_vkVoidFunction>(FakeDestroyPipeline);
   if (std::strcmp(name, "vkCmdBindPipeline") == 0) return reinterpret_cast<PFN_vkVoidFunction>(FakeCmdBindPipeline);
+  if (std::strcmp(name, "vkCmdBindDescriptorSets") == 0) return reinterpret_cast<PFN_vkVoidFunction>(FakeCmdBindDescriptorSets);
+  if (std::strcmp(name, "vkCmdPushConstants") == 0) return reinterpret_cast<PFN_vkVoidFunction>(FakeCmdPushConstants);
   if (std::strcmp(name, "vkCmdSetViewport") == 0) return reinterpret_cast<PFN_vkVoidFunction>(FakeCmdSetViewport);
   if (std::strcmp(name, "vkCmdSetScissor") == 0) return reinterpret_cast<PFN_vkVoidFunction>(FakeCmdSetScissor);
   if (std::strcmp(name, "vkCmdBeginRendering") == 0) return reinterpret_cast<PFN_vkVoidFunction>(FakeCmdBeginRendering);
