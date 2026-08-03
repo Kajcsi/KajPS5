@@ -522,6 +522,18 @@ and `GPL-2.0-or-later`. No upstream code, renderer, image cache, page table,
 or guest-memory owner was copied. The result is scalar layout metadata only;
 `GuestMemory` remains the sole guest-memory owner.
 
+The transactional Vulkan image preparation seam in
+`src/gpu/vulkan/image_cache.*` and `tests/gpu_vulkan_image_cache_test.cpp`
+adapts the ownership, image/view compatibility, and cache-shape evidence in
+KytyPS5 `src/graphics/host_gpu/renderer/image/{image,imageView,textureCommon}.*`,
+`renderer/cache/textureCache.*`, and `gpuResourceManager.*` at commit
+`fb5ecec455cf6c67154134429485ffccbfc34203`. It re-expresses SharpEmu's
+guest-image byte sizing, compatible format aliases, and write-tracker behavior
+at commit `9e10d7c44a2821cfd5ccd3417c09c0cf269285a4`. The KajPS5 source is
+`GPL-2.0-only`; no upstream Vulkan renderer, image cache, or memory owner was
+copied. Staging is an owned Vulkan lease only and all guest memory access and
+generation acknowledgement remain through the existing owners.
+
 The checked PM4 processor in `src/gpu/command_processor.*` closely adapts
 KytyPS5 `src/graphics/guest_gpu/command_processor/pm4Dispatch.cpp`,
 `src/graphics/guest_gpu/command_processor/pm4Handlers.cpp`, and

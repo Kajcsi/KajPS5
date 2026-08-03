@@ -39,6 +39,15 @@ adapted paths change.
 
 ### 2026-08-03
 
+- M8 Vulkan image-resource preparation retained KytyPS5 at
+  `fb5ecec455cf6c67154134429485ffccbfc34203` after reviewing its
+  `image/{image,imageView,textureCommon}.*`, `textureCache.*`, and
+  `gpuResourceManager.*` ownership and aliasing paths. SharpEmu remained at
+  `9e10d7c44a2821cfd5ccd3417c09c0cf269285a4` for guest-image sizing, alias,
+  and write-tracker behavior. KajPS5 creates one transactional image lease and
+  optional compatible sibling view over its same allocation; it imports no
+  cache, renderer, page table, memory observer, or second owner.
+
 - M8 guest-image layout work retained KytyPS5 at
   `fb5ecec455cf6c67154134429485ffccbfc34203` after reviewing
   `src/graphics/guest_gpu/gpu_format.*`,
