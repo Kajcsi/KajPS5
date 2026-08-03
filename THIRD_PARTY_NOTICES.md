@@ -535,6 +535,11 @@ copied. Staging is an owned Vulkan lease only and all guest memory access and
 generation acknowledgement, command completion, and dirty-byte writeback remain
 through the existing owners.
 
+Translated image/sampler preparation additionally adapts the descriptor and
+sampler-cache behavior of the pinned KytyPS5 sources named above. It creates
+only owned Vulkan leases over checked GuestMemory ranges; no upstream renderer,
+sampler cache, or memory owner was copied.
+
 The checked PM4 processor in `src/gpu/command_processor.*` closely adapts
 KytyPS5 `src/graphics/guest_gpu/command_processor/pm4Dispatch.cpp`,
 `src/graphics/guest_gpu/command_processor/pm4Handlers.cpp`, and

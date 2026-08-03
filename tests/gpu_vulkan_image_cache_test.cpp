@@ -17,6 +17,7 @@
 namespace {
 namespace P = kajps5::gpu::Prospero;
 namespace vk = kajps5::gpu::vulkan;
+namespace ir = kajps5::gpu::shader::recompiler::IR;
 
 void Check(bool condition, std::string_view message) {
   if (!condition) {
@@ -31,11 +32,43 @@ template <typename T> T Handle(std::uintptr_t value) {
 
 enum class FailPoint { kNone, kCreateImage, kAllocateImage, kBindImage,
                        kCreateFirstView, kCreateSecondView, kCreateBuffer,
-                       kAllocateStaging, kBindStaging, kMap };
+                       kAllocateStaging, kBindStaging, kMap, kCreateSampler,
+                       kCreateAuxiliaryView };
 
 struct FakeOperation {
   std::string_view kind;
   std::uintptr_t handle = 0;
+};
+
+// Copy only scalar values. Vulkan owns every pointed-to create-info payload
+// only for the duration of the call, so retaining the original structs would
+// leave this fake with dangling pNext pointers.
+struct FakeImageCreateInfo {
+  VkImageCreateFlags flags = 0;
+  VkImageType image_type = VK_IMAGE_TYPE_MAX_ENUM;
+  VkFormat format = VK_FORMAT_UNDEFINED;
+  VkExtent3D extent{};
+  std::uint32_t mip_levels = 0;
+  std::uint32_t array_layers = 0;
+  VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_FLAG_BITS_MAX_ENUM;
+  VkImageTiling tiling = VK_IMAGE_TILING_MAX_ENUM;
+  VkImageUsageFlags usage = 0;
+  VkSharingMode sharing_mode = VK_SHARING_MODE_MAX_ENUM;
+  VkImageLayout initial_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+};
+
+struct FakeImageViewCreateInfo {
+  VkImageCreateFlags flags = 0;
+  VkImage image = VK_NULL_HANDLE;
+  VkImageViewType view_type = VK_IMAGE_VIEW_TYPE_MAX_ENUM;
+  VkFormat format = VK_FORMAT_UNDEFINED;
+  VkComponentMapping components{};
+  VkImageAspectFlags aspect_mask = 0;
+  std::uint32_t base_mip_level = 0;
+  std::uint32_t level_count = 0;
+  std::uint32_t base_array_layer = 0;
+  std::uint32_t layer_count = 0;
+  VkImageView created_view = VK_NULL_HANDLE;
 };
 
 struct FakeBarrier {
@@ -70,11 +103,14 @@ struct FakeState {
   std::uint32_t image_layers = 0;
   VkImageUsageFlags image_usage = 0;
   VkBufferUsageFlags buffer_usage = 0;
+  VkSamplerCreateInfo sampler_info{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
   std::vector<std::byte> mapped_bytes;
   std::vector<FakeBarrier> barriers;
   std::vector<VkBufferImageCopy> upload_copies;
   std::vector<VkBufferImageCopy> readback_copies;
   std::vector<FakeCommandOperation> command_operations;
+  std::vector<FakeImageCreateInfo> image_create_infos;
+  std::vector<FakeImageViewCreateInfo> image_view_create_infos;
   std::vector<FakeOperation> issued;
   std::vector<FakeOperation> poisoned;
   std::vector<FakeOperation> teardown;
@@ -192,6 +228,9 @@ VKAPI_ATTR VkResult VKAPI_CALL FakeDeviceWaitIdle(VkDevice) { return VK_SUCCESS;
 
 VKAPI_ATTR VkResult VKAPI_CALL FakeCreateImage(VkDevice, const VkImageCreateInfo* info,
     const VkAllocationCallbacks*, VkImage* image) {
+  g.image_create_infos.push_back({info->flags, info->imageType, info->format, info->extent,
+      info->mipLevels, info->arrayLayers, info->samples, info->tiling, info->usage,
+      info->sharingMode, info->initialLayout});
   if (g.fail == FailPoint::kCreateImage) { *image = Handle<VkImage>(0xdead); Poison("image", HandleId(*image)); return VK_ERROR_OUT_OF_HOST_MEMORY; }
   g.image_type = info->imageType; g.image_format = info->format; g.image_flags = info->flags;
   g.image_usage = info->usage;
@@ -206,10 +245,17 @@ VKAPI_ATTR VkResult VKAPI_CALL FakeBindImageMemory(VkDevice, VkImage, VkDeviceMe
 }
 VKAPI_ATTR VkResult VKAPI_CALL FakeCreateImageView(VkDevice, const VkImageViewCreateInfo* info,
     const VkAllocationCallbacks*, VkImageView* view) {
+  g.image_view_create_infos.push_back({info->flags, info->image, info->viewType, info->format,
+      info->components, info->subresourceRange.aspectMask,
+      info->subresourceRange.baseMipLevel, info->subresourceRange.levelCount,
+      info->subresourceRange.baseArrayLayer, info->subresourceRange.layerCount});
   ++g.views; g.view_type = info->viewType;
   if ((g.fail == FailPoint::kCreateFirstView && g.views == 1) ||
-      (g.fail == FailPoint::kCreateSecondView && g.views == 2)) { *view = Handle<VkImageView>(0xdead); Poison("view", HandleId(*view)); return VK_ERROR_OUT_OF_HOST_MEMORY; }
-  *view = Handle<VkImageView>(g.next_handle++); Issue("view", HandleId(*view)); return VK_SUCCESS;
+      (g.fail == FailPoint::kCreateSecondView && g.views == 2) ||
+      (g.fail == FailPoint::kCreateAuxiliaryView && g.views == 3)) { *view = Handle<VkImageView>(0xdead); Poison("view", HandleId(*view)); return VK_ERROR_OUT_OF_HOST_MEMORY; }
+  *view = Handle<VkImageView>(g.next_handle++);
+  g.image_view_create_infos.back().created_view = *view;
+  Issue("view", HandleId(*view)); return VK_SUCCESS;
 }
 VKAPI_ATTR void VKAPI_CALL FakeDestroyImageView(VkDevice, VkImageView view, const VkAllocationCallbacks*) { TearDown("view", HandleId(view)); }
 VKAPI_ATTR VkResult VKAPI_CALL FakeCreateBuffer(VkDevice, const VkBufferCreateInfo* info,
@@ -241,6 +287,18 @@ VKAPI_ATTR VkResult VKAPI_CALL FakeMapMemory(VkDevice, VkDeviceMemory, VkDeviceS
 VKAPI_ATTR void VKAPI_CALL FakeUnmapMemory(VkDevice, VkDeviceMemory memory) { TearDown("unmap", HandleId(memory)); }
 VKAPI_ATTR VkResult VKAPI_CALL FakeFlushMappedMemoryRanges(VkDevice, std::uint32_t, const VkMappedMemoryRange*) { ++g.flushes; return VK_SUCCESS; }
 VKAPI_ATTR VkResult VKAPI_CALL FakeInvalidateMappedMemoryRanges(VkDevice, std::uint32_t, const VkMappedMemoryRange*) { ++g.invalidates; return VK_SUCCESS; }
+VKAPI_ATTR VkResult VKAPI_CALL FakeCreateSampler(VkDevice, const VkSamplerCreateInfo* info,
+    const VkAllocationCallbacks*, VkSampler* sampler) {
+  if (g.fail == FailPoint::kCreateSampler) {
+    *sampler = Handle<VkSampler>(0xdead); Poison("sampler", HandleId(*sampler));
+    return VK_ERROR_OUT_OF_HOST_MEMORY;
+  }
+  g.sampler_info = *info;
+  *sampler = Handle<VkSampler>(g.next_handle++); Issue("sampler", HandleId(*sampler));
+  return VK_SUCCESS;
+}
+VKAPI_ATTR void VKAPI_CALL FakeDestroySampler(VkDevice, VkSampler sampler,
+    const VkAllocationCallbacks*) { TearDown("sampler", HandleId(sampler)); }
 VKAPI_ATTR void VKAPI_CALL FakeCmdPipelineBarrier(VkCommandBuffer,
     VkPipelineStageFlags src_stage, VkPipelineStageFlags dst_stage,
     VkDependencyFlags, std::uint32_t, const VkMemoryBarrier*,
@@ -287,6 +345,8 @@ VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL FakeGetDeviceProcAddr(VkDevice, const c
   if (std::strcmp(name, "vkUnmapMemory") == 0) return reinterpret_cast<PFN_vkVoidFunction>(FakeUnmapMemory);
   if (std::strcmp(name, "vkFlushMappedMemoryRanges") == 0) return reinterpret_cast<PFN_vkVoidFunction>(FakeFlushMappedMemoryRanges);
   if (g.invalidate_available && std::strcmp(name, "vkInvalidateMappedMemoryRanges") == 0) return reinterpret_cast<PFN_vkVoidFunction>(FakeInvalidateMappedMemoryRanges);
+  if (std::strcmp(name, "vkCreateSampler") == 0) return reinterpret_cast<PFN_vkVoidFunction>(FakeCreateSampler);
+  if (std::strcmp(name, "vkDestroySampler") == 0) return reinterpret_cast<PFN_vkVoidFunction>(FakeDestroySampler);
   if (g.commands_available && std::strcmp(name, "vkCmdPipelineBarrier") == 0) return reinterpret_cast<PFN_vkVoidFunction>(FakeCmdPipelineBarrier);
   if (g.commands_available && std::strcmp(name, "vkCmdCopyBufferToImage") == 0) return reinterpret_cast<PFN_vkVoidFunction>(FakeCmdCopyBufferToImage);
   if (g.commands_available && std::strcmp(name, "vkCmdCopyImageToBuffer") == 0) return reinterpret_cast<PFN_vkVoidFunction>(FakeCmdCopyImageToBuffer);
@@ -325,6 +385,82 @@ vk::VulkanGuestImageRequest Request(P::ImageType type = P::ImageType::kColor2D) 
   request.input.image_type = type;
   request.request_sibling_view = true;
   return request;
+}
+
+kajps5::gpu::shader::recompiler::CompileResult SampledImageCompile(
+    bool storage = false, bool srgb = false) {
+  kajps5::gpu::shader::recompiler::CompileResult compile;
+  auto& program = compile.program;
+  program.stage = kajps5::gpu::ShaderType::Compute;
+  program.resource_tracking_complete = true;
+  program.shader_info_complete = true;
+  program.binding_layout_complete = true;
+  program.bindings.descriptor_set = 0;
+  program.info.images.push_back({.source = 0, .kind = storage ?
+      ir::ResourceKind::StorageImage : ir::ResourceKind::Image,
+      .dimension = kajps5::gpu::shader::recompiler::Decoder::ImageDimension::Dim2D,
+      .storage_swizzle = storage ? 0u : ir::StorageImageIdentitySwizzle,
+      .read = true, .written = storage});
+  program.info.samplers.push_back({.source = 0});
+  program.bindings.descriptors.push_back({storage ? ir::DescriptorBindingKind::Storage2D :
+      ir::DescriptorBindingKind::Sampled2D, 2, {0}});
+  program.bindings.descriptors.push_back({ir::DescriptorBindingKind::Samplers, 3, {0}});
+  ir::DescriptorValue image;
+  image.dword_count = 8;
+  image.dwords[0] = 0x10;
+  image.dwords[1] = (srgb ? P::GpuEnumValue(P::BufferFormat::k8_8_8_8Srgb) :
+      P::GpuEnumValue(P::BufferFormat::k8_8_8_8UNorm)) << 20u;
+  image.dwords[2] = 1u | (1u << 14u);
+  image.dwords[3] = static_cast<std::uint32_t>(P::ImageType::kColor2D) << 28u;
+  compile.resources.images.push_back(image);
+  ir::DescriptorValue sampler;
+  sampler.dword_count = 4;
+  compile.resources.samplers.push_back(sampler);
+  return compile;
+}
+
+void SetTextureFormat(ir::DescriptorValue& descriptor, P::BufferFormat format) {
+  descriptor.dwords[1] = (descriptor.dwords[1] & ~(0x1ffu << 20u)) |
+      (P::GpuEnumValue(format) << 20u);
+}
+
+kajps5::gpu::shader::recompiler::CompileResult FormatAliasCompile(
+    P::BufferFormat first_format, bool first_storage,
+    P::BufferFormat second_format, bool second_storage) {
+  auto compile = SampledImageCompile();
+  compile.program.info.samplers.clear();
+  compile.resources.samplers.clear();
+  compile.program.bindings.descriptors.clear();
+  SetTextureFormat(compile.resources.images[0], first_format);
+  compile.program.info.images[0].kind = first_storage ? ir::ResourceKind::StorageImage :
+      ir::ResourceKind::Image;
+  compile.program.info.images[0].storage_swizzle = first_storage ? 0u :
+      ir::StorageImageIdentitySwizzle;
+  compile.program.info.images[0].written = first_storage;
+  auto second = compile.resources.images[0];
+  SetTextureFormat(second, second_format);
+  compile.resources.images.push_back(second);
+  auto second_info = compile.program.info.images[0];
+  second_info.kind = second_storage ? ir::ResourceKind::StorageImage :
+      ir::ResourceKind::Image;
+  second_info.storage_swizzle = second_storage ? 0u : ir::StorageImageIdentitySwizzle;
+  second_info.written = second_storage;
+  compile.program.info.images.push_back(second_info);
+  compile.program.bindings.descriptors.push_back({first_storage ?
+      ir::DescriptorBindingKind::Storage2D : ir::DescriptorBindingKind::Sampled2D, 2, {0}});
+  compile.program.bindings.descriptors.push_back({second_storage ?
+      ir::DescriptorBindingKind::Storage2D : ir::DescriptorBindingKind::Sampled2D, 4, {1}});
+  return compile;
+}
+
+VkFormat CapturedViewFormat(VkImageView view) {
+  const auto found = std::find_if(g.image_view_create_infos.begin(),
+      g.image_view_create_infos.end(), [=](const FakeImageViewCreateInfo& info) {
+        return info.created_view == view;
+      });
+  Check(found != g.image_view_create_infos.end(),
+        "translated descriptor referenced an uncaptured image view");
+  return found->format;
 }
 
 void CheckExactCleanup(std::initializer_list<std::string_view> expected) {
@@ -395,14 +531,18 @@ void TestPreparationAndTopology() {
 
   const struct { P::ImageType type; VkImageType image; VkImageViewType view; } cases[] = {
       {P::ImageType::kColor1D, VK_IMAGE_TYPE_1D, VK_IMAGE_VIEW_TYPE_1D},
+      {P::ImageType::kColor1DArray, VK_IMAGE_TYPE_1D, VK_IMAGE_VIEW_TYPE_1D_ARRAY},
+      {P::ImageType::kColor2D, VK_IMAGE_TYPE_2D, VK_IMAGE_VIEW_TYPE_2D},
+      {P::ImageType::kColor2DArray, VK_IMAGE_TYPE_2D, VK_IMAGE_VIEW_TYPE_2D_ARRAY},
       {P::ImageType::kColor3D, VK_IMAGE_TYPE_3D, VK_IMAGE_VIEW_TYPE_3D},
       {P::ImageType::kCube, VK_IMAGE_TYPE_2D, VK_IMAGE_VIEW_TYPE_CUBE},
-      {P::ImageType::kColor2DArray, VK_IMAGE_TYPE_2D, VK_IMAGE_VIEW_TYPE_2D_ARRAY},
   };
   for (const auto& test : cases) {
     Reset();
     auto request = Request(test.type);
-    if (test.type == P::ImageType::kColor1D) request.input.height = 1;
+    if (test.type == P::ImageType::kColor1D || test.type == P::ImageType::kColor1DArray)
+      request.input.height = 1;
+    if (test.type == P::ImageType::kColor1DArray) request.input.layers = 2;
     if (test.type == P::ImageType::kColor3D) request.input.depth = 2;
     if (test.type == P::ImageType::kCube) { request.input.width = 2; request.input.height = 2; request.input.layers = 1; }
     if (test.type == P::ImageType::kColor2DArray) request.input.layers = 2;
@@ -410,8 +550,46 @@ void TestPreparationAndTopology() {
     Check(static_cast<bool>(next), "topology preparation failed");
     Check(g.image_type == test.image && g.view_type == test.view,
           "image type did not map to expected Vulkan topology");
+    Check(g.image_create_infos.size() == 1 && g.image_view_create_infos.size() == 2 &&
+              g.image_create_infos[0].initial_layout == VK_IMAGE_LAYOUT_UNDEFINED,
+          "fake image create-info capture did not retain scalar topology records");
     cache.Discard(next);
   }
+
+  Reset();
+  auto ranged = Request(P::ImageType::kColor2DArray);
+  ranged.input.layers = 2;
+  ranged.input.mip_count = 2;
+  ranged.view_base_mip_level = 1;
+  ranged.view_level_count = 1;
+  ranged.view_base_array_layer = 1;
+  ranged.view_layer_count = 1;
+  auto subrange = cache.Prepare(ranged);
+  Check(subrange && g.image_create_infos[0].mip_levels == 2 &&
+            g.image_create_infos[0].array_layers == 2 &&
+            g.image_view_create_infos[0].base_mip_level == 1 &&
+            g.image_view_create_infos[0].level_count == 1 &&
+            g.image_view_create_infos[0].base_array_layer == 1 &&
+            g.image_view_create_infos[0].layer_count == 1,
+        "nonzero mip or array view subrange was not retained in the Vulkan view");
+  cache.Discard(subrange);
+
+  Reset();
+  auto cube_array = Request(P::ImageType::kCube);
+  cube_array.input.layers = 2;
+  cube_array.view_type = VK_IMAGE_VIEW_TYPE_CUBE_ARRAY;
+  auto cubes = cache.Prepare(cube_array);
+  Check(cubes && (g.image_create_infos[0].flags & VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT) != 0 &&
+            g.image_view_create_infos[0].view_type == VK_IMAGE_VIEW_TYPE_CUBE_ARRAY &&
+            g.image_view_create_infos[0].layer_count == 12,
+        "cube-array topology did not request cube-compatible 2D-array storage");
+  cache.Discard(cubes);
+
+  Reset();
+  auto bad_cube = Request(P::ImageType::kCube);
+  bad_cube.view_base_array_layer = 1;
+  Check(!cache.Prepare(bad_cube) && g.image_create_infos.empty(),
+        "misaligned cube view reached Vulkan image creation");
 }
 
 void TestCoherentAndRollback() {
@@ -656,7 +834,513 @@ void TestMissingCommandFunctionsAreSideEffectFree() {
   cache.Discard(prepared);
 }
 
+void TestTranslatedImageSamplerSet() {
+  {
+  Reset();
+  auto context = Context();
+  using Protection = kajps5::memory::GuestMemoryProtection;
+  kajps5::memory::GuestMemory memory(
+      0x1000, 0x1000, Protection::kRead | Protection::kWrite |
+                          Protection::kGpuRead | Protection::kGpuWrite);
+  Check(memory.InitializeFill(0x1000, 16, std::byte{0x10}),
+        "translated image guest initialization failed");
+  kajps5::gpu::GpuRuntime runtime(memory);
+  vk::VulkanGuestImageCache cache(*context, memory, runtime.resource_coherence());
+  auto sampled = cache.PrepareTranslated(SampledImageCompile());
+  Check(sampled && sampled.images.size() == 1 && sampled.image_descriptors.size() == 1 &&
+            sampled.samplers.size() == 1 && sampled.sampler_descriptors.size() == 1 &&
+            sampled.image_descriptors[0].binding == 2 &&
+            sampled.image_descriptors[0].descriptor_type == VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE &&
+            sampled.image_descriptors[0].layout == VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL &&
+            sampled.sampler_descriptors[0].binding == 3 &&
+            g.sampler_info.magFilter == VK_FILTER_NEAREST &&
+            g.sampler_info.addressModeU == VK_SAMPLER_ADDRESS_MODE_REPEAT,
+        "translated sampled image/sampler topology differs");
+  cache.Discard(sampled);
+  const std::size_t teardown = g.teardown.size();
+  cache.Discard(sampled);
+  Check(g.teardown.size() == teardown, "translated set discard was not idempotent");
+  auto unnormalized_compile = SampledImageCompile();
+  unnormalized_compile.resources.samplers[0].dwords[0] = 1u << 15u;
+  auto unnormalized = cache.PrepareTranslated(unnormalized_compile);
+  Check(unnormalized && g.sampler_info.unnormalizedCoordinates == VK_TRUE &&
+            g.sampler_info.addressModeU == VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE &&
+            g.sampler_info.minLod == 0.0f && g.sampler_info.maxLod == 0.0f,
+        "ForceUnormCoords did not produce Kyty-compatible Vulkan restrictions");
+  cache.Discard(unnormalized);
+  }
+
+  {
+  Reset(); auto context = Context();
+  using Protection = kajps5::memory::GuestMemoryProtection;
+  kajps5::memory::GuestMemory storage_memory(
+      0x1000, 0x1000, Protection::kRead | Protection::kWrite |
+                          Protection::kGpuRead | Protection::kGpuWrite);
+  Check(storage_memory.InitializeFill(0x1000, 16, std::byte{0x10}),
+        "storage image guest initialization failed");
+  kajps5::gpu::GpuRuntime storage_runtime(storage_memory);
+  vk::VulkanGuestImageCache storage_cache(*context, storage_memory,
+                                           storage_runtime.resource_coherence());
+  auto storage = storage_cache.PrepareTranslated(SampledImageCompile(true, true));
+  Check(storage && storage.image_descriptors[0].descriptor_type ==
+            VK_DESCRIPTOR_TYPE_STORAGE_IMAGE &&
+            storage.image_descriptors[0].layout == VK_IMAGE_LAYOUT_GENERAL &&
+            storage.image_descriptors[0].view == storage.images[0].sibling_view &&
+            storage.image_descriptors[0].shader_writes,
+        "sRGB storage image did not select the compatible UNORM sibling view");
+  storage_cache.Discard(storage);
+  }
+
+  {
+  Reset(); auto context = Context();
+  using Protection = kajps5::memory::GuestMemoryProtection;
+  kajps5::memory::GuestMemory memory(
+      0x1000, 0x1000, Protection::kRead | Protection::kWrite |
+                          Protection::kGpuRead | Protection::kGpuWrite);
+  Check(memory.InitializeFill(0x1000, 16, std::byte{0x10}),
+        "access-union guest initialization failed");
+  kajps5::gpu::GpuRuntime runtime(memory);
+  vk::VulkanGuestImageCache cache(*context, memory, runtime.resource_coherence());
+  auto union_compile = SampledImageCompile(true);
+  union_compile.program.bindings.descriptors[0].binding = 4;
+  union_compile.program.bindings.descriptors.insert(
+      union_compile.program.bindings.descriptors.begin(),
+      {ir::DescriptorBindingKind::Sampled2D, 2, {0}});
+  auto merged = cache.PrepareTranslated(union_compile);
+  Check(merged && merged.images.size() == 1 && merged.image_descriptors.size() == 2 &&
+            (g.image_usage & VK_IMAGE_USAGE_SAMPLED_BIT) != 0 &&
+            (g.image_usage & VK_IMAGE_USAGE_STORAGE_BIT) != 0 &&
+            (g.buffer_usage & VK_BUFFER_USAGE_TRANSFER_DST_BIT) != 0 &&
+            merged.image_descriptors[0].descriptor_type == VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE &&
+            merged.image_descriptors[1].descriptor_type == VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+        "sampled/storage access union did not create one writable union lease");
+  cache.Discard(merged);
+  }
+}
+
+void TestTranslatedAliasesAndInvalidInputs() {
+  using Protection = kajps5::memory::GuestMemoryProtection;
+  Reset();
+  auto context = Context();
+  kajps5::memory::GuestMemory memory(
+      0x1000, 0x1000, Protection::kRead | Protection::kWrite |
+                          Protection::kGpuRead | Protection::kGpuWrite);
+  Check(memory.InitializeFill(0x1000, 0x1000, std::byte{0x20}),
+        "translated alias guest initialization failed");
+  kajps5::gpu::GpuRuntime runtime(memory);
+  vk::VulkanGuestImageCache cache(*context, memory, runtime.resource_coherence());
+
+  const struct {
+    P::ImageType type;
+    kajps5::gpu::shader::recompiler::Decoder::ImageDimension dimension;
+    ir::DescriptorBindingKind binding;
+    VkImageType image_type;
+    VkImageViewType view_type;
+    std::uint32_t depth_minus_one;
+    bool cube;
+  } translated_topologies[] = {
+      {P::ImageType::kColor1D, kajps5::gpu::shader::recompiler::Decoder::ImageDimension::Dim1D,
+       ir::DescriptorBindingKind::Sampled1D, VK_IMAGE_TYPE_1D, VK_IMAGE_VIEW_TYPE_1D, 0, false},
+      {P::ImageType::kColor1DArray, kajps5::gpu::shader::recompiler::Decoder::ImageDimension::Dim1DArray,
+       ir::DescriptorBindingKind::Sampled1DArray, VK_IMAGE_TYPE_1D, VK_IMAGE_VIEW_TYPE_1D_ARRAY, 1, false},
+      {P::ImageType::kColor2D, kajps5::gpu::shader::recompiler::Decoder::ImageDimension::Dim2D,
+       ir::DescriptorBindingKind::Sampled2D, VK_IMAGE_TYPE_2D, VK_IMAGE_VIEW_TYPE_2D, 0, false},
+      {P::ImageType::kColor2DArray, kajps5::gpu::shader::recompiler::Decoder::ImageDimension::Dim2DArray,
+       ir::DescriptorBindingKind::Sampled2DArray, VK_IMAGE_TYPE_2D, VK_IMAGE_VIEW_TYPE_2D_ARRAY, 1, false},
+      {P::ImageType::kColor3D, kajps5::gpu::shader::recompiler::Decoder::ImageDimension::Dim3D,
+       ir::DescriptorBindingKind::Sampled3D, VK_IMAGE_TYPE_3D, VK_IMAGE_VIEW_TYPE_3D, 1, false},
+      {P::ImageType::kCube, kajps5::gpu::shader::recompiler::Decoder::ImageDimension::Dim2DArray,
+       ir::DescriptorBindingKind::Sampled2DArray, VK_IMAGE_TYPE_2D, VK_IMAGE_VIEW_TYPE_CUBE, 5, true},
+      {P::ImageType::kCube, kajps5::gpu::shader::recompiler::Decoder::ImageDimension::Dim2DArray,
+       ir::DescriptorBindingKind::Sampled2DArray, VK_IMAGE_TYPE_2D, VK_IMAGE_VIEW_TYPE_CUBE_ARRAY, 11, true},
+  };
+  for (const auto& topology : translated_topologies) {
+    Reset();
+    auto compile = SampledImageCompile();
+    compile.program.info.images[0].dimension = topology.dimension;
+    compile.program.info.images[0].cube = topology.cube;
+    compile.program.bindings.descriptors[0].kind = topology.binding;
+    compile.resources.images[0].dwords[3] = static_cast<std::uint32_t>(topology.type) << 28u;
+    compile.resources.images[0].dwords[4] = topology.depth_minus_one;
+    if (topology.cube) compile.resources.images[0].dwords[2] = 1u | (4u << 14u);
+    auto set = cache.PrepareTranslated(compile);
+    const bool correct_topology = set && g.image_create_infos.size() == 1 &&
+        g.image_view_create_infos.size() >= 1 &&
+        g.image_create_infos[0].image_type == topology.image_type &&
+        g.image_view_create_infos[0].view_type == topology.view_type &&
+        (!topology.cube || (g.image_create_infos[0].flags & VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT) != 0);
+    Check(correct_topology, "translated image descriptor did not preserve the requested Vulkan topology");
+    cache.Discard(set);
+  }
+
+  Reset();
+  auto translated_subrange = SampledImageCompile();
+  translated_subrange.program.info.images[0].dimension =
+      kajps5::gpu::shader::recompiler::Decoder::ImageDimension::Dim2DArray;
+  translated_subrange.program.bindings.descriptors[0].kind = ir::DescriptorBindingKind::Sampled2DArray;
+  translated_subrange.resources.images[0].dwords[3] =
+      (static_cast<std::uint32_t>(P::ImageType::kColor2DArray) << 28u) |
+      (1u << 12u) | (1u << 16u);
+  translated_subrange.resources.images[0].dwords[4] = 1u | (1u << 16u);
+  translated_subrange.resources.images[0].dwords[5] = 1u << 4u;
+  auto subrange_set = cache.PrepareTranslated(translated_subrange);
+  Check(subrange_set && g.image_create_infos[0].mip_levels == 2 &&
+            g.image_create_infos[0].array_layers == 3 &&
+            g.image_view_create_infos[0].base_mip_level == 1 &&
+            g.image_view_create_infos[0].level_count == 1 &&
+            g.image_view_create_infos[0].base_array_layer == 1 &&
+            g.image_view_create_infos[0].layer_count == 2,
+        "translated descriptor did not retain its nonzero mip and array subranges");
+  cache.Discard(subrange_set);
+
+  Reset();
+  auto aliases = SampledImageCompile();
+  aliases.program.info.images[0].dimension =
+      kajps5::gpu::shader::recompiler::Decoder::ImageDimension::Dim2DArray;
+  aliases.program.bindings.descriptors[0].kind = ir::DescriptorBindingKind::Sampled2DArray;
+  aliases.resources.images[0].dwords[3] =
+      static_cast<std::uint32_t>(P::ImageType::kColor2DArray) << 28u;
+  aliases.resources.images[0].dwords[4] = 2;  // Three storage layers, view [0, 3).
+  auto narrow = aliases.resources.images[0];
+  narrow.dwords[4] = 1u | (1u << 16u);  // Same storage key, view [1, 3).
+  aliases.resources.images.push_back(narrow);
+  aliases.resources.images.push_back(narrow);
+  aliases.program.info.images.push_back(aliases.program.info.images[0]);
+  aliases.program.info.images.push_back(aliases.program.info.images[0]);
+  aliases.program.bindings.descriptors[0].resources = {0, 1, 2};
+  auto prepared = cache.PrepareTranslated(aliases);
+  const bool aliases_ok = prepared && prepared.images.size() == 1 && prepared.image_descriptors.size() == 3 &&
+            prepared.image_descriptors[0].preparation_index == 0 &&
+            prepared.image_descriptors[1].preparation_index == 0 &&
+            prepared.image_descriptors[1].view != prepared.image_descriptors[0].view &&
+            prepared.image_descriptors[2].view == prepared.image_descriptors[1].view &&
+            prepared.auxiliary_views.size() == 1 && g.image_create_infos.size() == 1 &&
+            g.image_view_create_infos.size() == 3 &&
+            g.image_view_create_infos.back().base_array_layer == 1 &&
+            g.image_view_create_infos.back().layer_count == 2;
+  Check(aliases_ok, "exact storage aliases did not share one image and deduplicate their auxiliary view");
+  cache.Discard(prepared);
+  CheckExactCleanup({"view", "sampler", "unmap", "view", "view", "buffer", "image", "memory", "memory"});
+  const std::size_t teardown = g.teardown.size();
+  cache.Discard(prepared);
+  Check(g.teardown.size() == teardown, "alias set discard was not inert after its first call");
+
+  Reset(FailPoint::kCreateAuxiliaryView);
+  auto auxiliary_failure = cache.PrepareTranslated(aliases);
+  Check(!auxiliary_failure, "poisoned auxiliary-view creation unexpectedly succeeded");
+  CheckExactCleanup({"unmap", "view", "view", "buffer", "image", "memory", "memory"});
+
+  Reset();
+  auto overlap = SampledImageCompile();
+  overlap.resources.images.push_back(overlap.resources.images[0]);
+  overlap.resources.images[1].dwords[2] = 3u | (1u << 14u);  // Wider overlapping storage.
+  overlap.program.info.images.push_back(overlap.program.info.images[0]);
+  overlap.program.bindings.descriptors[0].resources = {0, 1};
+  Check(!cache.PrepareTranslated(overlap) && g.issued.empty() && g.teardown.empty(),
+        "incompatible overlapping storage reached Vulkan work");
+
+  const auto CheckInvalid = [&](auto mutate, std::string_view message) {
+    Reset();
+    auto invalid = SampledImageCompile();
+    mutate(invalid);
+    const auto result = cache.PrepareTranslated(invalid);
+    Check(!result && g.issued.empty() && g.teardown.empty(), message);
+  };
+  CheckInvalid([](auto& c) { c.program.stage = kajps5::gpu::ShaderType::Pixel; },
+               "wrong shader stage reached Vulkan work");
+  CheckInvalid([](auto& c) { c.program.binding_layout_complete = false; },
+               "incomplete specialization reached Vulkan work");
+  CheckInvalid([](auto& c) { c.resources.images[0].dwords[3] =
+                    static_cast<std::uint32_t>(P::ImageType::kColor3D) << 28u; },
+               "changed specialization reached Vulkan work");
+  CheckInvalid([](auto& c) { c.program.bindings.descriptors[1].binding = 2; },
+               "duplicate descriptor binding reached Vulkan work");
+  CheckInvalid([](auto& c) { c.program.bindings.descriptors[0].resources = {4}; },
+               "invalid dense image index reached Vulkan work");
+  CheckInvalid([](auto& c) { c.program.bindings.descriptors[0].kind = ir::DescriptorBindingKind::Gds; },
+               "unsupported descriptor group reached Vulkan work");
+  CheckInvalid([](auto& c) { c.resources.images[0].dwords[0] = 0; c.resources.images[0].dwords[1] &= ~0xffu; },
+               "null image address reached Vulkan work");
+  CheckInvalid([](auto& c) { c.resources.images[0].dwords[3] |= 1u << 20u; },
+               "tiled image descriptor reached Vulkan work");
+  CheckInvalid([](auto& c) { c.resources.images[0].dwords[3] =
+                    static_cast<std::uint32_t>(P::ImageType::kColor2DMsaa) << 28u; },
+               "MSAA descriptor reached Vulkan work");
+  CheckInvalid([](auto& c) { c.resources.images[0].dwords[3] |= 2u << 12u; },
+               "malformed mip view range reached Vulkan work");
+  CheckInvalid([](auto& c) { c.program.bindings.descriptors[0].kind = ir::DescriptorBindingKind::Sampled3D; },
+               "wrong image binding dimension reached Vulkan work");
+  CheckInvalid([](auto& c) { c.program.info.images[0].kind = ir::ResourceKind::ImageUint; },
+               "wrong image binding numeric class reached Vulkan work");
+  CheckInvalid([](auto& c) { c.program.info.images[0].cube = true; },
+               "invalid cube specialization reached Vulkan work");
+  CheckInvalid([](auto& c) {
+    for (std::uint32_t index = 1; index <= ir::ShaderInfo::MaxImages; ++index) {
+      c.program.info.images.push_back(c.program.info.images[0]);
+      c.resources.images.push_back(c.resources.images[0]);
+    }
+  }, "fixed ShaderInfo image bound reached Vulkan work");
+
+  Reset();
+  auto compressed = SampledImageCompile(true, true);
+  compressed.resources.images[0].dwords[1] =
+      P::GpuEnumValue(P::BufferFormat::kBc1Srgb) << 20u;
+  Check(!cache.PrepareTranslated(compressed) && g.issued.empty() && g.teardown.empty(),
+        "compressed storage image reached Vulkan work");
+}
+
+void TestTranslatedSamplerMatrixAndRollback() {
+  using Protection = kajps5::memory::GuestMemoryProtection;
+  Reset();
+  auto context = Context();
+  kajps5::memory::GuestMemory memory(
+      0x1000, 0x1000, Protection::kRead | Protection::kWrite |
+                          Protection::kGpuRead | Protection::kGpuWrite);
+  Check(memory.InitializeFill(0x1000, 0x400, std::byte{0x30}),
+        "sampler matrix guest initialization failed");
+  kajps5::gpu::GpuRuntime runtime(memory);
+  vk::VulkanGuestImageCache cache(*context, memory, runtime.resource_coherence());
+
+  const VkSamplerAddressMode addresses[] = {
+      VK_SAMPLER_ADDRESS_MODE_REPEAT, VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT,
+      VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE, VK_SAMPLER_ADDRESS_MODE_MIRROR_CLAMP_TO_EDGE,
+      VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER, VK_SAMPLER_ADDRESS_MODE_MIRROR_CLAMP_TO_EDGE,
+      VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER, VK_SAMPLER_ADDRESS_MODE_MIRROR_CLAMP_TO_EDGE,
+  };
+  for (std::uint32_t value = 0; value < std::size(addresses); ++value) {
+    Reset();
+    auto compile = SampledImageCompile();
+    compile.resources.samplers[0].dwords[0] = value | (value << 3u) | (value << 6u);
+    auto set = cache.PrepareTranslated(compile);
+    Check(set && g.sampler_info.addressModeU == addresses[value] &&
+              g.sampler_info.addressModeV == addresses[value] &&
+              g.sampler_info.addressModeW == addresses[value],
+        "sampler clamp enum did not map to its Vulkan address mode");
+    cache.Discard(set);
+  }
+  const VkFilter filters[] = {VK_FILTER_NEAREST, VK_FILTER_LINEAR,
+                              VK_FILTER_NEAREST, VK_FILTER_LINEAR};
+  for (std::uint32_t value = 0; value < std::size(filters); ++value) {
+    Reset();
+    auto compile = SampledImageCompile();
+    compile.resources.samplers[0].dwords[0] = 4u << 9u;
+    compile.resources.samplers[0].dwords[2] = value << 20u | value << 22u;
+    auto set = cache.PrepareTranslated(compile);
+    Check(set && g.sampler_info.magFilter == filters[value] &&
+              g.sampler_info.minFilter == filters[value] &&
+              g.sampler_info.anisotropyEnable == (value >= 2 ? VK_TRUE : VK_FALSE) &&
+              g.sampler_info.maxAnisotropy == 16.0f,
+        "sampler filter or anisotropic filter enum differs from Vulkan mapping");
+    cache.Discard(set);
+  }
+  const VkSamplerMipmapMode mip_modes[] = {VK_SAMPLER_MIPMAP_MODE_NEAREST,
+                                            VK_SAMPLER_MIPMAP_MODE_NEAREST,
+                                            VK_SAMPLER_MIPMAP_MODE_LINEAR};
+  for (std::uint32_t value = 0; value < std::size(mip_modes); ++value) {
+    Reset();
+    auto compile = SampledImageCompile();
+    compile.resources.samplers[0].dwords[1] = 0x100u | (0x300u << 12u);
+    compile.resources.samplers[0].dwords[2] = 0x3f00u | (value << 26u);
+    auto set = cache.PrepareTranslated(compile);
+    Check(set && g.sampler_info.mipmapMode == mip_modes[value] &&
+              g.sampler_info.mipLodBias == -1.0f &&
+              (value == 0 ? g.sampler_info.minLod == 0.0f && g.sampler_info.maxLod == 0.0f :
+                            g.sampler_info.minLod == 1.0f && g.sampler_info.maxLod == 3.0f),
+        "sampler mip filter did not preserve zero or ordered LOD limits and signed bias");
+    cache.Discard(set);
+  }
+  for (std::uint32_t value = 0; value <= 4; ++value) {
+    Reset();
+    auto compile = SampledImageCompile();
+    compile.resources.samplers[0].dwords[0] = value << 9u;
+    auto set = cache.PrepareTranslated(compile);
+    Check(set && g.sampler_info.maxAnisotropy == static_cast<float>(1u << value),
+        "sampler anisotropy ratio enum did not map to its Vulkan maximum");
+    cache.Discard(set);
+  }
+
+  Reset();
+  auto depth = SampledImageCompile();
+  depth.resources.samplers[0].dwords[0] = 6u << 12u;
+  auto no_compare = cache.PrepareTranslated(depth);
+  Check(no_compare && no_compare.samplers.size() == 1 &&
+            g.sampler_info.compareEnable == VK_FALSE,
+        "sampler comparison was enabled without a depth sampled pair");
+  cache.Discard(no_compare);
+  Reset();
+  depth.program.info.images[0].depth_compare = true;
+  depth.program.info.sampled_pairs.push_back({0, 0});
+  auto compare = cache.PrepareTranslated(depth);
+  Check(compare && g.sampler_info.compareEnable == VK_TRUE &&
+            g.sampler_info.compareOp == VK_COMPARE_OP_GREATER_OR_EQUAL,
+        "depth sampled pair did not enable the requested compare operation");
+  cache.Discard(compare);
+
+  Reset();
+  auto float_border = SampledImageCompile();
+  float_border.resources.samplers[0].dwords[0] =
+      static_cast<std::uint32_t>(P::SamplerClampMode::kClampBorder);
+  float_border.resources.samplers[0].dwords[3] =
+      static_cast<std::uint32_t>(P::SamplerBorderColor::kOpaqueWhite) << 30u;
+  float_border.program.info.sampled_pairs.push_back({0, 0});
+  auto floats = cache.PrepareTranslated(float_border);
+  Check(floats && g.sampler_info.borderColor == VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE,
+        "noninteger sampled pair did not select a floating static border color");
+  cache.Discard(floats);
+  Reset();
+  auto int_border = float_border;
+  int_border.program.info.images[0].kind = ir::ResourceKind::ImageUint;
+  int_border.program.bindings.descriptors[0].kind = ir::DescriptorBindingKind::SampledUint2D;
+  int_border.resources.images[0].dwords[1] =
+      P::GpuEnumValue(P::BufferFormat::k8_8_8_8UInt) << 20u;
+  auto integers = cache.PrepareTranslated(int_border);
+  Check(integers && g.sampler_info.borderColor == VK_BORDER_COLOR_INT_OPAQUE_WHITE,
+        "integer sampled pair did not select an integer static border color");
+  cache.Discard(integers);
+
+  Reset();
+  auto dedup = SampledImageCompile();
+  dedup.resources.samplers.push_back(dedup.resources.samplers[0]);
+  dedup.program.info.samplers.push_back(dedup.program.info.samplers[0]);
+  dedup.program.bindings.descriptors[1].resources = {0, 1};
+  auto shared = cache.PrepareTranslated(dedup);
+  Check(shared && shared.samplers.size() == 1 && shared.sampler_descriptors.size() == 2 &&
+            shared.sampler_descriptors[0].sampler == shared.sampler_descriptors[1].sampler,
+        "identical translated sampler descriptors did not deduplicate their Vulkan sampler");
+  cache.Discard(shared);
+
+  const auto CheckRejectedSampler = [&](auto mutate, std::string_view message) {
+    Reset();
+    auto invalid = SampledImageCompile();
+    mutate(invalid);
+    const auto set = cache.PrepareTranslated(invalid);
+    const auto sampler_created = std::count_if(g.issued.begin(), g.issued.end(),
+        [](const FakeOperation& op) { return op.kind == "sampler"; });
+    Check(!set && sampler_created == 0, message);
+  };
+  CheckRejectedSampler([](auto& c) { c.resources.samplers[0].dwords[3] =
+                         static_cast<std::uint32_t>(P::SamplerBorderColor::kFromTable) << 30u; },
+      "sampler border table was not rejected before sampler creation");
+  CheckRejectedSampler([](auto& c) { c.resources.samplers[0].dwords[2] = 3u << 26u; },
+      "invalid sampler mip enum was not rejected before sampler creation");
+  CheckRejectedSampler([](auto& c) {
+    c.resources.samplers[0].dwords[0] = 5u << 9u;
+  }, "invalid sampler anisotropy enum was not rejected before sampler creation");
+  CheckRejectedSampler([](auto& c) {
+    c.resources.samplers[0].dwords[0] = 1u << 15u;
+    c.resources.samplers[0].dwords[2] = 1u << 22u;
+  }, "unnormalized sampler did not reject incompatible minification and magnification filters");
+  CheckRejectedSampler([](auto& c) {
+    c.resources.samplers[0].dwords[0] =
+        static_cast<std::uint32_t>(P::SamplerClampMode::kClampBorder);
+    c.program.info.sampled_pairs.push_back({0, 0});
+    c.resources.images.push_back(c.resources.images[0]);
+    c.resources.images[1].dwords[1] =
+        P::GpuEnumValue(P::BufferFormat::k8_8_8_8UInt) << 20u;
+    auto integer = c.program.info.images[0];
+    integer.kind = ir::ResourceKind::ImageUint;
+    c.program.info.images.push_back(integer);
+    c.program.bindings.descriptors.push_back(
+        {ir::DescriptorBindingKind::SampledUint2D, 4, {1}});
+    c.program.info.sampled_pairs.push_back({1, 0});
+  }, "border sampler did not reject mixed integer and noninteger sampled pairs");
+
+  Reset(FailPoint::kCreateSampler);
+  auto sampler_failure = cache.PrepareTranslated(SampledImageCompile());
+  Check(!sampler_failure, "poisoned sampler creation unexpectedly succeeded");
+  CheckExactCleanup({"unmap", "view", "view", "buffer", "image", "memory", "memory"});
+}
+
+void TestTranslatedFormatAliasesAndStorageCompatibility() {
+  using Protection = kajps5::memory::GuestMemoryProtection;
+  Reset();
+  auto context = Context();
+  kajps5::memory::GuestMemory memory(
+      0x1000, 0x1000, Protection::kRead | Protection::kWrite |
+                          Protection::kGpuRead | Protection::kGpuWrite);
+  Check(memory.InitializeFill(0x1000, 0x1000, std::byte{0x40}),
+        "format-alias guest initialization failed");
+  kajps5::gpu::GpuRuntime runtime(memory);
+  vk::VulkanGuestImageCache cache(*context, memory, runtime.resource_coherence());
+
+  const struct { P::BufferFormat unorm; P::BufferFormat srgb; bool compressed; } pairs[] = {
+      {P::BufferFormat::k8UNorm, P::BufferFormat::k8Srgb, false},
+      {P::BufferFormat::k8_8UNorm, P::BufferFormat::k8_8Srgb, false},
+      {P::BufferFormat::k8_8_8_8UNorm, P::BufferFormat::k8_8_8_8Srgb, false},
+      {P::BufferFormat::kBc1UNorm, P::BufferFormat::kBc1Srgb, true},
+      {P::BufferFormat::kBc3UNorm, P::BufferFormat::kBc3Srgb, true},
+      {P::BufferFormat::kBc7UNorm, P::BufferFormat::kBc7Srgb, true},
+  };
+  for (const auto& pair : pairs) {
+    const auto unorm = vk::MapGuestImageFormat(P::GpuEnumValue(pair.unorm));
+    const auto srgb = vk::MapGuestImageFormat(P::GpuEnumValue(pair.srgb));
+    Check(unorm && srgb, "format-alias test used an unmapped pair");
+    for (bool srgb_first : {false, true}) {
+      Reset();
+      auto sampled = srgb_first ? FormatAliasCompile(pair.srgb, false, pair.unorm, false) :
+          FormatAliasCompile(pair.unorm, false, pair.srgb, false);
+      auto set = cache.PrepareTranslated(sampled);
+      Check(set && set.images.size() == 1 && set.image_descriptors.size() == 2 &&
+                CapturedViewFormat(set.image_descriptors[0].view) ==
+                    (srgb_first ? srgb->format : unorm->format) &&
+                CapturedViewFormat(set.image_descriptors[1].view) ==
+                    (srgb_first ? unorm->format : srgb->format),
+          "sampled exact-key aliases did not select each descriptor's mapped view format");
+      cache.Discard(set);
+    }
+    if (pair.compressed) {
+      for (bool srgb_first : {false, true}) {
+        Reset();
+        auto storage = srgb_first ? FormatAliasCompile(pair.srgb, true, pair.unorm, false) :
+            FormatAliasCompile(pair.unorm, false, pair.srgb, true);
+        Check(!cache.PrepareTranslated(storage) && g.issued.empty() && g.teardown.empty(),
+            "compressed sRGB storage alias reached Vulkan work");
+      }
+      continue;
+    }
+    for (bool srgb_first : {false, true}) {
+      Reset();
+      auto storage = srgb_first ? FormatAliasCompile(pair.srgb, true, pair.unorm, false) :
+          FormatAliasCompile(pair.unorm, false, pair.srgb, true);
+      auto set = cache.PrepareTranslated(storage);
+      Check(set && set.images.size() == 1 && set.image_descriptors.size() == 2 &&
+                CapturedViewFormat(set.image_descriptors[0].view) == unorm->format &&
+                CapturedViewFormat(set.image_descriptors[1].view) == unorm->format,
+          "sRGB storage alias did not bind an UNORM Vulkan view in both dense orders");
+      cache.Discard(set);
+    }
+  }
+
+  Reset();
+  auto incompatible_shape = FormatAliasCompile(P::BufferFormat::k8_8_8_8UNorm, false,
+                                                P::BufferFormat::k8_8_8_8UNorm, false);
+  incompatible_shape.resources.images[0].dwords[1] |= 3u << 30u;
+  incompatible_shape.resources.images[0].dwords[2] = 0;             // 4 x 1 x 4 bytes.
+  incompatible_shape.resources.images[1].dwords[1] |= 1u << 30u;
+  incompatible_shape.resources.images[1].dwords[2] = 1u << 14u;     // 2 x 2 x 4 bytes.
+  Check(!cache.PrepareTranslated(incompatible_shape) && g.issued.empty() && g.teardown.empty(),
+        "equal-byte incompatible image shapes shared a Vulkan image lease");
+}
+
 void TestMappings() {
+  const struct {
+    P::BufferFormat unorm;
+    P::BufferFormat srgb;
+  } siblings[] = {
+      {P::BufferFormat::k8UNorm, P::BufferFormat::k8Srgb},
+      {P::BufferFormat::k8_8UNorm, P::BufferFormat::k8_8Srgb},
+      {P::BufferFormat::k8_8_8_8UNorm, P::BufferFormat::k8_8_8_8Srgb},
+      {P::BufferFormat::kBc1UNorm, P::BufferFormat::kBc1Srgb},
+      {P::BufferFormat::kBc3UNorm, P::BufferFormat::kBc3Srgb},
+      {P::BufferFormat::kBc7UNorm, P::BufferFormat::kBc7Srgb},
+  };
+  for (const auto& pair : siblings) {
+    const auto unorm = vk::MapGuestImageFormat(P::GpuEnumValue(pair.unorm));
+    const auto srgb = vk::MapGuestImageFormat(P::GpuEnumValue(pair.srgb));
+    Check(unorm && srgb && unorm->sibling_format == srgb->format &&
+              srgb->sibling_format == unorm->format,
+        "mapped UNORM/sRGB format pair did not retain reciprocal sibling views");
+  }
   Check(vk::MapGuestImageFormat(P::GpuEnumValue(P::BufferFormat::kBc6SFloat))->format == VK_FORMAT_BC6H_SFLOAT_BLOCK,
         "BC6 signed float mapping differs");
   Check(!vk::MapGuestImageFormat(P::GpuEnumValue(P::BufferFormat::k32_32_32Float)),
@@ -671,6 +1355,10 @@ int main() {
   TestTransferLeaseAndCoherence();
   TestCoherentCompletion();
   TestMissingCommandFunctionsAreSideEffectFree();
+  TestTranslatedImageSamplerSet();
+  TestTranslatedAliasesAndInvalidInputs();
+  TestTranslatedSamplerMatrixAndRollback();
+  TestTranslatedFormatAliasesAndStorageCompatibility();
   std::cout << "vulkan_image_cache_test: all cases passed\n";
   return 0;
 }

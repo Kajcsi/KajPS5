@@ -51,6 +51,13 @@ adapted paths change.
   existing `GpuResourceCoherence` completion contract; it imports no upstream
   command scheduler or renderer path.
 
+- M8 translated image/sampler preparation reviewed KytyPS5
+  `renderer/pipeline/descriptors.cpp` and `renderer/cache/samplerCache.cpp` at
+  `fb5ecec455cf6c67154134429485ffccbfc34203`, plus the pinned SharpEmu image
+  alias and write-tracker behavior. KajPS5 re-expresses only checked descriptor
+  fields, alias ownership, and Vulkan lease topology; no renderer, cache, or
+  memory owner was copied.
+
 - M8 guest-image layout work retained KytyPS5 at
   `fb5ecec455cf6c67154134429485ffccbfc34203` after reviewing
   `src/graphics/guest_gpu/gpu_format.*`,

@@ -13,6 +13,7 @@
 
 #include "gpu/image_layout.h"
 #include "gpu/resource_coherence.h"
+#include "gpu/shader/recompiler/ShaderRecompiler.h"
 #include "gpu/vulkan/device.h"
 
 namespace kajps5::memory { class GuestMemory; }
@@ -32,6 +33,11 @@ struct VulkanGuestImageRequest {
   VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
   bool writable = false;
   bool request_sibling_view = false;
+  std::uint32_t view_base_mip_level = 0;
+  std::uint32_t view_level_count = 0;
+  std::uint32_t view_base_array_layer = 0;
+  std::uint32_t view_layer_count = 0;
+  std::optional<VkImageViewType> view_type;
 };
 
 // Vulkan handles are command-recordable leases. They neither own GuestMemory
@@ -61,6 +67,68 @@ struct VulkanGuestImagePreparation {
   [[nodiscard]] explicit operator bool() const noexcept { return status == VulkanGuestImageStatus::kOk; }
 };
 
+enum class VulkanGuestImageSetStatus : std::uint8_t {
+  kOk,
+  kInvalidSpecialization,
+  kUnsupportedDescriptor,
+  kInvalidDescriptor,
+  kGuestImageFailure,
+  kSamplerFailure,
+  kResourceLimit,
+};
+
+struct VulkanGuestImageDescriptor {
+  shader::recompiler::IR::DescriptorBindingKind kind =
+      shader::recompiler::IR::DescriptorBindingKind::Buffers;
+  std::uint32_t binding = 0;
+  std::uint32_t array_index = 0;
+  std::uint32_t dense_image_index = 0;
+  std::uint32_t preparation_index = 0;
+  VkImageView view = VK_NULL_HANDLE;
+  VkImageLayout layout = VK_IMAGE_LAYOUT_UNDEFINED;
+  VkDescriptorType descriptor_type = VK_DESCRIPTOR_TYPE_MAX_ENUM;
+  bool shader_reads = false;
+  bool shader_writes = false;
+};
+
+struct VulkanGuestSamplerLease { VkSampler sampler = VK_NULL_HANDLE; };
+struct VulkanGuestImageAuxiliaryView {
+  std::uint32_t preparation_index = 0;
+  VkFormat format = VK_FORMAT_UNDEFINED;
+  VkImageViewType view_type = VK_IMAGE_VIEW_TYPE_MAX_ENUM;
+  std::uint32_t base_mip_level = 0;
+  std::uint32_t level_count = 0;
+  std::uint32_t base_array_layer = 0;
+  std::uint32_t layer_count = 0;
+  VkImageView view = VK_NULL_HANDLE;
+};
+
+struct VulkanGuestSamplerDescriptor {
+  std::uint32_t binding = 0;
+  std::uint32_t array_index = 0;
+  std::uint32_t dense_sampler_index = 0;
+  std::uint32_t lease_index = 0;
+  VkSampler sampler = VK_NULL_HANDLE;
+};
+
+struct VulkanGuestImageSetDiagnostic {
+  VulkanGuestImageSetStatus status = VulkanGuestImageSetStatus::kInvalidSpecialization;
+  std::string message;
+};
+
+struct VulkanGuestImageSetPreparation {
+  VulkanGuestImageSetStatus status = VulkanGuestImageSetStatus::kInvalidSpecialization;
+  std::vector<VulkanGuestImagePreparation> images;
+  std::vector<VulkanGuestImageAuxiliaryView> auxiliary_views;
+  std::vector<VulkanGuestImageDescriptor> image_descriptors;
+  std::vector<VulkanGuestSamplerLease> samplers;
+  std::vector<VulkanGuestSamplerDescriptor> sampler_descriptors;
+  std::vector<VulkanGuestImageSetDiagnostic> diagnostics;
+  [[nodiscard]] explicit operator bool() const noexcept {
+    return status == VulkanGuestImageSetStatus::kOk;
+  }
+};
+
 class VulkanGuestImageCache final {
  public:
   VulkanGuestImageCache(VulkanDeviceContext& context, memory::GuestMemory& memory, GpuResourceCoherence& coherence) noexcept;
@@ -68,6 +136,8 @@ class VulkanGuestImageCache final {
   VulkanGuestImageCache(const VulkanGuestImageCache&) = delete;
   VulkanGuestImageCache& operator=(const VulkanGuestImageCache&) = delete;
   [[nodiscard]] VulkanGuestImagePreparation Prepare(const VulkanGuestImageRequest& request);
+  [[nodiscard]] VulkanGuestImageSetPreparation PrepareTranslated(
+      const shader::recompiler::CompileResult& result);
   [[nodiscard]] bool RecordUpload(VkCommandBuffer command_buffer,
                                   VulkanGuestImagePreparation& preparation,
                                   VkImageLayout shader_layout,
@@ -80,6 +150,7 @@ class VulkanGuestImageCache final {
   [[nodiscard]] bool MarkSubmitted(VulkanGuestImagePreparation& preparation) noexcept;
   [[nodiscard]] bool Complete(VulkanGuestImagePreparation& preparation) noexcept;
   void Discard(VulkanGuestImagePreparation& preparation) noexcept;
+  void Discard(VulkanGuestImageSetPreparation& preparation) noexcept;
   [[nodiscard]] std::size_t lost_dirty_resource_count() const noexcept { return lost_dirty_count_; }
  private:
   VulkanDeviceContext& context_; memory::GuestMemory& memory_; GpuResourceCoherence& coherence_;
@@ -90,4 +161,6 @@ class VulkanGuestImageCache final {
   std::size_t lost_dirty_count_ = 0;
 };
 [[nodiscard]] const char* VulkanGuestImageStatusName(VulkanGuestImageStatus status) noexcept;
+[[nodiscard]] const char* VulkanGuestImageSetStatusName(
+    VulkanGuestImageSetStatus status) noexcept;
 } // namespace kajps5::gpu::vulkan

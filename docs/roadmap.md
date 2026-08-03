@@ -168,6 +168,8 @@
       leases from checked linear guest-image layouts; record explicit upload and
       writable readback transitions, then resolve changed guest bytes through
       the singular resource-coherence owner.
+- [x] Prepare bounded translated image/sampler descriptor records from an
+      immutable compute specialization; descriptor submission remains deferred.
 - Add shader control-flow, IR, emission, and resource tests before game tests.
 - Add an audio queue test with stable timing.
 
