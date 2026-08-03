@@ -89,7 +89,8 @@ std::optional<std::uint32_t> FindQueueFamily(
   for (const VulkanQueueFamily& family : candidate.queue_families) {
     if (family.queue_count == 0 ||
         (requirements.require_graphics_queue && !family.supports_graphics) ||
-        (requirements.require_compute_queue && !family.supports_compute)) {
+        (requirements.require_compute_queue && !family.supports_compute) ||
+        (requirements.require_present_queue && !family.supports_present)) {
       continue;
     }
     if (!selected.has_value() || family.index < *selected) {
@@ -211,6 +212,9 @@ struct InstanceDispatch {
   PFN_vkCreateDevice create_device = nullptr;
   PFN_vkGetDeviceProcAddr get_device_proc_addr = nullptr;
   PFN_vkDestroyDevice destroy_device = nullptr;
+  PFN_vkDestroySurfaceKHR destroy_surface = nullptr;
+  PFN_vkGetPhysicalDeviceSurfaceSupportKHR get_physical_device_surface_support =
+      nullptr;
 };
 
 struct DeviceDispatch {
@@ -257,6 +261,11 @@ bool LoadInstanceDispatch(PFN_vkGetInstanceProcAddr get_instance_proc_addr,
       get_instance_proc_addr, instance, "vkGetDeviceProcAddr");
   dispatch.destroy_device = LoadInstanceFunction<PFN_vkDestroyDevice>(
       get_instance_proc_addr, instance, "vkDestroyDevice");
+  dispatch.destroy_surface = LoadInstanceFunction<PFN_vkDestroySurfaceKHR>(
+      get_instance_proc_addr, instance, "vkDestroySurfaceKHR");
+  dispatch.get_physical_device_surface_support =
+      LoadInstanceFunction<PFN_vkGetPhysicalDeviceSurfaceSupportKHR>(
+          get_instance_proc_addr, instance, "vkGetPhysicalDeviceSurfaceSupportKHR");
 
   if (dispatch.destroy_instance != nullptr &&
       dispatch.enumerate_physical_devices != nullptr &&
@@ -557,6 +566,10 @@ struct VulkanDeviceContext::Impl {
       device = VK_NULL_HANDLE;
       queue = VK_NULL_HANDLE;
     }
+    if (surface != VK_NULL_HANDLE && instance_dispatch.destroy_surface != nullptr) {
+      instance_dispatch.destroy_surface(instance, surface, nullptr);
+      surface = VK_NULL_HANDLE;
+    }
     if (instance != VK_NULL_HANDLE && instance_dispatch.destroy_instance != nullptr) {
       instance_dispatch.destroy_instance(instance, nullptr);
       instance = VK_NULL_HANDLE;
@@ -571,6 +584,7 @@ struct VulkanDeviceContext::Impl {
   VkPhysicalDevice physical_device = VK_NULL_HANDLE;
   VkDevice device = VK_NULL_HANDLE;
   VkQueue queue = VK_NULL_HANDLE;
+  VkSurfaceKHR surface = VK_NULL_HANDLE;
   VulkanDeviceCandidate selected_candidate;
   VulkanFeatureEnablement enabled_capabilities;
   std::optional<VkPhysicalDeviceMemoryProperties> memory_properties;
@@ -580,6 +594,7 @@ struct VulkanDeviceContext::Impl {
   std::mutex compute_execution_owner_mutex;
   bool compute_execution_owner_attached = false;
   bool graphics_execution_owner_attached = false;
+  bool presentation_owner_attached = false;
 };
 
 VulkanDeviceSelectionResult SelectVulkanDevice(
@@ -791,6 +806,52 @@ VulkanContextCreateResult VulkanDeviceContext::Create(
                    std::move(diagnostics));
   }
 
+  std::vector<std::string> instance_extensions;
+  if (options.surface_factory != nullptr) {
+    const auto enumerate_instance_extensions =
+        LoadInstanceFunction<PFN_vkEnumerateInstanceExtensionProperties>(
+            get_instance_proc_addr, VK_NULL_HANDLE,
+            "vkEnumerateInstanceExtensionProperties");
+    if (enumerate_instance_extensions == nullptr) {
+      AddDiagnostic(diagnostics, VulkanDiagnosticSeverity::kError,
+                    VulkanDiagnosticCode::kInstanceFunctionUnavailable,
+                    "Vulkan loader is missing vkEnumerateInstanceExtensionProperties");
+      return Failure(VulkanContextStatus::kInstanceFunctionUnavailable,
+                     std::move(diagnostics));
+    }
+    std::vector<VkExtensionProperties> available;
+    const VkResult extensions_result = EnumerateVulkan<VkExtensionProperties>(
+        [&](std::uint32_t* count, VkExtensionProperties* values) {
+          return enumerate_instance_extensions(nullptr, count, values);
+        }, available);
+    if (extensions_result != VK_SUCCESS) {
+      AddDiagnostic(diagnostics, VulkanDiagnosticSeverity::kError,
+                    VulkanDiagnosticCode::kSurfaceExtensionUnavailable,
+                    "could not enumerate Vulkan instance extensions", std::nullopt,
+                    extensions_result);
+      return Failure(VulkanContextStatus::kSurfaceExtensionUnavailable,
+                     std::move(diagnostics));
+    }
+    instance_extensions = options.surface_factory->required_instance_extensions;
+    if (std::find(instance_extensions.begin(), instance_extensions.end(),
+                  "VK_KHR_surface") == instance_extensions.end()) {
+      instance_extensions.emplace_back("VK_KHR_surface");
+    }
+    for (const std::string& required : instance_extensions) {
+      const bool found = std::any_of(available.begin(), available.end(),
+          [&](const VkExtensionProperties& property) {
+            return required == property.extensionName;
+          });
+      if (!found) {
+        AddDiagnostic(diagnostics, VulkanDiagnosticSeverity::kError,
+                      VulkanDiagnosticCode::kSurfaceExtensionUnavailable,
+                      "required Vulkan instance extension is unavailable: " + required);
+        return Failure(VulkanContextStatus::kSurfaceExtensionUnavailable,
+                       std::move(diagnostics));
+      }
+    }
+  }
+
   auto impl = std::make_unique<Impl>(std::move(loader));
   const char* application_name =
       options.application_name.empty() ? "KajPS5" : options.application_name.c_str();
@@ -804,6 +865,15 @@ VulkanContextCreateResult VulkanDeviceContext::Create(
   VkInstanceCreateInfo instance_info{};
   instance_info.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
   instance_info.pApplicationInfo = &application_info;
+  std::vector<const char*> instance_extension_names;
+  instance_extension_names.reserve(instance_extensions.size());
+  for (const auto& extension : instance_extensions) {
+    instance_extension_names.push_back(extension.c_str());
+  }
+  instance_info.enabledExtensionCount =
+      static_cast<std::uint32_t>(instance_extension_names.size());
+  instance_info.ppEnabledExtensionNames = instance_extension_names.empty()
+      ? nullptr : instance_extension_names.data();
 
   VkInstance instance = VK_NULL_HANDLE;
   const VkResult instance_result =
@@ -821,6 +891,28 @@ VulkanContextCreateResult VulkanDeviceContext::Create(
                             impl->instance_dispatch, diagnostics)) {
     return Failure(VulkanContextStatus::kInstanceFunctionUnavailable,
                    std::move(diagnostics));
+  }
+
+  if (options.surface_factory != nullptr) {
+    if (!options.surface_factory->create_surface) {
+      AddDiagnostic(diagnostics, VulkanDiagnosticSeverity::kError,
+                    VulkanDiagnosticCode::kSurfaceCreationFailed,
+                    "presentation requested without a surface creation callback");
+      return Failure(VulkanContextStatus::kSurfaceCreationFailed,
+                     std::move(diagnostics));
+    }
+    const VkResult surface_result = options.surface_factory->create_surface(
+        impl->instance, get_instance_proc_addr, &impl->surface);
+    if (surface_result != VK_SUCCESS || impl->surface == VK_NULL_HANDLE ||
+        impl->instance_dispatch.get_physical_device_surface_support == nullptr ||
+        impl->instance_dispatch.destroy_surface == nullptr) {
+      AddDiagnostic(diagnostics, VulkanDiagnosticSeverity::kError,
+                    VulkanDiagnosticCode::kSurfaceCreationFailed,
+                    "could not create or resolve presentation surface", std::nullopt,
+                    surface_result);
+      return Failure(VulkanContextStatus::kSurfaceCreationFailed,
+                     std::move(diagnostics));
+    }
   }
 
   std::vector<VkPhysicalDevice> physical_devices;
@@ -851,11 +943,28 @@ VulkanContextCreateResult VulkanDeviceContext::Create(
       return Failure(VulkanContextStatus::kPhysicalDeviceEnumerationFailed,
                      std::move(diagnostics));
     }
+    if (impl->surface != VK_NULL_HANDLE) {
+      for (auto& family : candidate.queue_families) {
+        VkBool32 supported = VK_FALSE;
+        const VkResult present_result =
+            impl->instance_dispatch.get_physical_device_surface_support(
+                physical_devices[index], family.index, impl->surface, &supported);
+        family.supports_present = present_result == VK_SUCCESS && supported == VK_TRUE;
+      }
+    }
     candidates.push_back(std::move(candidate));
   }
 
-  VulkanDeviceSelectionResult selection =
-      SelectVulkanDevice(candidates, options.requirements);
+  VulkanDeviceRequirements requirements = options.requirements;
+  if (impl->surface != VK_NULL_HANDLE) {
+    requirements.require_present_queue = true;
+    if (std::find(requirements.required_extensions.begin(),
+                  requirements.required_extensions.end(), "VK_KHR_swapchain") ==
+        requirements.required_extensions.end()) {
+      requirements.required_extensions.emplace_back("VK_KHR_swapchain");
+    }
+  }
+  VulkanDeviceSelectionResult selection = SelectVulkanDevice(candidates, requirements);
   diagnostics.insert(diagnostics.end(),
                      std::make_move_iterator(selection.diagnostics.begin()),
                      std::make_move_iterator(selection.diagnostics.end()));
@@ -902,7 +1011,7 @@ VulkanContextCreateResult VulkanDeviceContext::Create(
   queue_info.pQueuePriorities = &queue_priority;
 
   impl->enabled_capabilities =
-      BuildEnabledCapabilities(impl->selected_candidate, options.requirements);
+      BuildEnabledCapabilities(impl->selected_candidate, requirements);
   const VulkanFeatureEnablement& enabled = impl->enabled_capabilities;
 
   VkPhysicalDeviceVulkan12Features enabled_features12{};
@@ -1093,6 +1202,21 @@ void VulkanDeviceContext::ReleaseGraphicsExecutionOwner() noexcept {
   impl_->graphics_execution_owner_attached = false;
 }
 
+bool VulkanDeviceContext::TryAcquirePresentationOwner(
+    bool& context_is_device_lost) noexcept {
+  std::lock_guard lock(impl_->compute_execution_owner_mutex);
+  context_is_device_lost = impl_->device_lost;
+  if (context_is_device_lost || impl_->presentation_owner_attached ||
+      impl_->surface == VK_NULL_HANDLE) return false;
+  impl_->presentation_owner_attached = true;
+  return true;
+}
+
+void VulkanDeviceContext::ReleasePresentationOwner() noexcept {
+  std::lock_guard lock(impl_->compute_execution_owner_mutex);
+  impl_->presentation_owner_attached = false;
+}
+
 bool VulkanDeviceContext::SupportsColorAttachmentFormat(VkFormat format) const noexcept {
   if (format == VK_FORMAT_UNDEFINED ||
       impl_->instance_dispatch.get_physical_device_format_properties == nullptr)
@@ -1129,6 +1253,17 @@ bool VulkanDeviceContext::IsDeviceLost() noexcept {
   return impl_->IsDeviceLost();
 }
 
+VkSurfaceKHR VulkanDeviceContext::presentation_surface() const noexcept {
+  return impl_->surface;
+}
+
+PFN_vkVoidFunction VulkanDeviceContext::ResolveInstanceFunction(
+    const char* name) const noexcept {
+  if (name == nullptr || impl_->instance == VK_NULL_HANDLE ||
+      !impl_->loader.valid()) return nullptr;
+  return impl_->loader.get_instance_proc_addr()(impl_->instance, name);
+}
+
 const char* VulkanContextStatusName(VulkanContextStatus status) noexcept {
   switch (status) {
     case VulkanContextStatus::kOk:
@@ -1153,6 +1288,10 @@ const char* VulkanContextStatusName(VulkanContextStatus status) noexcept {
       return "queue_unavailable";
     case VulkanContextStatus::kAlreadyInitialized:
       return "already_initialized";
+    case VulkanContextStatus::kSurfaceExtensionUnavailable:
+      return "surface_extension_unavailable";
+    case VulkanContextStatus::kSurfaceCreationFailed:
+      return "surface_creation_failed";
   }
   return "unknown";
 }
@@ -1171,6 +1310,10 @@ const char* VulkanDiagnosticCodeName(VulkanDiagnosticCode code) noexcept {
       return "instance_creation_failed";
     case VulkanDiagnosticCode::kInstanceFunctionUnavailable:
       return "instance_function_unavailable";
+    case VulkanDiagnosticCode::kSurfaceExtensionUnavailable:
+      return "surface_extension_unavailable";
+    case VulkanDiagnosticCode::kSurfaceCreationFailed:
+      return "surface_creation_failed";
     case VulkanDiagnosticCode::kPhysicalDeviceEnumerationFailed:
       return "physical_device_enumeration_failed";
     case VulkanDiagnosticCode::kCandidateRejectedApiVersion:

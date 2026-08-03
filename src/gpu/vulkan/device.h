@@ -18,6 +18,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <functional>
 #include <vector>
 
 #include "gpu/vulkan/loader.h"
@@ -33,6 +34,8 @@ enum class VulkanContextStatus {
   kLoaderApiVersionUnsupported,
   kInstanceCreationFailed,
   kInstanceFunctionUnavailable,
+  kSurfaceExtensionUnavailable,
+  kSurfaceCreationFailed,
   kPhysicalDeviceEnumerationFailed,
   kNoSuitableDevice,
   kDeviceCreationFailed,
@@ -54,6 +57,8 @@ enum class VulkanDiagnosticCode {
   kGlobalFunctionUnavailable,
   kInstanceCreationFailed,
   kInstanceFunctionUnavailable,
+  kSurfaceExtensionUnavailable,
+  kSurfaceCreationFailed,
   kPhysicalDeviceEnumerationFailed,
   kCandidateRejectedApiVersion,
   kCandidateRejectedQueue,
@@ -99,6 +104,9 @@ struct VulkanQueueFamily {
   std::uint32_t queue_count = 0;
   bool supports_graphics = false;
   bool supports_compute = false;
+  // Populated only for a presentation-enabled context.  A false value is not
+  // evidence about headless operation.
+  bool supports_present = false;
 };
 
 // Physical-device support queried before selection. The default requirements
@@ -213,11 +221,24 @@ struct VulkanDeviceRequirements {
   // surface/format/extension needs here instead of silently widening the
   // renderer-ready core baseline.
   std::vector<std::string> required_extensions;
+  bool require_present_queue = false;
+};
+
+// The host boundary provides the instance extensions and creates one surface
+// after VulkanDeviceContext owns an instance.  It has no global handles and
+// the context destroys the returned surface before destroying that instance.
+struct VulkanSurfaceFactory {
+  std::vector<std::string> required_instance_extensions;
+  std::function<VkResult(VkInstance, PFN_vkGetInstanceProcAddr,
+                         VkSurfaceKHR*)> create_surface;
 };
 
 struct VulkanContextOptions {
   std::string application_name = "KajPS5";
   VulkanDeviceRequirements requirements;
+  // Non-owning during Create only.  The resulting surface is exclusively
+  // owned by the context and consumed by its single presentation child.
+  const VulkanSurfaceFactory* surface_factory = nullptr;
 };
 
 struct VulkanDeviceSelection {
@@ -243,6 +264,7 @@ struct VulkanDeviceSelectionResult {
 
 class VulkanComputeExecution;
 class VulkanDeviceContext;
+class VulkanPresentation;
 
 struct VulkanContextCreateResult {
   VulkanInitializationResult initialization;
@@ -291,6 +313,10 @@ class VulkanDeviceContext final {
   // through this context. No process-global Vulkan dispatch is exposed.
   [[nodiscard]] PFN_vkVoidFunction ResolveDeviceFunction(
       const char* name) const noexcept;
+  // Narrow surface dispatch access for the runtime-owned presentation child.
+  [[nodiscard]] VkSurfaceKHR presentation_surface() const noexcept;
+  [[nodiscard]] PFN_vkVoidFunction ResolveInstanceFunction(
+      const char* name) const noexcept;
   [[nodiscard]] std::mutex& queue_mutex() noexcept;
   [[nodiscard]] bool SupportsColorAttachmentFormat(VkFormat format) const noexcept;
   [[nodiscard]] bool SupportsDepthStencilAttachmentFormat(VkFormat format) const noexcept;
@@ -298,6 +324,7 @@ class VulkanDeviceContext final {
  private:
   friend class VulkanComputeExecution;
   friend class VulkanGraphicsExecution;
+  friend class VulkanPresentation;
 
   // Each execution class has a single owner while this device lives. Ownership
   // is intentionally not part of the public context surface.
@@ -309,6 +336,9 @@ class VulkanDeviceContext final {
   [[nodiscard]] bool TryAcquireGraphicsExecutionOwner(
       bool& context_is_device_lost) noexcept;
   void ReleaseGraphicsExecutionOwner() noexcept;
+  [[nodiscard]] bool TryAcquirePresentationOwner(
+      bool& context_is_device_lost) noexcept;
+  void ReleasePresentationOwner() noexcept;
   // Compute execution uses the context's existing device dispatch to drain
   // retained submitted work before destroying its child objects.
   [[nodiscard]] VkResult WaitIdle() noexcept;

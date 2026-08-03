@@ -932,5 +932,19 @@ KajPS5 keeps one C++ runtime, one guest-memory owner, and one image cache. This
 slice performs guest-backed offscreen color-target draws only; it does not add
 a surface, swapchain, presenter, or title-rendering path.
 
+The Vulkan presentation unit in `src/gpu/vulkan/presentation.*`, the narrow
+Win32 boundary in `src/platform/windows/vulkan_window.*`, and their runtime
+and smoke-test integration adapt the presentation/swapchain architecture from
+KytyPS5 `src/graphics/presentation/videoOut.cpp` and
+`src/graphics/presentation/window/{swapchain,vulkanWindow,window}.*` at
+commit `fb5ecec455cf6c67154134429485ffccbfc34203`. Finite acquire/fence
+handling, resize/out-of-date behavior, present selection, and guest-image CPU
+coherence re-express SharpEmu
+`src/SharpEmu.Libs/VideoOut/VulkanVideoPresenter.cs` and its VideoOut tests
+at commit `9e10d7c44a2821cfd5ccd3417c09c0cf269285a4`. KytyPS5 is GPL-2.0-only
+and SharpEmu is GPL-2.0-or-later; no upstream source was copied verbatim.
+KajPS5 keeps the one Vulkan context, queue mutex, GuestMemory/coherence owner,
+and Vulkan guest image cache.
+
 Add an entry when a later change imports or adapts code. Include the project,
 commit, source path, destination path, copyright notice, and license.

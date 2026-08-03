@@ -231,6 +231,73 @@ vulkan::VulkanInitializationResult GpuRuntime::InitializeVulkan(
   return std::move(created.initialization);
 }
 
+vulkan::VulkanPresentationResult GpuRuntime::InitializeVulkanPresentation(
+    const vulkan::VulkanSurfaceFactory& surface_factory,
+    const vulkan::VulkanContextOptions& requested_options) {
+  std::lock_guard lock(vulkan_mutex_);
+  vulkan::VulkanPresentationResult result;
+  if (vulkan_context_ != nullptr || vulkan_presentation_ != nullptr) {
+    result.status = vulkan::VulkanPresentationStatus::kContextUnavailable;
+    result.diagnostics.push_back({result.status, VK_SUCCESS,
+        "presentation must be selected when the runtime creates its Vulkan context"});
+    return result;
+  }
+  auto options = requested_options;
+  options.surface_factory = &surface_factory;
+  auto created = vulkan::VulkanDeviceContext::Create(options);
+  if (!created) {
+    result.status = vulkan::VulkanPresentationStatus::kContextUnavailable;
+    for (const auto& diagnostic : created.initialization.diagnostics) {
+      result.diagnostics.push_back({result.status, diagnostic.api_result,
+                                    diagnostic.message});
+    }
+    return result;
+  }
+  auto image_cache = std::make_unique<vulkan::VulkanGuestImageCache>(
+      *created.context, memory_, *resource_coherence_);
+  auto presentation = vulkan::VulkanPresentation::Create(
+      *created.context, *image_cache, result);
+  if (!presentation) return result;
+  vulkan_context_ = std::move(created.context);
+  vulkan_image_cache_ = std::move(image_cache);
+  vulkan_presentation_ = std::move(presentation);
+  return result;
+}
+
+vulkan::VulkanPresentationResult GpuRuntime::PresentVulkanGuestFrame(
+    const GuestImageLayoutInput& input, std::uint64_t timeout_ns) {
+  std::lock_guard lock(vulkan_mutex_);
+  if (vulkan_presentation_ == nullptr) {
+    vulkan::VulkanPresentationResult result;
+    result.status = vulkan::VulkanPresentationStatus::kContextUnavailable;
+    result.diagnostics.push_back({result.status, VK_SUCCESS,
+        "InitializeVulkanPresentation must succeed before presenting a guest frame"});
+    return result;
+  }
+  return vulkan_presentation_->Present(input, timeout_ns);
+}
+
+vulkan::VulkanPresentationResult GpuRuntime::PollVulkanPresentation() {
+  std::lock_guard lock(vulkan_mutex_);
+  if (vulkan_presentation_ == nullptr) {
+    vulkan::VulkanPresentationResult result;
+    result.status = vulkan::VulkanPresentationStatus::kContextUnavailable;
+    return result;
+  }
+  return vulkan_presentation_->Poll();
+}
+
+vulkan::VulkanPresentationResult GpuRuntime::ResizeVulkanPresentation(
+    VkExtent2D extent) {
+  std::lock_guard lock(vulkan_mutex_);
+  if (vulkan_presentation_ == nullptr) {
+    vulkan::VulkanPresentationResult result;
+    result.status = vulkan::VulkanPresentationStatus::kContextUnavailable;
+    return result;
+  }
+  return vulkan_presentation_->RequestResize(extent);
+}
+
 vulkan::VulkanInitializationResult GpuRuntime::InitializeVulkan(
     vulkan::VulkanLoader loader, const vulkan::VulkanContextOptions& options) {
   std::lock_guard lock(vulkan_mutex_);

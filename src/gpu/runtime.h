@@ -24,6 +24,7 @@
 #include "gpu/vulkan/execution.h"
 #include "gpu/vulkan/graphics_execution.h"
 #include "gpu/vulkan/image_cache.h"
+#include "gpu/vulkan/presentation.h"
 
 namespace kajps5::memory {
 class GuestMemory;
@@ -164,6 +165,17 @@ class GpuRuntime final {
       vulkan::VulkanLoader loader,
       const vulkan::VulkanContextOptions& options = {});
   [[nodiscard]] bool has_vulkan_context() const noexcept;
+  // Presentation creates the Vulkan context with its surface extensions in a
+  // single transaction; it cannot be attached to an existing headless device.
+  [[nodiscard]] vulkan::VulkanPresentationResult InitializeVulkanPresentation(
+      const vulkan::VulkanSurfaceFactory& surface_factory,
+      const vulkan::VulkanContextOptions& options = {});
+  [[nodiscard]] vulkan::VulkanPresentationResult PresentVulkanGuestFrame(
+      const GuestImageLayoutInput& input,
+      std::uint64_t timeout_ns = 50'000'000ULL);
+  [[nodiscard]] vulkan::VulkanPresentationResult PollVulkanPresentation();
+  [[nodiscard]] vulkan::VulkanPresentationResult ResizeVulkanPresentation(
+      VkExtent2D extent);
   // The returned context remains owned by this runtime. Initialize Vulkan
   // before sharing the runtime with submission threads, and synchronize with
   // runtime destruction before retaining this pointer.
@@ -223,6 +235,7 @@ private:
   // execution resources are dealt with before the Vulkan device disappears.
   std::unique_ptr<vulkan::VulkanComputeExecution> vulkan_execution_;
   std::unique_ptr<vulkan::VulkanGraphicsExecution> vulkan_graphics_execution_;
+  std::unique_ptr<vulkan::VulkanPresentation> vulkan_presentation_;
 };
 
 [[nodiscard]] const char* GpuRuntimeStatusName(
