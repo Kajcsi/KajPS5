@@ -532,7 +532,8 @@ guest-image byte sizing, compatible format aliases, and write-tracker behavior
 at commit `9e10d7c44a2821cfd5ccd3417c09c0cf269285a4`. The KajPS5 source is
 `GPL-2.0-only`; no upstream Vulkan renderer, image cache, or memory owner was
 copied. Staging is an owned Vulkan lease only and all guest memory access and
-generation acknowledgement remain through the existing owners.
+generation acknowledgement, command completion, and dirty-byte writeback remain
+through the existing owners.
 
 The checked PM4 processor in `src/gpu/command_processor.*` closely adapts
 KytyPS5 `src/graphics/guest_gpu/command_processor/pm4Dispatch.cpp`,

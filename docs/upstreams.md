@@ -47,6 +47,9 @@ adapted paths change.
   and write-tracker behavior. KajPS5 creates one transactional image lease and
   optional compatible sibling view over its same allocation; it imports no
   cache, renderer, page table, memory observer, or second owner.
+  The follow-up command seam uses only Vulkan transfer barriers/copies and the
+  existing `GpuResourceCoherence` completion contract; it imports no upstream
+  command scheduler or renderer path.
 
 - M8 guest-image layout work retained KytyPS5 at
   `fb5ecec455cf6c67154134429485ffccbfc34203` after reviewing

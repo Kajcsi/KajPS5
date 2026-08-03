@@ -5,6 +5,7 @@
 
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <string>
@@ -33,8 +34,8 @@ struct VulkanGuestImageRequest {
   bool request_sibling_view = false;
 };
 
-// Vulkan handles are leases only. They neither own GuestMemory nor mark a GPU
-// write until a future command-recording unit actually submits work.
+// Vulkan handles are command-recordable leases. They neither own GuestMemory
+// nor mark a GPU write until the caller confirms submission.
 struct VulkanGuestImagePreparation {
   VulkanGuestImageStatus status = VulkanGuestImageStatus::kInvalidLayout;
   GuestImageLayout layout{};
@@ -50,6 +51,11 @@ struct VulkanGuestImagePreparation {
   VkDeviceSize staging_allocation_size = 0;
   bool staging_host_coherent = false;
   bool writable = false;
+  bool upload_recorded = false;
+  bool readback_recorded = false;
+  bool gpu_dirty = false;
+  VkImageLayout current_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+  std::vector<std::byte> uploaded_bytes;
   std::vector<VkBufferImageCopy> copy_regions;
   std::vector<VulkanGuestImageDiagnostic> diagnostics;
   [[nodiscard]] explicit operator bool() const noexcept { return status == VulkanGuestImageStatus::kOk; }
@@ -58,13 +64,30 @@ struct VulkanGuestImagePreparation {
 class VulkanGuestImageCache final {
  public:
   VulkanGuestImageCache(VulkanDeviceContext& context, memory::GuestMemory& memory, GpuResourceCoherence& coherence) noexcept;
-  ~VulkanGuestImageCache() = default;
+  ~VulkanGuestImageCache();
   VulkanGuestImageCache(const VulkanGuestImageCache&) = delete;
   VulkanGuestImageCache& operator=(const VulkanGuestImageCache&) = delete;
   [[nodiscard]] VulkanGuestImagePreparation Prepare(const VulkanGuestImageRequest& request);
+  [[nodiscard]] bool RecordUpload(VkCommandBuffer command_buffer,
+                                  VulkanGuestImagePreparation& preparation,
+                                  VkImageLayout shader_layout,
+                                  VkPipelineStageFlags shader_stage,
+                                  VkAccessFlags shader_access) noexcept;
+  [[nodiscard]] bool RecordReadback(VkCommandBuffer command_buffer,
+                                    VulkanGuestImagePreparation& preparation,
+                                    VkPipelineStageFlags source_stage,
+                                    VkAccessFlags source_access) noexcept;
+  [[nodiscard]] bool MarkSubmitted(VulkanGuestImagePreparation& preparation) noexcept;
+  [[nodiscard]] bool Complete(VulkanGuestImagePreparation& preparation) noexcept;
   void Discard(VulkanGuestImagePreparation& preparation) noexcept;
+  [[nodiscard]] std::size_t lost_dirty_resource_count() const noexcept { return lost_dirty_count_; }
  private:
   VulkanDeviceContext& context_; memory::GuestMemory& memory_; GpuResourceCoherence& coherence_;
+  // One executor may retain eight submissions and each ShaderInfo admits up
+  // to 32 images, so this fixed ledger covers every in-flight image lease.
+  static constexpr std::size_t kMaximumLostDirtyResources = 8 * 32;
+  std::array<GpuResourceId, kMaximumLostDirtyResources> lost_dirty_resources_{};
+  std::size_t lost_dirty_count_ = 0;
 };
 [[nodiscard]] const char* VulkanGuestImageStatusName(VulkanGuestImageStatus status) noexcept;
 } // namespace kajps5::gpu::vulkan

@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cstring>
 #include <limits>
+#include <span>
 
 #include "core/memory/guest_memory.h"
 #include "gpu/format.h"
@@ -31,6 +32,10 @@ struct Dispatch {
   PFN_vkMapMemory map = nullptr;
   PFN_vkUnmapMemory unmap = nullptr;
   PFN_vkFlushMappedMemoryRanges flush = nullptr;
+  PFN_vkInvalidateMappedMemoryRanges invalidate = nullptr;
+  PFN_vkCmdPipelineBarrier pipeline_barrier = nullptr;
+  PFN_vkCmdCopyBufferToImage copy_buffer_to_image = nullptr;
+  PFN_vkCmdCopyImageToBuffer copy_image_to_buffer = nullptr;
 };
 
 bool Load(VulkanDeviceContext& context, Dispatch& d) noexcept {
@@ -50,10 +55,23 @@ bool Load(VulkanDeviceContext& context, Dispatch& d) noexcept {
   d.map = reinterpret_cast<PFN_vkMapMemory>(get("vkMapMemory"));
   d.unmap = reinterpret_cast<PFN_vkUnmapMemory>(get("vkUnmapMemory"));
   d.flush = reinterpret_cast<PFN_vkFlushMappedMemoryRanges>(get("vkFlushMappedMemoryRanges"));
+  d.invalidate = reinterpret_cast<PFN_vkInvalidateMappedMemoryRanges>(get("vkInvalidateMappedMemoryRanges"));
+  d.pipeline_barrier = reinterpret_cast<PFN_vkCmdPipelineBarrier>(get("vkCmdPipelineBarrier"));
+  d.copy_buffer_to_image = reinterpret_cast<PFN_vkCmdCopyBufferToImage>(get("vkCmdCopyBufferToImage"));
+  d.copy_image_to_buffer = reinterpret_cast<PFN_vkCmdCopyImageToBuffer>(get("vkCmdCopyImageToBuffer"));
   return d.create_image && d.destroy_image && d.image_requirements && d.bind_image &&
          d.create_view && d.destroy_view && d.create_buffer && d.destroy_buffer &&
          d.buffer_requirements && d.allocate && d.free && d.bind_buffer && d.map &&
          d.unmap && d.flush;
+}
+
+bool LoadCommands(VulkanDeviceContext& context, Dispatch& d) noexcept {
+  return Load(context, d) && d.pipeline_barrier && d.copy_buffer_to_image &&
+         d.copy_image_to_buffer;
+}
+
+bool LoadInvalidate(VulkanDeviceContext& context, Dispatch& d) noexcept {
+  return Load(context, d) && d.invalidate;
 }
 
 void Fail(VulkanGuestImagePreparation& p, VulkanGuestImageStatus status,
@@ -172,6 +190,11 @@ VulkanGuestImageCache::VulkanGuestImageCache(VulkanDeviceContext& context,
                                                GpuResourceCoherence& coherence) noexcept
     : context_(context), memory_(memory), coherence_(coherence) {}
 
+VulkanGuestImageCache::~VulkanGuestImageCache() {
+  for (std::size_t index = 0; index < lost_dirty_count_; ++index)
+    (void)coherence_.UnregisterResource(lost_dirty_resources_[index]);
+}
+
 VulkanGuestImagePreparation VulkanGuestImageCache::Prepare(const VulkanGuestImageRequest& request) {
   VulkanGuestImagePreparation p;
   p.layout = CalculateGuestImageLayout(request.input);
@@ -216,7 +239,9 @@ VulkanGuestImagePreparation VulkanGuestImageCache::Prepare(const VulkanGuestImag
   image_info.mipLevels = request.input.mip_count;
   image_info.arrayLayers = request.input.image_type == Prospero::ImageType::kColor3D ? 1 : p.layout.array_layers;
   image_info.samples = request.samples; image_info.tiling = VK_IMAGE_TILING_OPTIMAL;
-  image_info.usage = request.usage | VK_IMAGE_USAGE_TRANSFER_DST_BIT; image_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+  image_info.usage = request.usage | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
+      (request.writable ? VK_IMAGE_USAGE_TRANSFER_SRC_BIT : 0);
+  image_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
   image_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
   VkImage image = VK_NULL_HANDLE;
   if (d.create_image(context_.device(), &image_info, nullptr, &image) != VK_SUCCESS) { cleanup(); Fail(p, VulkanGuestImageStatus::kDeviceResourceFailure, "vkCreateImage failed"); return p; }
@@ -245,7 +270,9 @@ VulkanGuestImagePreparation VulkanGuestImageCache::Prepare(const VulkanGuestImag
     p.sibling_view = sibling_view;
   }
   VkBufferCreateInfo buffer_info{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO}; buffer_info.size = p.layout.total_bytes;
-  buffer_info.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT; buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+  buffer_info.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+                      (p.writable ? VK_BUFFER_USAGE_TRANSFER_DST_BIT : 0);
+  buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
   VkBuffer staging_buffer = VK_NULL_HANDLE;
   if (d.create_buffer(context_.device(), &buffer_info, nullptr, &staging_buffer) != VK_SUCCESS) { cleanup(); Fail(p, VulkanGuestImageStatus::kDeviceResourceFailure, "vkCreateBuffer failed"); return p; }
   p.staging_buffer = staging_buffer;
@@ -274,6 +301,7 @@ VulkanGuestImagePreparation VulkanGuestImageCache::Prepare(const VulkanGuestImag
   }
   p.staging_mapped = staging_mapped;
   std::memcpy(p.staging_mapped, upload.data(), upload.size());
+  p.uploaded_bytes = std::move(upload);
   if (!p.staging_host_coherent) { VkMappedMemoryRange range{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE}; range.memory = p.staging_memory; range.size = p.staging_allocation_size; if (d.flush(context_.device(), 1, &range) != VK_SUCCESS) { cleanup(); Fail(p, VulkanGuestImageStatus::kDeviceResourceFailure, "vkFlushMappedMemoryRanges failed"); return p; } }
   const std::uint32_t block_bytes = Prospero::BlockCompressedBytesPerBlock(request.input.format);
   const std::uint32_t texel_bytes = Prospero::NumBytesPerElement(request.input.format);
@@ -305,9 +333,147 @@ VulkanGuestImagePreparation VulkanGuestImageCache::Prepare(const VulkanGuestImag
   p.status = VulkanGuestImageStatus::kOk; return p;
 }
 
+bool VulkanGuestImageCache::RecordUpload(
+    VkCommandBuffer command_buffer, VulkanGuestImagePreparation& p,
+    VkImageLayout shader_layout, VkPipelineStageFlags shader_stage,
+    VkAccessFlags shader_access) noexcept {
+  Dispatch d;
+  if (command_buffer == VK_NULL_HANDLE || !p || p.upload_recorded ||
+      p.image == VK_NULL_HANDLE || p.staging_buffer == VK_NULL_HANDLE ||
+      p.current_layout != VK_IMAGE_LAYOUT_UNDEFINED || p.copy_regions.empty() ||
+      shader_layout == VK_IMAGE_LAYOUT_UNDEFINED || shader_stage == 0 ||
+      !LoadCommands(context_, d)) return false;
+  VkImageMemoryBarrier to_transfer{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+  to_transfer.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+  to_transfer.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+  to_transfer.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+  to_transfer.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  to_transfer.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  to_transfer.image = p.image;
+  to_transfer.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+  to_transfer.subresourceRange.levelCount =
+      static_cast<std::uint32_t>(p.copy_regions.size());
+  to_transfer.subresourceRange.layerCount = p.layout.array_layers == 0 ? 1 : p.layout.array_layers;
+  VkImageMemoryBarrier to_shader = to_transfer;
+  to_shader.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+  to_shader.newLayout = shader_layout;
+  to_shader.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+  to_shader.dstAccessMask = shader_access;
+  to_shader.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  to_shader.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  d.pipeline_barrier(command_buffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                     VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr,
+                     1, &to_transfer);
+  d.copy_buffer_to_image(command_buffer, p.staging_buffer, p.image,
+                         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                         static_cast<std::uint32_t>(p.copy_regions.size()),
+                         p.copy_regions.data());
+  d.pipeline_barrier(command_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT, shader_stage,
+                     0, 0, nullptr, 0, nullptr, 1, &to_shader);
+  p.current_layout = shader_layout;
+  p.upload_recorded = true;
+  return true;
+}
+
+bool VulkanGuestImageCache::RecordReadback(
+    VkCommandBuffer command_buffer, VulkanGuestImagePreparation& p,
+    VkPipelineStageFlags source_stage, VkAccessFlags source_access) noexcept {
+  Dispatch d;
+  if (command_buffer == VK_NULL_HANDLE || !p || !p.writable || !p.upload_recorded ||
+      p.readback_recorded || p.current_layout == VK_IMAGE_LAYOUT_UNDEFINED ||
+      p.image == VK_NULL_HANDLE || p.staging_buffer == VK_NULL_HANDLE ||
+      p.copy_regions.empty() || source_stage == 0 || !LoadCommands(context_, d)) return false;
+  VkImageMemoryBarrier to_transfer{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+  to_transfer.srcAccessMask = source_access;
+  to_transfer.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+  to_transfer.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  to_transfer.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  to_transfer.oldLayout = p.current_layout;
+  to_transfer.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+  to_transfer.image = p.image;
+  to_transfer.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+  to_transfer.subresourceRange.levelCount = static_cast<std::uint32_t>(p.copy_regions.size());
+  to_transfer.subresourceRange.layerCount = p.layout.array_layers == 0 ? 1 : p.layout.array_layers;
+  VkBufferMemoryBarrier host_visible{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};
+  host_visible.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+  host_visible.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+  host_visible.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  host_visible.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+  host_visible.buffer = p.staging_buffer;
+  host_visible.size = p.layout.total_bytes;
+  d.pipeline_barrier(command_buffer, source_stage, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                     0, 0, nullptr, 0, nullptr, 1, &to_transfer);
+  d.copy_image_to_buffer(command_buffer, p.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                         p.staging_buffer, static_cast<std::uint32_t>(p.copy_regions.size()),
+                         p.copy_regions.data());
+  d.pipeline_barrier(command_buffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                     VK_PIPELINE_STAGE_HOST_BIT, 0, 0, nullptr, 1, &host_visible,
+                     0, nullptr);
+  p.current_layout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+  p.readback_recorded = true;
+  return true;
+}
+
+bool VulkanGuestImageCache::MarkSubmitted(VulkanGuestImagePreparation& p) noexcept {
+  if (!p || !p.writable || !p.readback_recorded || p.gpu_dirty || p.resource == 0 ||
+      !coherence_.MarkGpuWrite(p.resource)) return false;
+  p.gpu_dirty = true;
+  return true;
+}
+
+bool VulkanGuestImageCache::Complete(VulkanGuestImagePreparation& p) noexcept {
+  try {
+    const auto state = p.resource ? coherence_.Query(p.resource) : std::nullopt;
+    if (!p || !p.gpu_dirty || !p.readback_recorded || !state || !state->mapped ||
+        state->mapping_changed || !state->gpu_write_pending ||
+        p.staging_mapped == nullptr ||
+        p.uploaded_bytes.size() != p.layout.total_bytes) return false;
+    if (!p.staging_host_coherent) {
+      Dispatch d;
+      if (!LoadInvalidate(context_, d)) return false;
+      VkMappedMemoryRange range{VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE};
+      range.memory = p.staging_memory;
+      range.size = p.staging_allocation_size;
+      if (d.invalidate(context_.device(), 1, &range) != VK_SUCCESS) return false;
+    }
+    const std::byte* gpu = static_cast<const std::byte*>(p.staging_mapped);
+    std::vector<std::byte> current(p.uploaded_bytes.size());
+    if (!memory_.Read(p.layout.storage_key.guest_address, current)) return false;
+    std::size_t offset = 0;
+    while (offset < current.size()) {
+      if (gpu[offset] == p.uploaded_bytes[offset]) { ++offset; continue; }
+      const std::size_t start = offset;
+      do { ++offset; } while (offset < current.size() &&
+                              gpu[offset] != p.uploaded_bytes[offset]);
+      std::memcpy(current.data() + start, gpu + start, offset - start);
+      if (!memory_.Write(p.layout.storage_key.guest_address + start,
+                         std::span<const std::byte>(current).subspan(
+                             start, offset - start))) return false;
+    }
+    if (!coherence_.InvalidateGpuWrite(p.resource)) return false;
+    p.gpu_dirty = false;
+    return true;
+  } catch (...) {
+    // Completion remains retryable: no dirty/coherence state is cleared until
+    // every checked GuestMemory write and the coherence invalidation succeed.
+    return false;
+  }
+}
+
 void VulkanGuestImageCache::Discard(VulkanGuestImagePreparation& p) noexcept {
+  const bool lost = context_.is_device_lost();
   Dispatch d; if (Load(context_, d)) Destroy(context_, d, p);
-  if (p.resource) { (void)coherence_.UnregisterResource(p.resource); p.resource = 0; }
+  if (p.resource && lost && p.gpu_dirty) {
+    if (lost_dirty_count_ == lost_dirty_resources_.size()) {
+      // This is impossible under the executor's 8 * 32 in-flight image
+      // bound. Preserve the pending record in the preparation rather than
+      // evicting it or fabricating a GuestMemory completion.
+      return;
+    }
+    lost_dirty_resources_[lost_dirty_count_++] = p.resource;
+    p.resource = 0;
+    p.gpu_dirty = false;
+  } else if (p.resource) { (void)coherence_.UnregisterResource(p.resource); p.resource = 0; }
   p.copy_regions.clear();
 }
 

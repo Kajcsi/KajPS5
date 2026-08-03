@@ -165,8 +165,9 @@
       model for the singular Vulkan image cache, with linear footprints only
       until tiled detiling is proven.
 - [x] Prepare transactional Vulkan image, view, memory, and staging-resource
-      leases from checked linear guest-image layouts; command recording remains
-      deferred.
+      leases from checked linear guest-image layouts; record explicit upload and
+      writable readback transitions, then resolve changed guest bytes through
+      the singular resource-coherence owner.
 - Add shader control-flow, IR, emission, and resource tests before game tests.
 - Add an audio queue test with stable timing.
 
