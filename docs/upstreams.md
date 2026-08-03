@@ -39,6 +39,17 @@ adapted paths change.
 
 ### 2026-08-03
 
+- M8 translated offscreen draw execution reviewed KytyPS5
+  `src/graphics/host_gpu/renderer/pipeline/pipelineCache.cpp` and
+  `renderDraw.cpp` at `fb5ecec455cf6c67154134429485ffccbfc34203`, together
+  with SharpEmu's pinned `VulkanVideoPresenter.cs` fence/retained-work
+  behavior at `9e10d7c44a2821cfd5ccd3417c09c0cf269285a4`. KajPS5 re-expresses
+  only an exact descriptor-free graphics-pipeline key, dynamic-rendering
+  recording, finite-fence retention, and checked guest-color readback in its
+  existing C++ runtime/cache owners. It imports no renderer, presenter,
+  swapchain, surface, title-rendering path, or second memory owner. The live
+  smoke is a 4x4 linear RGBA8 guest-backed offscreen draw, not presentation.
+
 - M8 Vulkan image-resource preparation retained KytyPS5 at
   `fb5ecec455cf6c67154134429485ffccbfc34203` after reviewing its
   `image/{image,imageView,textureCommon}.*`, `textureCache.*`, and

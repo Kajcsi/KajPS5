@@ -124,6 +124,27 @@ struct FakeState {
   std::vector<FakeOperation> issued;
   std::vector<FakeOperation> poisoned;
   std::vector<FakeOperation> teardown;
+  VkFormatFeatureFlags format_features = VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT;
+  VkResult graphics_wait_result = VK_SUCCESS;
+  VkResult graphics_queue_submit_result = VK_SUCCESS;
+  std::uint32_t graphics_shader_modules = 0;
+  std::uint32_t graphics_pipeline_layouts = 0;
+  std::uint32_t graphics_pipelines = 0;
+  std::uint32_t graphics_command_pools = 0;
+  std::uint32_t graphics_fences = 0;
+  VkGraphicsPipelineCreateInfo graphics_pipeline_info{};
+  VkPrimitiveTopology graphics_topology = VK_PRIMITIVE_TOPOLOGY_MAX_ENUM;
+  VkCullModeFlags graphics_cull_mode = 0;
+  VkFrontFace graphics_front_face = VK_FRONT_FACE_MAX_ENUM;
+  VkPipelineRenderingCreateInfo graphics_rendering_info{};
+  VkFormat graphics_color_format = VK_FORMAT_UNDEFINED;
+  VkPipelineShaderStageCreateInfo graphics_stages[2]{};
+  VkPipelineColorBlendAttachmentState graphics_blend{};
+  std::vector<std::string_view> graphics_commands;
+  VkViewport graphics_viewport{};
+  VkRect2D graphics_scissor{};
+  VkRenderingAttachmentInfo graphics_attachment{};
+  std::array<std::uint32_t, 4> graphics_draw{};
 } g;
 
 template <typename T> std::uintptr_t HandleId(T handle) {
@@ -198,6 +219,11 @@ VKAPI_ATTR void VKAPI_CALL FakeGetPhysicalDeviceProperties(VkPhysicalDevice,
 }
 VKAPI_ATTR void VKAPI_CALL FakeGetPhysicalDeviceProperties2(VkPhysicalDevice,
     VkPhysicalDeviceProperties2* properties) { properties->properties = {}; }
+VKAPI_ATTR void VKAPI_CALL FakeGetPhysicalDeviceFormatProperties(
+    VkPhysicalDevice, VkFormat, VkFormatProperties* properties) {
+  *properties = {};
+  properties->optimalTilingFeatures = g.format_features;
+}
 VKAPI_ATTR void VKAPI_CALL FakeGetPhysicalDeviceMemoryProperties(VkPhysicalDevice,
     VkPhysicalDeviceMemoryProperties* properties) {
   *properties = {};
@@ -342,6 +368,96 @@ VKAPI_ATTR void VKAPI_CALL FakeCmdCopyImageToBuffer(VkCommandBuffer, VkImage,
   g.command_operations.push_back(FakeCommandOperation::kImageToBufferCopy);
 }
 
+VKAPI_ATTR VkResult VKAPI_CALL FakeCreateCommandPool(
+    VkDevice, const VkCommandPoolCreateInfo*, const VkAllocationCallbacks*,
+    VkCommandPool* pool) {
+  *pool = Handle<VkCommandPool>(g.next_handle++);
+  ++g.graphics_command_pools;
+  return VK_SUCCESS;
+}
+VKAPI_ATTR void VKAPI_CALL FakeDestroyCommandPool(
+    VkDevice, VkCommandPool, const VkAllocationCallbacks*) {}
+VKAPI_ATTR VkResult VKAPI_CALL FakeAllocateCommandBuffers(
+    VkDevice, const VkCommandBufferAllocateInfo*, VkCommandBuffer* command) {
+  *command = Handle<VkCommandBuffer>(g.next_handle++);
+  return VK_SUCCESS;
+}
+VKAPI_ATTR VkResult VKAPI_CALL FakeBeginCommandBuffer(
+    VkCommandBuffer, const VkCommandBufferBeginInfo*) {
+  g.graphics_commands.push_back("begin-command");
+  return VK_SUCCESS;
+}
+VKAPI_ATTR VkResult VKAPI_CALL FakeEndCommandBuffer(VkCommandBuffer) {
+  g.graphics_commands.push_back("end-command");
+  return VK_SUCCESS;
+}
+VKAPI_ATTR VkResult VKAPI_CALL FakeCreateFence(
+    VkDevice, const VkFenceCreateInfo*, const VkAllocationCallbacks*, VkFence* fence) {
+  *fence = Handle<VkFence>(g.next_handle++);
+  ++g.graphics_fences;
+  return VK_SUCCESS;
+}
+VKAPI_ATTR void VKAPI_CALL FakeDestroyFence(VkDevice, VkFence,
+                                             const VkAllocationCallbacks*) {}
+VKAPI_ATTR VkResult VKAPI_CALL FakeWaitForFences(VkDevice, std::uint32_t,
+    const VkFence*, VkBool32, std::uint64_t) { return g.graphics_wait_result; }
+VKAPI_ATTR VkResult VKAPI_CALL FakeGetFenceStatus(VkDevice, VkFence) {
+  return g.graphics_wait_result == VK_TIMEOUT ? VK_SUCCESS : g.graphics_wait_result;
+}
+VKAPI_ATTR VkResult VKAPI_CALL FakeQueueSubmit(VkQueue, std::uint32_t,
+    const VkSubmitInfo*, VkFence) {
+  g.graphics_commands.push_back("submit");
+  return g.graphics_queue_submit_result;
+}
+VKAPI_ATTR VkResult VKAPI_CALL FakeCreateShaderModule(VkDevice,
+    const VkShaderModuleCreateInfo*, const VkAllocationCallbacks*, VkShaderModule* module) {
+  *module = Handle<VkShaderModule>(g.next_handle++);
+  ++g.graphics_shader_modules;
+  return VK_SUCCESS;
+}
+VKAPI_ATTR void VKAPI_CALL FakeDestroyShaderModule(
+    VkDevice, VkShaderModule, const VkAllocationCallbacks*) {}
+VKAPI_ATTR VkResult VKAPI_CALL FakeCreatePipelineLayout(VkDevice,
+    const VkPipelineLayoutCreateInfo*, const VkAllocationCallbacks*, VkPipelineLayout* layout) {
+  *layout = Handle<VkPipelineLayout>(g.next_handle++);
+  ++g.graphics_pipeline_layouts;
+  return VK_SUCCESS;
+}
+VKAPI_ATTR void VKAPI_CALL FakeDestroyPipelineLayout(
+    VkDevice, VkPipelineLayout, const VkAllocationCallbacks*) {}
+VKAPI_ATTR VkResult VKAPI_CALL FakeCreateGraphicsPipelines(VkDevice, VkPipelineCache,
+    std::uint32_t, const VkGraphicsPipelineCreateInfo* info,
+    const VkAllocationCallbacks*, VkPipeline* pipeline) {
+  g.graphics_pipeline_info = *info;
+  g.graphics_topology = info->pInputAssemblyState->topology;
+  g.graphics_cull_mode = info->pRasterizationState->cullMode;
+  g.graphics_front_face = info->pRasterizationState->frontFace;
+  g.graphics_rendering_info = *static_cast<const VkPipelineRenderingCreateInfo*>(info->pNext);
+  g.graphics_color_format = g.graphics_rendering_info.pColorAttachmentFormats[0];
+  g.graphics_stages[0] = info->pStages[0];
+  g.graphics_stages[1] = info->pStages[1];
+  g.graphics_blend = info->pColorBlendState->pAttachments[0];
+  *pipeline = Handle<VkPipeline>(g.next_handle++);
+  ++g.graphics_pipelines;
+  return VK_SUCCESS;
+}
+VKAPI_ATTR void VKAPI_CALL FakeDestroyPipeline(
+    VkDevice, VkPipeline, const VkAllocationCallbacks*) {}
+VKAPI_ATTR void VKAPI_CALL FakeCmdBindPipeline(VkCommandBuffer, VkPipelineBindPoint,
+                                                 VkPipeline) { g.graphics_commands.push_back("bind"); }
+VKAPI_ATTR void VKAPI_CALL FakeCmdSetViewport(VkCommandBuffer, std::uint32_t,
+    std::uint32_t, const VkViewport* viewport) { g.graphics_viewport = *viewport; g.graphics_commands.push_back("viewport"); }
+VKAPI_ATTR void VKAPI_CALL FakeCmdSetScissor(VkCommandBuffer, std::uint32_t,
+    std::uint32_t, const VkRect2D* scissor) { g.graphics_scissor = *scissor; g.graphics_commands.push_back("scissor"); }
+VKAPI_ATTR void VKAPI_CALL FakeCmdBeginRendering(
+    VkCommandBuffer, const VkRenderingInfo* info) { g.graphics_attachment = info->pColorAttachments[0]; g.graphics_commands.push_back("begin-rendering"); }
+VKAPI_ATTR void VKAPI_CALL FakeCmdEndRendering(VkCommandBuffer) { g.graphics_commands.push_back("end-rendering"); }
+VKAPI_ATTR void VKAPI_CALL FakeCmdDraw(VkCommandBuffer, std::uint32_t vertices,
+    std::uint32_t instances, std::uint32_t first_vertex, std::uint32_t first_instance) {
+  g.graphics_draw = {vertices, instances, first_vertex, first_instance};
+  g.graphics_commands.push_back("draw");
+}
+
 VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL FakeGetDeviceProcAddr(VkDevice, const char* name) {
   if (std::strcmp(name, "vkDestroyDevice") == 0) return reinterpret_cast<PFN_vkVoidFunction>(FakeDestroyDevice);
   if (std::strcmp(name, "vkGetDeviceQueue") == 0) return reinterpret_cast<PFN_vkVoidFunction>(FakeGetDeviceQueue);
@@ -367,6 +483,28 @@ VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL FakeGetDeviceProcAddr(VkDevice, const c
   if (g.commands_available && std::strcmp(name, "vkCmdPipelineBarrier") == 0) return reinterpret_cast<PFN_vkVoidFunction>(FakeCmdPipelineBarrier);
   if (g.commands_available && std::strcmp(name, "vkCmdCopyBufferToImage") == 0) return reinterpret_cast<PFN_vkVoidFunction>(FakeCmdCopyBufferToImage);
   if (g.commands_available && std::strcmp(name, "vkCmdCopyImageToBuffer") == 0) return reinterpret_cast<PFN_vkVoidFunction>(FakeCmdCopyImageToBuffer);
+  if (std::strcmp(name, "vkCreateCommandPool") == 0) return reinterpret_cast<PFN_vkVoidFunction>(FakeCreateCommandPool);
+  if (std::strcmp(name, "vkDestroyCommandPool") == 0) return reinterpret_cast<PFN_vkVoidFunction>(FakeDestroyCommandPool);
+  if (std::strcmp(name, "vkAllocateCommandBuffers") == 0) return reinterpret_cast<PFN_vkVoidFunction>(FakeAllocateCommandBuffers);
+  if (std::strcmp(name, "vkBeginCommandBuffer") == 0) return reinterpret_cast<PFN_vkVoidFunction>(FakeBeginCommandBuffer);
+  if (std::strcmp(name, "vkEndCommandBuffer") == 0) return reinterpret_cast<PFN_vkVoidFunction>(FakeEndCommandBuffer);
+  if (std::strcmp(name, "vkCreateFence") == 0) return reinterpret_cast<PFN_vkVoidFunction>(FakeCreateFence);
+  if (std::strcmp(name, "vkDestroyFence") == 0) return reinterpret_cast<PFN_vkVoidFunction>(FakeDestroyFence);
+  if (std::strcmp(name, "vkWaitForFences") == 0) return reinterpret_cast<PFN_vkVoidFunction>(FakeWaitForFences);
+  if (std::strcmp(name, "vkGetFenceStatus") == 0) return reinterpret_cast<PFN_vkVoidFunction>(FakeGetFenceStatus);
+  if (std::strcmp(name, "vkQueueSubmit") == 0) return reinterpret_cast<PFN_vkVoidFunction>(FakeQueueSubmit);
+  if (std::strcmp(name, "vkCreateShaderModule") == 0) return reinterpret_cast<PFN_vkVoidFunction>(FakeCreateShaderModule);
+  if (std::strcmp(name, "vkDestroyShaderModule") == 0) return reinterpret_cast<PFN_vkVoidFunction>(FakeDestroyShaderModule);
+  if (std::strcmp(name, "vkCreatePipelineLayout") == 0) return reinterpret_cast<PFN_vkVoidFunction>(FakeCreatePipelineLayout);
+  if (std::strcmp(name, "vkDestroyPipelineLayout") == 0) return reinterpret_cast<PFN_vkVoidFunction>(FakeDestroyPipelineLayout);
+  if (std::strcmp(name, "vkCreateGraphicsPipelines") == 0) return reinterpret_cast<PFN_vkVoidFunction>(FakeCreateGraphicsPipelines);
+  if (std::strcmp(name, "vkDestroyPipeline") == 0) return reinterpret_cast<PFN_vkVoidFunction>(FakeDestroyPipeline);
+  if (std::strcmp(name, "vkCmdBindPipeline") == 0) return reinterpret_cast<PFN_vkVoidFunction>(FakeCmdBindPipeline);
+  if (std::strcmp(name, "vkCmdSetViewport") == 0) return reinterpret_cast<PFN_vkVoidFunction>(FakeCmdSetViewport);
+  if (std::strcmp(name, "vkCmdSetScissor") == 0) return reinterpret_cast<PFN_vkVoidFunction>(FakeCmdSetScissor);
+  if (std::strcmp(name, "vkCmdBeginRendering") == 0) return reinterpret_cast<PFN_vkVoidFunction>(FakeCmdBeginRendering);
+  if (std::strcmp(name, "vkCmdEndRendering") == 0) return reinterpret_cast<PFN_vkVoidFunction>(FakeCmdEndRendering);
+  if (std::strcmp(name, "vkCmdDraw") == 0) return reinterpret_cast<PFN_vkVoidFunction>(FakeCmdDraw);
   return nullptr;
 }
 
@@ -377,6 +515,7 @@ VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL FakeGetInstanceProcAddr(VkInstance, con
   if (std::strcmp(name, "vkEnumeratePhysicalDevices") == 0) return reinterpret_cast<PFN_vkVoidFunction>(FakeEnumeratePhysicalDevices);
   if (std::strcmp(name, "vkGetPhysicalDeviceProperties") == 0) return reinterpret_cast<PFN_vkVoidFunction>(FakeGetPhysicalDeviceProperties);
   if (std::strcmp(name, "vkGetPhysicalDeviceProperties2") == 0) return reinterpret_cast<PFN_vkVoidFunction>(FakeGetPhysicalDeviceProperties2);
+  if (std::strcmp(name, "vkGetPhysicalDeviceFormatProperties") == 0) return reinterpret_cast<PFN_vkVoidFunction>(FakeGetPhysicalDeviceFormatProperties);
   if (std::strcmp(name, "vkGetPhysicalDeviceMemoryProperties") == 0) return reinterpret_cast<PFN_vkVoidFunction>(FakeGetPhysicalDeviceMemoryProperties);
   if (std::strcmp(name, "vkGetPhysicalDeviceFeatures2") == 0) return reinterpret_cast<PFN_vkVoidFunction>(FakeGetPhysicalDeviceFeatures2);
   if (std::strcmp(name, "vkGetPhysicalDeviceQueueFamilyProperties") == 0) return reinterpret_cast<PFN_vkVoidFunction>(FakeGetPhysicalDeviceQueueFamilyProperties);

@@ -291,17 +291,22 @@ class VulkanDeviceContext final {
   [[nodiscard]] PFN_vkVoidFunction ResolveDeviceFunction(
       const char* name) const noexcept;
   [[nodiscard]] std::mutex& queue_mutex() noexcept;
+  [[nodiscard]] bool SupportsColorAttachmentFormat(VkFormat format) const noexcept;
 
  private:
   friend class VulkanComputeExecution;
+  friend class VulkanGraphicsExecution;
 
-  // Exactly one child execution owner may be attached while this device lives.
-  // It is intentionally not part of the public context surface.
+  // Each execution class has a single owner while this device lives. Ownership
+  // is intentionally not part of the public context surface.
   // Ownership acquisition and terminal-loss validation are one state
   // transition, so a creator cannot claim the slot after device loss wins.
   [[nodiscard]] bool TryAcquireComputeExecutionOwner(
       bool& context_is_device_lost) noexcept;
   void ReleaseComputeExecutionOwner() noexcept;
+  [[nodiscard]] bool TryAcquireGraphicsExecutionOwner(
+      bool& context_is_device_lost) noexcept;
+  void ReleaseGraphicsExecutionOwner() noexcept;
   // Compute execution uses the context's existing device dispatch to drain
   // retained submitted work before destroying its child objects.
   [[nodiscard]] VkResult WaitIdle() noexcept;

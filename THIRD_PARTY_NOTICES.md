@@ -917,5 +917,20 @@ GPL-2.0-or-later. The combined guidance is distributed under GPL-2.0-only.
 
 ## New adaptations
 
+The descriptor-free Vulkan graphics executor in
+`src/gpu/vulkan/graphics_execution.*`, its runtime boundary, and focused
+tests adapt architectural observations from KytyPS5
+`src/graphics/host_gpu/renderer/pipeline/pipelineCache.cpp` and
+`src/graphics/host_gpu/renderer/renderDraw.cpp` at commit
+`fb5ecec455cf6c67154134429485ffccbfc34203`. Finite-fence retention,
+poll/reclaim, device-loss, and guest-write completion behavior independently
+re-express SharpEmu `src/SharpEmu.Libs/VideoOut/VulkanVideoPresenter.cs` at
+commit `9e10d7c44a2821cfd5ccd3417c09c0cf269285a4`. The referenced projects
+state `Copyright (C) 2026 SharpEmu Emulator Project`; KytyPS5 is GPL-2.0-only
+and SharpEmu is GPL-2.0-or-later. No upstream source was copied verbatim.
+KajPS5 keeps one C++ runtime, one guest-memory owner, and one image cache. This
+slice performs guest-backed offscreen color-target draws only; it does not add
+a surface, swapchain, presenter, or title-rendering path.
+
 Add an entry when a later change imports or adapts code. Include the project,
 commit, source path, destination path, copyright notice, and license.

@@ -199,6 +199,8 @@ struct InstanceDispatch {
   PFN_vkGetPhysicalDeviceProperties get_physical_device_properties = nullptr;
   PFN_vkGetPhysicalDeviceProperties2 get_physical_device_properties2 =
       nullptr;
+  PFN_vkGetPhysicalDeviceFormatProperties get_physical_device_format_properties =
+      nullptr;
   PFN_vkGetPhysicalDeviceMemoryProperties
       get_physical_device_memory_properties = nullptr;
   PFN_vkGetPhysicalDeviceFeatures2 get_physical_device_features2 = nullptr;
@@ -231,6 +233,9 @@ bool LoadInstanceDispatch(PFN_vkGetInstanceProcAddr get_instance_proc_addr,
   dispatch.get_physical_device_properties2 =
       LoadInstanceFunction<PFN_vkGetPhysicalDeviceProperties2>(
           get_instance_proc_addr, instance, "vkGetPhysicalDeviceProperties2");
+  dispatch.get_physical_device_format_properties =
+      LoadInstanceFunction<PFN_vkGetPhysicalDeviceFormatProperties>(
+          get_instance_proc_addr, instance, "vkGetPhysicalDeviceFormatProperties");
   dispatch.get_physical_device_memory_properties =
       LoadInstanceFunction<PFN_vkGetPhysicalDeviceMemoryProperties>(
           get_instance_proc_addr, instance,
@@ -573,6 +578,7 @@ struct VulkanDeviceContext::Impl {
   bool device_lost = false;
   std::mutex compute_execution_owner_mutex;
   bool compute_execution_owner_attached = false;
+  bool graphics_execution_owner_attached = false;
 };
 
 VulkanDeviceSelectionResult SelectVulkanDevice(
@@ -1069,6 +1075,32 @@ bool VulkanDeviceContext::TryAcquireComputeExecutionOwner(
 void VulkanDeviceContext::ReleaseComputeExecutionOwner() noexcept {
   std::lock_guard lock(impl_->compute_execution_owner_mutex);
   impl_->compute_execution_owner_attached = false;
+}
+
+bool VulkanDeviceContext::TryAcquireGraphicsExecutionOwner(
+    bool& context_is_device_lost) noexcept {
+  std::lock_guard lock(impl_->compute_execution_owner_mutex);
+  context_is_device_lost = impl_->device_lost;
+  if (context_is_device_lost || impl_->graphics_execution_owner_attached)
+    return false;
+  impl_->graphics_execution_owner_attached = true;
+  return true;
+}
+
+void VulkanDeviceContext::ReleaseGraphicsExecutionOwner() noexcept {
+  std::lock_guard lock(impl_->compute_execution_owner_mutex);
+  impl_->graphics_execution_owner_attached = false;
+}
+
+bool VulkanDeviceContext::SupportsColorAttachmentFormat(VkFormat format) const noexcept {
+  if (format == VK_FORMAT_UNDEFINED ||
+      impl_->instance_dispatch.get_physical_device_format_properties == nullptr)
+    return false;
+  VkFormatProperties properties{};
+  impl_->instance_dispatch.get_physical_device_format_properties(
+      impl_->physical_device, format, &properties);
+  return (properties.optimalTilingFeatures &
+          VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT) != 0;
 }
 
 VkResult VulkanDeviceContext::WaitIdle() noexcept {

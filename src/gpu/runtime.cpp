@@ -7,6 +7,7 @@
 
 #include "gpu/runtime.h"
 
+#include <cmath>
 #include <algorithm>
 #include <array>
 #include <initializer_list>
@@ -18,6 +19,58 @@
 
 namespace kajps5::gpu {
 namespace {
+
+bool IsDescriptorFreeGraphicsProgram(
+    const shader::recompiler::CompileResult& result) {
+  const auto& info = result.program.info;
+  return result.program.bindings.ShaderDataDwords() == 0 &&
+         info.buffers.empty() && info.addresses.empty() && info.images.empty() &&
+         info.samplers.empty() && result.resources.buffers.empty() &&
+         result.resources.images.empty() && result.resources.samplers.empty() &&
+         result.resources.addresses.empty() && result.resources.user_data.empty();
+}
+
+bool HasValidGraphicsPreflight(
+    const vulkan::VulkanTranslatedDrawRequest& request) {
+  const auto& viewport = request.viewport;
+  const auto mask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                    VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+  const bool topology_valid = request.topology == vulkan::VulkanGraphicsTopology::kTriangleList ||
+      request.topology == vulkan::VulkanGraphicsTopology::kTriangleStrip ||
+      request.topology == vulkan::VulkanGraphicsTopology::kLineList ||
+      request.topology == vulkan::VulkanGraphicsTopology::kLineStrip ||
+      request.topology == vulkan::VulkanGraphicsTopology::kPointList;
+  const bool cull_valid = request.cull_mode == vulkan::VulkanGraphicsCullMode::kNone ||
+      request.cull_mode == vulkan::VulkanGraphicsCullMode::kFront ||
+      request.cull_mode == vulkan::VulkanGraphicsCullMode::kBack;
+  const bool front_face_valid = request.front_face ==
+      vulkan::VulkanGraphicsFrontFace::kCounterClockwise ||
+      request.front_face == vulkan::VulkanGraphicsFrontFace::kClockwise;
+  const bool blend_valid = request.blend.source_color != VK_BLEND_FACTOR_MAX_ENUM &&
+      request.blend.destination_color != VK_BLEND_FACTOR_MAX_ENUM &&
+      request.blend.color_op != VK_BLEND_OP_MAX_ENUM &&
+      request.blend.source_alpha != VK_BLEND_FACTOR_MAX_ENUM &&
+      request.blend.destination_alpha != VK_BLEND_FACTOR_MAX_ENUM &&
+      request.blend.alpha_op != VK_BLEND_OP_MAX_ENUM &&
+      (request.blend.write_mask & ~mask) == 0;
+  return request.vertex != nullptr && request.pixel != nullptr &&
+         request.vertex->program.stage == ShaderType::Vertex &&
+         request.pixel->program.stage == ShaderType::Pixel &&
+         !request.vertex->spirv.empty() && !request.pixel->spirv.empty() &&
+         IsDescriptorFreeGraphicsProgram(*request.vertex) &&
+         IsDescriptorFreeGraphicsProgram(*request.pixel) && request.vertex_count != 0 &&
+         request.instance_count != 0 && request.timeout_ns != 0 &&
+         request.timeout_ns != std::numeric_limits<std::uint64_t>::max() &&
+         std::isfinite(viewport.x) && std::isfinite(viewport.y) &&
+         std::isfinite(viewport.width) && std::isfinite(viewport.height) &&
+         std::isfinite(viewport.min_depth) && std::isfinite(viewport.max_depth) &&
+         viewport.width > 0.0f && viewport.height > 0.0f &&
+         viewport.min_depth >= 0.0f && viewport.max_depth <= 1.0f &&
+         viewport.min_depth <= viewport.max_depth &&
+         viewport.scissor.extent.width != 0 && viewport.scissor.extent.height != 0 &&
+         viewport.scissor.offset.x >= 0 && viewport.scissor.offset.y >= 0 &&
+         topology_valid && cull_valid && front_face_valid && blend_valid;
+}
 
 constexpr std::uint32_t kPm4Type3 = 0xc0000000U;
 constexpr std::uint32_t kPm4LengthMask = 0x3fffU;
@@ -251,6 +304,85 @@ vulkan::VulkanComputeResult GpuRuntime::PollVulkanCompute() {
     return {};
   }
   return vulkan_execution_->PollCompleted();
+}
+
+vulkan::VulkanGraphicsResult GpuRuntime::SubmitVulkanTranslatedDraw(
+    const vulkan::VulkanTranslatedDrawRequest& request) {
+  std::lock_guard lock(vulkan_mutex_);
+  vulkan::VulkanGraphicsResult result;
+  if (vulkan_context_ == nullptr) {
+    result.status = vulkan::VulkanGraphicsStatus::kContextUnavailable;
+    result.diagnostics.push_back({vulkan::VulkanGraphicsDiagnosticSeverity::kError,
+        vulkan::VulkanGraphicsDiagnosticCode::kInputRejected, 0, VK_SUCCESS,
+        "GpuRuntime cannot execute a translated draw before InitializeVulkan"});
+    return result;
+  }
+  if (!HasValidGraphicsPreflight(request)) {
+    result.status = vulkan::VulkanGraphicsStatus::kInvalidArgument;
+    result.diagnostics.push_back(
+        {vulkan::VulkanGraphicsDiagnosticSeverity::kError,
+         vulkan::VulkanGraphicsDiagnosticCode::kInputRejected, 0, VK_SUCCESS,
+         "translated draw failed runtime preflight before guest-image preparation"});
+    return result;
+  }
+  const auto mapped_format = vulkan::MapGuestImageFormat(request.color_target.format);
+  if (!mapped_format.has_value() ||
+      !vulkan_context_->SupportsColorAttachmentFormat(mapped_format->format)) {
+    result.status = vulkan::VulkanGraphicsStatus::kUnsupported;
+    result.diagnostics.push_back(
+        {vulkan::VulkanGraphicsDiagnosticSeverity::kError,
+         vulkan::VulkanGraphicsDiagnosticCode::kFormatUnsupported, 0, VK_SUCCESS,
+         "translated draw color-target format is not a supported color attachment"});
+    return result;
+  }
+  if (vulkan_image_cache_ == nullptr) {
+    vulkan_image_cache_ = std::make_unique<vulkan::VulkanGuestImageCache>(
+        *vulkan_context_, memory_, *resource_coherence_);
+  }
+  vulkan::VulkanGuestImageRequest target_request;
+  target_request.input = request.color_target;
+  target_request.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+      VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+  target_request.writable = true;
+  auto target = vulkan_image_cache_->Prepare(target_request);
+  if (!target) {
+    result.status = target.status == vulkan::VulkanGuestImageStatus::kResourceLimit
+        ? vulkan::VulkanGraphicsStatus::kResourceLimit
+        : vulkan::VulkanGraphicsStatus::kInvalidArgument;
+    result.diagnostics.push_back({vulkan::VulkanGraphicsDiagnosticSeverity::kError,
+        target.status == vulkan::VulkanGuestImageStatus::kResourceLimit
+            ? vulkan::VulkanGraphicsDiagnosticCode::kResourceLimit
+            : vulkan::VulkanGraphicsDiagnosticCode::kInputRejected,
+        0, VK_SUCCESS, target.diagnostics.empty()
+            ? "translated draw color-target preparation failed"
+            : target.diagnostics.front().message});
+    vulkan_image_cache_->Discard(target);
+    return result;
+  }
+  if (vulkan_graphics_execution_ == nullptr) {
+    auto created = vulkan::VulkanGraphicsExecution::Create(*vulkan_context_);
+    if (!created) {
+      vulkan_image_cache_->Discard(target);
+      return std::move(created.initialization);
+    }
+    vulkan_graphics_execution_ = std::move(created.execution);
+  }
+  return vulkan_graphics_execution_->Submit(request, *vulkan_image_cache_,
+                                             std::move(target));
+}
+
+vulkan::VulkanGraphicsResult GpuRuntime::PollVulkanGraphics() {
+  std::lock_guard lock(vulkan_mutex_);
+  if (vulkan_context_ == nullptr) {
+    vulkan::VulkanGraphicsResult result;
+    result.status = vulkan::VulkanGraphicsStatus::kContextUnavailable;
+    result.diagnostics.push_back({vulkan::VulkanGraphicsDiagnosticSeverity::kError,
+        vulkan::VulkanGraphicsDiagnosticCode::kInputRejected, 0, VK_SUCCESS,
+        "GpuRuntime has no Vulkan device context to poll"});
+    return result;
+  }
+  return vulkan_graphics_execution_ != nullptr
+      ? vulkan_graphics_execution_->PollCompleted() : vulkan::VulkanGraphicsResult{};
 }
 
 vulkan::VulkanComputeResult GpuRuntime::SubmitVulkanTranslatedCompute(

@@ -171,6 +171,11 @@
 - [x] Execute translated compute specializations containing storage buffers,
       sampled images, storage images, and samplers through one Vulkan command
       submission, retaining every guest lease until fence completion.
+- [x] Execute descriptor-free translated vertex/pixel draws into one checked
+      linear guest color target through Vulkan dynamic rendering, with exact
+      pipeline-state caching, finite fence retention, and completion readback.
+      This is guest-backed offscreen rendering only: presentation and title
+      rendering remain deferred.
 - Add shader control-flow, IR, emission, and resource tests before game tests.
 - Add an audio queue test with stable timing.
 

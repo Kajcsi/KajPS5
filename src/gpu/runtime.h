@@ -22,6 +22,7 @@
 #include "gpu/vulkan/buffer_cache.h"
 #include "gpu/vulkan/device.h"
 #include "gpu/vulkan/execution.h"
+#include "gpu/vulkan/graphics_execution.h"
 #include "gpu/vulkan/image_cache.h"
 
 namespace kajps5::memory {
@@ -192,6 +193,9 @@ class GpuRuntime final {
       std::uint32_t group_count_z,
       std::uint64_t timeout_ns =
           vulkan::kDefaultVulkanComputeFenceWaitNanoseconds);
+  [[nodiscard]] vulkan::VulkanGraphicsResult SubmitVulkanTranslatedDraw(
+      const vulkan::VulkanTranslatedDrawRequest& request);
+  [[nodiscard]] vulkan::VulkanGraphicsResult PollVulkanGraphics();
 
 private:
   [[nodiscard]] GpuPacketResult AppendPacket(
@@ -218,6 +222,7 @@ private:
   // Declared after the context so destruction reverses this order: retained
   // execution resources are dealt with before the Vulkan device disappears.
   std::unique_ptr<vulkan::VulkanComputeExecution> vulkan_execution_;
+  std::unique_ptr<vulkan::VulkanGraphicsExecution> vulkan_graphics_execution_;
 };
 
 [[nodiscard]] const char* GpuRuntimeStatusName(
