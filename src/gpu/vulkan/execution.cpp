@@ -1,0 +1,794 @@
+// Copyright (C) 2026 KajPS5 contributors
+// Architecture reference: KytyPS5
+// src/graphics/host_gpu/renderer/{commandScheduler,masterSemaphore,render}.*
+// at fb5ecec455cf6c67154134429485ffccbfc34203.
+// Behavior and test reference: Copyright (C) 2026 SharpEmu Emulator Project,
+// src/SharpEmu.Libs/VideoOut/VulkanVideoPresenter.cs at
+// 4b5ea6a79346cb4529fa531cf2c1973f3978eb22.
+// SPDX-License-Identifier: GPL-2.0-only
+
+#include "gpu/vulkan/execution.h"
+
+#include <algorithm>
+#include <array>
+#include <exception>
+#include <limits>
+#include <mutex>
+#include <optional>
+#include <utility>
+
+namespace kajps5::gpu::vulkan {
+namespace {
+
+struct ComputeDispatch {
+  PFN_vkCreateCommandPool create_command_pool = nullptr;
+  PFN_vkDestroyCommandPool destroy_command_pool = nullptr;
+  PFN_vkAllocateCommandBuffers allocate_command_buffers = nullptr;
+  PFN_vkBeginCommandBuffer begin_command_buffer = nullptr;
+  PFN_vkEndCommandBuffer end_command_buffer = nullptr;
+  PFN_vkCreateShaderModule create_shader_module = nullptr;
+  PFN_vkDestroyShaderModule destroy_shader_module = nullptr;
+  PFN_vkCreatePipelineLayout create_pipeline_layout = nullptr;
+  PFN_vkDestroyPipelineLayout destroy_pipeline_layout = nullptr;
+  PFN_vkCreateComputePipelines create_compute_pipelines = nullptr;
+  PFN_vkDestroyPipeline destroy_pipeline = nullptr;
+  PFN_vkCmdBindPipeline cmd_bind_pipeline = nullptr;
+  PFN_vkCmdDispatch cmd_dispatch = nullptr;
+  PFN_vkCreateFence create_fence = nullptr;
+  PFN_vkDestroyFence destroy_fence = nullptr;
+  PFN_vkWaitForFences wait_for_fences = nullptr;
+  PFN_vkGetFenceStatus get_fence_status = nullptr;
+  PFN_vkQueueSubmit queue_submit = nullptr;
+};
+
+struct Submission {
+  VkCommandPool command_pool = VK_NULL_HANDLE;
+  VkCommandBuffer command_buffer = VK_NULL_HANDLE;
+  VkShaderModule shader_module = VK_NULL_HANDLE;
+  VkPipelineLayout pipeline_layout = VK_NULL_HANDLE;
+  VkPipeline pipeline = VK_NULL_HANDLE;
+  VkFence fence = VK_NULL_HANDLE;
+  std::uint64_t timeline = 0;
+};
+
+void AddDiagnostic(VulkanComputeResult& result,
+                   VulkanDiagnosticSeverity severity,
+                   VulkanComputeDiagnosticCode code,
+                   std::string message,
+                   std::uint64_t timeline = 0,
+                   VkResult api_result = VK_SUCCESS) {
+  result.diagnostics.push_back(
+      {severity, code, timeline, static_cast<std::int32_t>(api_result),
+       std::move(message)});
+}
+
+bool IsDeviceLost(VkResult result) noexcept {
+  return result == VK_ERROR_DEVICE_LOST;
+}
+
+void DestroySubmission(const ComputeDispatch& dispatch,
+                       VkDevice device,
+                       Submission& submission) noexcept {
+  if (submission.fence != VK_NULL_HANDLE) {
+    dispatch.destroy_fence(device, submission.fence, nullptr);
+    submission.fence = VK_NULL_HANDLE;
+  }
+  if (submission.pipeline != VK_NULL_HANDLE) {
+    dispatch.destroy_pipeline(device, submission.pipeline, nullptr);
+    submission.pipeline = VK_NULL_HANDLE;
+  }
+  if (submission.pipeline_layout != VK_NULL_HANDLE) {
+    dispatch.destroy_pipeline_layout(device, submission.pipeline_layout, nullptr);
+    submission.pipeline_layout = VK_NULL_HANDLE;
+  }
+  if (submission.shader_module != VK_NULL_HANDLE) {
+    dispatch.destroy_shader_module(device, submission.shader_module, nullptr);
+    submission.shader_module = VK_NULL_HANDLE;
+  }
+  if (submission.command_pool != VK_NULL_HANDLE) {
+    // The command buffer was allocated from this private pool. Destroying the
+    // pool releases it only after its fence is known complete.
+    dispatch.destroy_command_pool(device, submission.command_pool, nullptr);
+    submission.command_pool = VK_NULL_HANDLE;
+    submission.command_buffer = VK_NULL_HANDLE;
+  }
+}
+
+// Owns only handles returned by successful Vulkan calls. Keeping this guard
+// allocation-free makes every pre-submit construction path safe if a
+// diagnostic allocation throws or a driver writes a non-null output on error.
+class SubmissionTransaction final {
+ public:
+  SubmissionTransaction(const ComputeDispatch& dispatch, VkDevice device) noexcept
+      : dispatch_(dispatch), device_(device) {}
+
+  ~SubmissionTransaction() { DestroySubmission(dispatch_, device_, submission_); }
+
+  SubmissionTransaction(const SubmissionTransaction&) = delete;
+  SubmissionTransaction& operator=(const SubmissionTransaction&) = delete;
+
+  [[nodiscard]] Submission& submission() noexcept { return submission_; }
+
+  [[nodiscard]] Submission Release() noexcept {
+    Submission released = std::move(submission_);
+    submission_ = {};
+    return released;
+  }
+
+ private:
+  const ComputeDispatch& dispatch_;
+  VkDevice device_ = VK_NULL_HANDLE;
+  Submission submission_;
+};
+
+bool LoadComputeDispatch(VulkanDeviceContext& context,
+                         ComputeDispatch& dispatch,
+                         VulkanComputeResult& result) {
+  const auto resolve = [&](const char* name) {
+    return context.ResolveDeviceFunction(name);
+  };
+  dispatch.create_command_pool = reinterpret_cast<PFN_vkCreateCommandPool>(
+      resolve("vkCreateCommandPool"));
+  dispatch.destroy_command_pool = reinterpret_cast<PFN_vkDestroyCommandPool>(
+      resolve("vkDestroyCommandPool"));
+  dispatch.allocate_command_buffers =
+      reinterpret_cast<PFN_vkAllocateCommandBuffers>(
+          resolve("vkAllocateCommandBuffers"));
+  dispatch.begin_command_buffer = reinterpret_cast<PFN_vkBeginCommandBuffer>(
+      resolve("vkBeginCommandBuffer"));
+  dispatch.end_command_buffer = reinterpret_cast<PFN_vkEndCommandBuffer>(
+      resolve("vkEndCommandBuffer"));
+  dispatch.create_shader_module = reinterpret_cast<PFN_vkCreateShaderModule>(
+      resolve("vkCreateShaderModule"));
+  dispatch.destroy_shader_module = reinterpret_cast<PFN_vkDestroyShaderModule>(
+      resolve("vkDestroyShaderModule"));
+  dispatch.create_pipeline_layout =
+      reinterpret_cast<PFN_vkCreatePipelineLayout>(
+          resolve("vkCreatePipelineLayout"));
+  dispatch.destroy_pipeline_layout =
+      reinterpret_cast<PFN_vkDestroyPipelineLayout>(
+          resolve("vkDestroyPipelineLayout"));
+  dispatch.create_compute_pipelines =
+      reinterpret_cast<PFN_vkCreateComputePipelines>(
+          resolve("vkCreateComputePipelines"));
+  dispatch.destroy_pipeline = reinterpret_cast<PFN_vkDestroyPipeline>(
+      resolve("vkDestroyPipeline"));
+  dispatch.cmd_bind_pipeline = reinterpret_cast<PFN_vkCmdBindPipeline>(
+      resolve("vkCmdBindPipeline"));
+  dispatch.cmd_dispatch =
+      reinterpret_cast<PFN_vkCmdDispatch>(resolve("vkCmdDispatch"));
+  dispatch.create_fence =
+      reinterpret_cast<PFN_vkCreateFence>(resolve("vkCreateFence"));
+  dispatch.destroy_fence =
+      reinterpret_cast<PFN_vkDestroyFence>(resolve("vkDestroyFence"));
+  dispatch.wait_for_fences =
+      reinterpret_cast<PFN_vkWaitForFences>(resolve("vkWaitForFences"));
+  dispatch.get_fence_status =
+      reinterpret_cast<PFN_vkGetFenceStatus>(resolve("vkGetFenceStatus"));
+  dispatch.queue_submit =
+      reinterpret_cast<PFN_vkQueueSubmit>(resolve("vkQueueSubmit"));
+
+  std::string missing;
+  const auto require = [&](bool available, const char* name) {
+    if (available) {
+      return;
+    }
+    if (!missing.empty()) {
+      missing += ", ";
+    }
+    missing += name;
+  };
+  require(dispatch.create_command_pool != nullptr, "vkCreateCommandPool");
+  require(dispatch.destroy_command_pool != nullptr, "vkDestroyCommandPool");
+  require(dispatch.allocate_command_buffers != nullptr,
+          "vkAllocateCommandBuffers");
+  require(dispatch.begin_command_buffer != nullptr, "vkBeginCommandBuffer");
+  require(dispatch.end_command_buffer != nullptr, "vkEndCommandBuffer");
+  require(dispatch.create_shader_module != nullptr, "vkCreateShaderModule");
+  require(dispatch.destroy_shader_module != nullptr, "vkDestroyShaderModule");
+  require(dispatch.create_pipeline_layout != nullptr, "vkCreatePipelineLayout");
+  require(dispatch.destroy_pipeline_layout != nullptr,
+          "vkDestroyPipelineLayout");
+  require(dispatch.create_compute_pipelines != nullptr,
+          "vkCreateComputePipelines");
+  require(dispatch.destroy_pipeline != nullptr, "vkDestroyPipeline");
+  require(dispatch.cmd_bind_pipeline != nullptr, "vkCmdBindPipeline");
+  require(dispatch.cmd_dispatch != nullptr, "vkCmdDispatch");
+  require(dispatch.create_fence != nullptr, "vkCreateFence");
+  require(dispatch.destroy_fence != nullptr, "vkDestroyFence");
+  require(dispatch.wait_for_fences != nullptr, "vkWaitForFences");
+  require(dispatch.get_fence_status != nullptr, "vkGetFenceStatus");
+  require(dispatch.queue_submit != nullptr, "vkQueueSubmit");
+  if (missing.empty()) {
+    return true;
+  }
+
+  result.status = VulkanComputeStatus::kDeviceFunctionUnavailable;
+  AddDiagnostic(result, VulkanDiagnosticSeverity::kError,
+                VulkanComputeDiagnosticCode::kDeviceFunctionUnavailable,
+                "Vulkan compute execution is missing required device entry "
+                "points: " +
+                    missing);
+  return false;
+}
+
+}  // namespace
+
+struct VulkanComputeExecution::Impl {
+  explicit Impl(VulkanDeviceContext& device_context) : context(device_context) {}
+
+  ~Impl() {
+    bool has_retained_submission = false;
+    for (const std::optional<Submission>& retained_submission : retained) {
+      has_retained_submission = has_retained_submission ||
+                               retained_submission.has_value();
+    }
+    if (has_retained_submission) {
+      const VkResult wait_idle_result = context.WaitIdle();
+      if (IsDeviceLost(wait_idle_result)) {
+        device_lost = true;
+        context.MarkDeviceLost();
+      } else if (wait_idle_result != VK_SUCCESS) {
+        // vkDeviceWaitIdle did not establish that submitted work is idle. A
+        // destructor cannot return that recoverable failure, and destroying
+        // the children here would violate Vulkan's in-flight lifetime rules.
+        std::terminate();
+      }
+    }
+    const VkDevice device = context.device();
+    for (std::optional<Submission>& retained_submission : retained) {
+      if (!retained_submission.has_value()) {
+        continue;
+      }
+      // The executor dies before its required context. Destroy every child
+      // even after a timeout or device loss, so the context never destroys its
+      // VkDevice while this executor still owns a child handle.
+      DestroySubmission(dispatch, device, *retained_submission);
+      retained_submission.reset();
+    }
+  }
+
+  void MarkDeviceLost() noexcept {
+    device_lost = true;
+    context.MarkDeviceLost();
+  }
+
+  VulkanDeviceContext& context;
+  ComputeDispatch dispatch;
+  std::array<std::optional<Submission>,
+             kMaximumVulkanComputeRetainedSubmissions>
+      retained;
+  std::mutex mutex;
+  std::uint64_t next_timeline = 1;
+  std::uint64_t completed_timeline = 0;
+  bool device_lost = false;
+  bool owns_context_execution_slot = false;
+};
+
+namespace {
+
+template <typename ExecutionImpl>
+std::size_t RetainedSubmissionCount(const ExecutionImpl& impl) {
+  std::size_t count = 0;
+  for (const std::optional<Submission>& retained_submission : impl.retained) {
+    count += retained_submission.has_value() ? 1U : 0U;
+  }
+  return count;
+}
+
+template <typename ExecutionImpl>
+std::optional<Submission>* FindFreeRetainedSlot(ExecutionImpl& impl) {
+  for (std::optional<Submission>& retained_submission : impl.retained) {
+    if (!retained_submission.has_value()) {
+      return &retained_submission;
+    }
+  }
+  return nullptr;
+}
+
+template <typename ExecutionImpl>
+void DestroyRetainedSubmissions(ExecutionImpl& impl) noexcept {
+  const VkDevice device = impl.context.device();
+  for (std::optional<Submission>& retained_submission : impl.retained) {
+    if (!retained_submission.has_value()) {
+      continue;
+    }
+    DestroySubmission(impl.dispatch, device, *retained_submission);
+    retained_submission.reset();
+  }
+}
+
+template <typename ExecutionImpl>
+void SnapshotExecutionState(const ExecutionImpl& impl,
+                            VulkanComputeResult& result) {
+  result.completed_timeline = impl.completed_timeline;
+  result.retained_submission_count = RetainedSubmissionCount(impl);
+}
+
+template <typename ExecutionImpl>
+bool ReclaimCompletedLocked(ExecutionImpl& impl,
+                            VulkanComputeResult& result) {
+  const VkDevice device = impl.context.device();
+  for (std::optional<Submission>& retained_submission : impl.retained) {
+    if (!retained_submission.has_value()) {
+      continue;
+    }
+
+    const VkResult status = impl.dispatch.get_fence_status(
+        device, retained_submission->fence);
+    if (status == VK_NOT_READY) {
+      continue;
+    }
+    if (status == VK_SUCCESS) {
+      impl.completed_timeline =
+          std::max(impl.completed_timeline, retained_submission->timeline);
+      AddDiagnostic(result, VulkanDiagnosticSeverity::kInfo,
+                    VulkanComputeDiagnosticCode::kSubmissionReclaimed,
+                    "reclaimed completed Vulkan compute submission",
+                    retained_submission->timeline);
+      DestroySubmission(impl.dispatch, device, *retained_submission);
+      retained_submission.reset();
+      ++result.reclaimed_submission_count;
+      continue;
+    }
+
+    if (IsDeviceLost(status)) {
+      impl.MarkDeviceLost();
+      const std::uint64_t lost_timeline = retained_submission->timeline;
+      DestroyRetainedSubmissions(impl);
+      result.status = VulkanComputeStatus::kDeviceLost;
+      AddDiagnostic(result, VulkanDiagnosticSeverity::kError,
+                    VulkanComputeDiagnosticCode::kDeviceLost,
+                    "vkGetFenceStatus reported Vulkan device loss while "
+                    "polling retained compute work",
+                    lost_timeline, status);
+    } else {
+      result.status = VulkanComputeStatus::kFenceStatusFailed;
+      AddDiagnostic(result, VulkanDiagnosticSeverity::kError,
+                    VulkanComputeDiagnosticCode::kFenceStatusFailed,
+                    "vkGetFenceStatus failed while polling retained compute "
+                    "work",
+                    retained_submission->timeline, status);
+    }
+    SnapshotExecutionState(impl, result);
+    return false;
+  }
+
+  SnapshotExecutionState(impl, result);
+  return true;
+}
+
+template <typename ExecutionImpl>
+void AddDeviceLostDiagnostic(ExecutionImpl& impl,
+                             VulkanComputeResult& result,
+                             std::string message,
+                             std::uint64_t timeline,
+                             VkResult api_result) {
+  impl.MarkDeviceLost();
+  DestroyRetainedSubmissions(impl);
+  result.status = VulkanComputeStatus::kDeviceLost;
+  AddDiagnostic(result, VulkanDiagnosticSeverity::kError,
+                VulkanComputeDiagnosticCode::kDeviceLost, std::move(message),
+                timeline, api_result);
+}
+
+}  // namespace
+
+VulkanComputeExecution::VulkanComputeExecution(std::unique_ptr<Impl> impl)
+    noexcept
+    : impl_(std::move(impl)) {}
+
+VulkanComputeExecution::~VulkanComputeExecution() {
+  if (impl_ == nullptr) {
+    return;
+  }
+  VulkanDeviceContext* const context = &impl_->context;
+  const bool owns_context_execution_slot = impl_->owns_context_execution_slot;
+  impl_.reset();
+  if (owns_context_execution_slot) {
+    context->ReleaseComputeExecutionOwner();
+  }
+}
+
+VulkanComputeExecutionCreateResult VulkanComputeExecution::Create(
+    VulkanDeviceContext& context) {
+  VulkanComputeExecutionCreateResult result;
+  if (context.IsDeviceLost()) {
+    result.initialization.status = VulkanComputeStatus::kDeviceLost;
+    AddDiagnostic(result.initialization, VulkanDiagnosticSeverity::kError,
+                  VulkanComputeDiagnosticCode::kDeviceLost,
+                  "Vulkan compute execution is unavailable after device loss");
+    return result;
+  }
+  auto impl = std::make_unique<Impl>(context);
+  if (!LoadComputeDispatch(context, impl->dispatch, result.initialization)) {
+    return result;
+  }
+
+  auto execution = std::unique_ptr<VulkanComputeExecution>(
+      new VulkanComputeExecution(std::move(impl)));
+  bool context_is_device_lost = false;
+  if (!context.TryAcquireComputeExecutionOwner(context_is_device_lost)) {
+    if (context_is_device_lost) {
+      result.initialization.status = VulkanComputeStatus::kDeviceLost;
+      AddDiagnostic(result.initialization, VulkanDiagnosticSeverity::kError,
+                    VulkanComputeDiagnosticCode::kDeviceLost,
+                    "Vulkan compute execution is unavailable after device loss");
+    } else {
+      result.initialization.status = VulkanComputeStatus::kExecutionAlreadyOwned;
+      AddDiagnostic(
+          result.initialization, VulkanDiagnosticSeverity::kError,
+          VulkanComputeDiagnosticCode::kExecutionAlreadyOwned,
+          "VulkanDeviceContext already has a compute execution owner");
+    }
+    return result;
+  }
+  execution->impl_->owns_context_execution_slot = true;
+  result.initialization.status = VulkanComputeStatus::kOk;
+  result.execution = std::move(execution);
+  return result;
+}
+
+VulkanComputeResult VulkanComputeExecution::PollCompleted() {
+  VulkanComputeResult result;
+  std::lock_guard lock(impl_->mutex);
+  if (impl_->device_lost || impl_->context.IsDeviceLost()) {
+    result.status = VulkanComputeStatus::kDeviceLost;
+    AddDiagnostic(result, VulkanDiagnosticSeverity::kError,
+                  VulkanComputeDiagnosticCode::kDeviceLost,
+                  "Vulkan compute execution is unavailable after device loss");
+    SnapshotExecutionState(*impl_, result);
+    return result;
+  }
+  (void)ReclaimCompletedLocked(*impl_, result);
+  return result;
+}
+
+VulkanComputeResult VulkanComputeExecution::Submit(
+    std::span<const std::uint32_t> spirv_words,
+    std::uint32_t group_count_x,
+    std::uint32_t group_count_y,
+    std::uint32_t group_count_z,
+    std::uint64_t timeout_ns) {
+  VulkanComputeResult result;
+  if (spirv_words.empty() || group_count_x == 0 || group_count_y == 0 ||
+      group_count_z == 0 || timeout_ns == std::numeric_limits<std::uint64_t>::max() ||
+      spirv_words.size() >
+          std::numeric_limits<std::size_t>::max() / sizeof(std::uint32_t)) {
+    result.status = VulkanComputeStatus::kInvalidArgument;
+    AddDiagnostic(result, VulkanDiagnosticSeverity::kError,
+                  VulkanComputeDiagnosticCode::kInputRejected,
+                  "Vulkan compute submission requires SPIR-V words, nonzero "
+                  "group counts, and a finite fence timeout");
+    return result;
+  }
+
+  std::lock_guard lock(impl_->mutex);
+  if (impl_->device_lost || impl_->context.IsDeviceLost()) {
+    result.status = VulkanComputeStatus::kDeviceLost;
+    AddDiagnostic(result, VulkanDiagnosticSeverity::kError,
+                  VulkanComputeDiagnosticCode::kDeviceLost,
+                  "Vulkan compute execution is unavailable after device loss");
+    SnapshotExecutionState(*impl_, result);
+    return result;
+  }
+  const std::array<std::uint32_t, 3>& max_work_group_count =
+      impl_->context.properties().max_compute_work_group_count;
+  if (group_count_x > max_work_group_count[0] ||
+      group_count_y > max_work_group_count[1] ||
+      group_count_z > max_work_group_count[2]) {
+    result.status = VulkanComputeStatus::kInvalidArgument;
+    AddDiagnostic(result, VulkanDiagnosticSeverity::kError,
+                  VulkanComputeDiagnosticCode::kInputRejected,
+                  "Vulkan compute dispatch group count exceeds the selected "
+                  "device limit");
+    SnapshotExecutionState(*impl_, result);
+    return result;
+  }
+  if (!ReclaimCompletedLocked(*impl_, result)) {
+    return result;
+  }
+  if (RetainedSubmissionCount(*impl_) >=
+      kMaximumVulkanComputeRetainedSubmissions) {
+    result.status = VulkanComputeStatus::kResourceLimit;
+    AddDiagnostic(result, VulkanDiagnosticSeverity::kError,
+                  VulkanComputeDiagnosticCode::kResourceLimit,
+                  "Vulkan compute retained timed-out work reached its fixed "
+                  "resource limit");
+    SnapshotExecutionState(*impl_, result);
+    return result;
+  }
+
+  std::optional<Submission>* retained_slot = FindFreeRetainedSlot(*impl_);
+  if (retained_slot == nullptr) {
+    result.status = VulkanComputeStatus::kResourceLimit;
+    AddDiagnostic(result, VulkanDiagnosticSeverity::kError,
+                  VulkanComputeDiagnosticCode::kResourceLimit,
+                  "Vulkan compute found no free retained-work slot");
+    SnapshotExecutionState(*impl_, result);
+    return result;
+  }
+
+  const VkDevice device = impl_->context.device();
+  SubmissionTransaction transaction(impl_->dispatch, device);
+  Submission& submission = transaction.submission();
+  const auto fail_before_submit = [&](VulkanComputeStatus status,
+                                      VulkanComputeDiagnosticCode code,
+                                      const char* operation,
+                                      VkResult api_result) {
+    if (IsDeviceLost(api_result)) {
+      AddDeviceLostDiagnostic(*impl_, result,
+                              std::string(operation) + " reported device loss",
+                              0, api_result);
+    } else {
+      result.status = status;
+      AddDiagnostic(result, VulkanDiagnosticSeverity::kError, code,
+                    std::string(operation) + " failed", 0, api_result);
+    }
+    SnapshotExecutionState(*impl_, result);
+    return result;
+  };
+
+  VkCommandPoolCreateInfo command_pool_info{};
+  command_pool_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+  command_pool_info.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+  command_pool_info.queueFamilyIndex = impl_->context.queue_family_index();
+  VkCommandPool command_pool = VK_NULL_HANDLE;
+  VkResult api_result = impl_->dispatch.create_command_pool(
+      device, &command_pool_info, nullptr, &command_pool);
+  if (api_result != VK_SUCCESS) {
+    return fail_before_submit(VulkanComputeStatus::kCommandPoolCreationFailed,
+                              VulkanComputeDiagnosticCode::kCommandPoolCreationFailed,
+                              "vkCreateCommandPool", api_result);
+  }
+  submission.command_pool = command_pool;
+
+  VkCommandBufferAllocateInfo command_buffer_info{};
+  command_buffer_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+  command_buffer_info.commandPool = submission.command_pool;
+  command_buffer_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+  command_buffer_info.commandBufferCount = 1;
+  VkCommandBuffer command_buffer = VK_NULL_HANDLE;
+  api_result = impl_->dispatch.allocate_command_buffers(
+      device, &command_buffer_info, &command_buffer);
+  if (api_result != VK_SUCCESS) {
+    return fail_before_submit(
+        VulkanComputeStatus::kCommandBufferAllocationFailed,
+        VulkanComputeDiagnosticCode::kCommandBufferAllocationFailed,
+        "vkAllocateCommandBuffers", api_result);
+  }
+  submission.command_buffer = command_buffer;
+
+  VkShaderModuleCreateInfo shader_module_info{};
+  shader_module_info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+  shader_module_info.codeSize = spirv_words.size() * sizeof(std::uint32_t);
+  shader_module_info.pCode = spirv_words.data();
+  VkShaderModule shader_module = VK_NULL_HANDLE;
+  api_result = impl_->dispatch.create_shader_module(
+      device, &shader_module_info, nullptr, &shader_module);
+  if (api_result != VK_SUCCESS) {
+    return fail_before_submit(VulkanComputeStatus::kShaderModuleCreationFailed,
+                              VulkanComputeDiagnosticCode::kShaderModuleCreationFailed,
+                              "vkCreateShaderModule", api_result);
+  }
+  submission.shader_module = shader_module;
+
+  VkPipelineLayoutCreateInfo pipeline_layout_info{};
+  pipeline_layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+  VkPipelineLayout pipeline_layout = VK_NULL_HANDLE;
+  api_result = impl_->dispatch.create_pipeline_layout(
+      device, &pipeline_layout_info, nullptr, &pipeline_layout);
+  if (api_result != VK_SUCCESS) {
+    return fail_before_submit(
+        VulkanComputeStatus::kPipelineLayoutCreationFailed,
+        VulkanComputeDiagnosticCode::kPipelineLayoutCreationFailed,
+        "vkCreatePipelineLayout", api_result);
+  }
+  submission.pipeline_layout = pipeline_layout;
+
+  VkPipelineShaderStageCreateInfo shader_stage{};
+  shader_stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+  shader_stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+  shader_stage.module = submission.shader_module;
+  shader_stage.pName = "main";
+  VkComputePipelineCreateInfo pipeline_info{};
+  pipeline_info.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+  pipeline_info.stage = shader_stage;
+  pipeline_info.layout = submission.pipeline_layout;
+  VkPipeline pipeline = VK_NULL_HANDLE;
+  api_result = impl_->dispatch.create_compute_pipelines(
+      device, VK_NULL_HANDLE, 1, &pipeline_info, nullptr, &pipeline);
+  if (api_result != VK_SUCCESS) {
+    return fail_before_submit(
+        VulkanComputeStatus::kComputePipelineCreationFailed,
+        VulkanComputeDiagnosticCode::kComputePipelineCreationFailed,
+        "vkCreateComputePipelines", api_result);
+  }
+  submission.pipeline = pipeline;
+
+  VkFenceCreateInfo fence_info{};
+  fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+  VkFence fence = VK_NULL_HANDLE;
+  api_result = impl_->dispatch.create_fence(device, &fence_info, nullptr,
+                                            &fence);
+  if (api_result != VK_SUCCESS) {
+    return fail_before_submit(VulkanComputeStatus::kFenceCreationFailed,
+                              VulkanComputeDiagnosticCode::kFenceCreationFailed,
+                              "vkCreateFence", api_result);
+  }
+  submission.fence = fence;
+
+  VkCommandBufferBeginInfo begin_info{};
+  begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+  begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+  api_result = impl_->dispatch.begin_command_buffer(submission.command_buffer,
+                                                     &begin_info);
+  if (api_result != VK_SUCCESS) {
+    return fail_before_submit(VulkanComputeStatus::kCommandBufferBeginFailed,
+                              VulkanComputeDiagnosticCode::kCommandBufferBeginFailed,
+                              "vkBeginCommandBuffer", api_result);
+  }
+  impl_->dispatch.cmd_bind_pipeline(submission.command_buffer,
+                                    VK_PIPELINE_BIND_POINT_COMPUTE,
+                                    submission.pipeline);
+  impl_->dispatch.cmd_dispatch(submission.command_buffer, group_count_x,
+                               group_count_y, group_count_z);
+  api_result = impl_->dispatch.end_command_buffer(submission.command_buffer);
+  if (api_result != VK_SUCCESS) {
+    return fail_before_submit(VulkanComputeStatus::kCommandBufferEndFailed,
+                              VulkanComputeDiagnosticCode::kCommandBufferEndFailed,
+                              "vkEndCommandBuffer", api_result);
+  }
+
+  VkSubmitInfo submit_info{};
+  submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+  submit_info.commandBufferCount = 1;
+  submit_info.pCommandBuffers = &submission.command_buffer;
+  submission.timeline = impl_->next_timeline++;
+  {
+    std::lock_guard queue_lock(impl_->context.queue_mutex());
+    api_result = impl_->dispatch.queue_submit(impl_->context.queue(), 1,
+                                              &submit_info, submission.fence);
+  }
+  if (api_result != VK_SUCCESS) {
+    return fail_before_submit(VulkanComputeStatus::kQueueSubmitFailed,
+                              VulkanComputeDiagnosticCode::kQueueSubmitFailed,
+                              "vkQueueSubmit", api_result);
+  }
+
+  // A successful submission is in flight. Move it into the fixed retained
+  // storage before waiting or constructing any diagnostic that may allocate.
+  retained_slot->emplace(transaction.Release());
+  Submission& submitted = **retained_slot;
+  result.timeline = submitted.timeline;
+  const VkFence submitted_fence = submitted.fence;
+  api_result = impl_->dispatch.wait_for_fences(device, 1, &submitted_fence,
+                                               VK_TRUE, timeout_ns);
+  if (api_result == VK_SUCCESS) {
+    impl_->completed_timeline =
+        std::max(impl_->completed_timeline, submitted.timeline);
+    AddDiagnostic(result, VulkanDiagnosticSeverity::kInfo,
+                  VulkanComputeDiagnosticCode::kSubmissionCompleted,
+                  "Vulkan compute submission completed", submitted.timeline);
+    DestroySubmission(impl_->dispatch, device, submitted);
+    retained_slot->reset();
+    SnapshotExecutionState(*impl_, result);
+    return result;
+  }
+
+  if (api_result == VK_TIMEOUT) {
+    result.status = VulkanComputeStatus::kFenceWaitTimedOut;
+    AddDiagnostic(result, VulkanDiagnosticSeverity::kWarning,
+                  VulkanComputeDiagnosticCode::kFenceWaitTimedOut,
+                  "Vulkan compute fence wait timed out; retaining in-flight "
+                  "resources for later polling",
+                  result.timeline, api_result);
+  } else if (IsDeviceLost(api_result)) {
+    AddDeviceLostDiagnostic(*impl_, result,
+                            "vkWaitForFences reported device loss for Vulkan "
+                            "compute work",
+                            result.timeline, api_result);
+  } else {
+    result.status = VulkanComputeStatus::kFenceWaitFailed;
+    AddDiagnostic(result, VulkanDiagnosticSeverity::kError,
+                  VulkanComputeDiagnosticCode::kFenceWaitFailed,
+                  "vkWaitForFences failed for Vulkan compute work; retaining "
+                  "resources until a later status poll",
+                  result.timeline, api_result);
+  }
+  SnapshotExecutionState(*impl_, result);
+  return result;
+}
+
+const char* VulkanComputeStatusName(VulkanComputeStatus status) noexcept {
+  switch (status) {
+    case VulkanComputeStatus::kOk:
+      return "ok";
+    case VulkanComputeStatus::kInvalidArgument:
+      return "invalid_argument";
+    case VulkanComputeStatus::kContextUnavailable:
+      return "context_unavailable";
+    case VulkanComputeStatus::kExecutionAlreadyOwned:
+      return "execution_already_owned";
+    case VulkanComputeStatus::kDeviceFunctionUnavailable:
+      return "device_function_unavailable";
+    case VulkanComputeStatus::kCommandPoolCreationFailed:
+      return "command_pool_creation_failed";
+    case VulkanComputeStatus::kCommandBufferAllocationFailed:
+      return "command_buffer_allocation_failed";
+    case VulkanComputeStatus::kShaderModuleCreationFailed:
+      return "shader_module_creation_failed";
+    case VulkanComputeStatus::kPipelineLayoutCreationFailed:
+      return "pipeline_layout_creation_failed";
+    case VulkanComputeStatus::kComputePipelineCreationFailed:
+      return "compute_pipeline_creation_failed";
+    case VulkanComputeStatus::kFenceCreationFailed:
+      return "fence_creation_failed";
+    case VulkanComputeStatus::kCommandBufferBeginFailed:
+      return "command_buffer_begin_failed";
+    case VulkanComputeStatus::kCommandBufferEndFailed:
+      return "command_buffer_end_failed";
+    case VulkanComputeStatus::kQueueSubmitFailed:
+      return "queue_submit_failed";
+    case VulkanComputeStatus::kFenceWaitTimedOut:
+      return "fence_wait_timed_out";
+    case VulkanComputeStatus::kFenceWaitFailed:
+      return "fence_wait_failed";
+    case VulkanComputeStatus::kFenceStatusFailed:
+      return "fence_status_failed";
+    case VulkanComputeStatus::kDeviceLost:
+      return "device_lost";
+    case VulkanComputeStatus::kResourceLimit:
+      return "resource_limit";
+  }
+  return "unknown";
+}
+
+const char* VulkanComputeDiagnosticCodeName(
+    VulkanComputeDiagnosticCode code) noexcept {
+  switch (code) {
+    case VulkanComputeDiagnosticCode::kInputRejected:
+      return "input_rejected";
+    case VulkanComputeDiagnosticCode::kExecutionAlreadyOwned:
+      return "execution_already_owned";
+    case VulkanComputeDiagnosticCode::kDeviceFunctionUnavailable:
+      return "device_function_unavailable";
+    case VulkanComputeDiagnosticCode::kCommandPoolCreationFailed:
+      return "command_pool_creation_failed";
+    case VulkanComputeDiagnosticCode::kCommandBufferAllocationFailed:
+      return "command_buffer_allocation_failed";
+    case VulkanComputeDiagnosticCode::kShaderModuleCreationFailed:
+      return "shader_module_creation_failed";
+    case VulkanComputeDiagnosticCode::kPipelineLayoutCreationFailed:
+      return "pipeline_layout_creation_failed";
+    case VulkanComputeDiagnosticCode::kComputePipelineCreationFailed:
+      return "compute_pipeline_creation_failed";
+    case VulkanComputeDiagnosticCode::kFenceCreationFailed:
+      return "fence_creation_failed";
+    case VulkanComputeDiagnosticCode::kCommandBufferBeginFailed:
+      return "command_buffer_begin_failed";
+    case VulkanComputeDiagnosticCode::kCommandBufferEndFailed:
+      return "command_buffer_end_failed";
+    case VulkanComputeDiagnosticCode::kQueueSubmitFailed:
+      return "queue_submit_failed";
+    case VulkanComputeDiagnosticCode::kSubmissionCompleted:
+      return "submission_completed";
+    case VulkanComputeDiagnosticCode::kFenceWaitTimedOut:
+      return "fence_wait_timed_out";
+    case VulkanComputeDiagnosticCode::kFenceWaitFailed:
+      return "fence_wait_failed";
+    case VulkanComputeDiagnosticCode::kFenceStatusFailed:
+      return "fence_status_failed";
+    case VulkanComputeDiagnosticCode::kSubmissionReclaimed:
+      return "submission_reclaimed";
+    case VulkanComputeDiagnosticCode::kDeviceLost:
+      return "device_lost";
+    case VulkanComputeDiagnosticCode::kResourceLimit:
+      return "resource_limit";
+    case VulkanComputeDiagnosticCode::kContextUnavailable:
+      return "context_unavailable";
+  }
+  return "unknown";
+}
+
+}  // namespace kajps5::gpu::vulkan

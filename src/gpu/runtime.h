@@ -20,6 +20,7 @@
 #include "gpu/shader_runtime.h"
 #include "gpu/submission_queue.h"
 #include "gpu/vulkan/device.h"
+#include "gpu/vulkan/execution.h"
 
 namespace kajps5::memory {
 class GuestMemory;
@@ -167,6 +168,19 @@ class GpuRuntime final {
   [[nodiscard]] const vulkan::VulkanDeviceContext* vulkan_context() const
       noexcept;
 
+  // Executes already-validated SPIR-V through this runtime's sole Vulkan
+  // compute owner. Vulkan initialization remains explicit: this entry never
+  // probes hardware or creates a device on its own.
+  [[nodiscard]] vulkan::VulkanComputeResult SubmitVulkanCompute(
+      std::span<const std::uint32_t> spirv_words,
+      std::uint32_t group_count_x,
+      std::uint32_t group_count_y,
+      std::uint32_t group_count_z,
+      std::uint64_t timeout_ns =
+          vulkan::kDefaultVulkanComputeFenceWaitNanoseconds);
+  [[nodiscard]] vulkan::VulkanComputeResult PollVulkanCompute();
+  [[nodiscard]] bool has_vulkan_compute_execution() const noexcept;
+
  private:
   [[nodiscard]] GpuPacketResult AppendPacket(
       std::uint64_t command_buffer, std::span<const std::uint32_t> packet);
@@ -185,6 +199,9 @@ class GpuRuntime final {
   GpuSubmissionSink* submission_sink_ = nullptr;
   mutable std::mutex vulkan_mutex_;
   std::unique_ptr<vulkan::VulkanDeviceContext> vulkan_context_;
+  // Declared after the context so destruction reverses this order: retained
+  // execution resources are dealt with before the Vulkan device disappears.
+  std::unique_ptr<vulkan::VulkanComputeExecution> vulkan_execution_;
 };
 
 [[nodiscard]] const char* GpuRuntimeStatusName(

@@ -206,6 +206,58 @@ const vulkan::VulkanDeviceContext* GpuRuntime::vulkan_context() const
   return vulkan_context_.get();
 }
 
+vulkan::VulkanComputeResult GpuRuntime::SubmitVulkanCompute(
+    std::span<const std::uint32_t> spirv_words,
+    std::uint32_t group_count_x,
+    std::uint32_t group_count_y,
+    std::uint32_t group_count_z,
+    std::uint64_t timeout_ns) {
+  std::lock_guard lock(vulkan_mutex_);
+  if (vulkan_context_ == nullptr) {
+    vulkan::VulkanComputeResult result;
+    result.status = vulkan::VulkanComputeStatus::kContextUnavailable;
+    result.diagnostics.push_back(
+        {vulkan::VulkanDiagnosticSeverity::kError,
+         vulkan::VulkanComputeDiagnosticCode::kContextUnavailable, 0,
+         VK_SUCCESS,
+         "GpuRuntime cannot execute SPIR-V before InitializeVulkan creates "
+         "its Vulkan device context"});
+    return result;
+  }
+  if (vulkan_execution_ == nullptr) {
+    auto created = vulkan::VulkanComputeExecution::Create(*vulkan_context_);
+    if (!created) {
+      return std::move(created.initialization);
+    }
+    vulkan_execution_ = std::move(created.execution);
+  }
+  return vulkan_execution_->Submit(spirv_words, group_count_x, group_count_y,
+                                   group_count_z, timeout_ns);
+}
+
+vulkan::VulkanComputeResult GpuRuntime::PollVulkanCompute() {
+  std::lock_guard lock(vulkan_mutex_);
+  if (vulkan_context_ == nullptr) {
+    vulkan::VulkanComputeResult result;
+    result.status = vulkan::VulkanComputeStatus::kContextUnavailable;
+    result.diagnostics.push_back(
+        {vulkan::VulkanDiagnosticSeverity::kError,
+         vulkan::VulkanComputeDiagnosticCode::kContextUnavailable, 0,
+         VK_SUCCESS,
+         "GpuRuntime has no Vulkan device context to poll"});
+    return result;
+  }
+  if (vulkan_execution_ == nullptr) {
+    return {};
+  }
+  return vulkan_execution_->PollCompleted();
+}
+
+bool GpuRuntime::has_vulkan_compute_execution() const noexcept {
+  std::lock_guard lock(vulkan_mutex_);
+  return vulkan_execution_ != nullptr;
+}
+
 ShaderMapResult GpuRuntime::CreateShader(std::uint64_t destination_address,
                                          std::uint64_t header_address,
                                          std::uint64_t code_address) {

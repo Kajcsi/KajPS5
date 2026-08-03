@@ -313,6 +313,11 @@ bool DiscoverCandidate(const InstanceDispatch& dispatch,
   candidate.min_storage_buffer_offset_alignment =
       std::max<std::uint64_t>(
           properties.limits.minStorageBufferOffsetAlignment, 1U);
+  candidate.max_compute_work_group_count = {
+      properties.limits.maxComputeWorkGroupCount[0],
+      properties.limits.maxComputeWorkGroupCount[1],
+      properties.limits.maxComputeWorkGroupCount[2],
+  };
 
   VkPhysicalDeviceVulkan12Features features12{};
   features12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
@@ -477,11 +482,42 @@ VulkanContextCreateResult Failure(VulkanContextStatus status,
 struct VulkanDeviceContext::Impl {
   explicit Impl(VulkanLoader loaded_loader) : loader(std::move(loaded_loader)) {}
 
+  [[nodiscard]] VkResult WaitIdle() noexcept {
+    if (device == VK_NULL_HANDLE || device_dispatch.device_wait_idle == nullptr) {
+      return VK_SUCCESS;
+    }
+    {
+      std::lock_guard state_lock(compute_execution_owner_mutex);
+      if (device_lost) {
+        return VK_ERROR_DEVICE_LOST;
+      }
+    }
+    VkResult result = VK_SUCCESS;
+    {
+      std::lock_guard queue_lock(queue_mutex);
+      result = device_dispatch.device_wait_idle(device);
+    }
+    if (result == VK_ERROR_DEVICE_LOST) {
+      // Publish terminal loss through the same mutex used by execution-owner
+      // acquisition before the draining owner can release its slot.
+      MarkDeviceLost();
+    }
+    return result;
+  }
+
+  void MarkDeviceLost() noexcept {
+    std::lock_guard lock(compute_execution_owner_mutex);
+    device_lost = true;
+  }
+
+  [[nodiscard]] bool IsDeviceLost() noexcept {
+    std::lock_guard lock(compute_execution_owner_mutex);
+    return device_lost;
+  }
+
   ~Impl() {
     if (device != VK_NULL_HANDLE) {
-      if (device_dispatch.device_wait_idle != nullptr) {
-        (void)device_dispatch.device_wait_idle(device);
-      }
+      (void)WaitIdle();
       if (device_dispatch.destroy_device != nullptr) {
         device_dispatch.destroy_device(device, nullptr);
       }
@@ -506,6 +542,9 @@ struct VulkanDeviceContext::Impl {
   VulkanFeatureEnablement enabled_capabilities;
   std::uint32_t queue_family_index = 0;
   std::mutex queue_mutex;
+  bool device_lost = false;
+  std::mutex compute_execution_owner_mutex;
+  bool compute_execution_owner_attached = false;
 };
 
 VulkanDeviceSelectionResult SelectVulkanDevice(
@@ -731,8 +770,9 @@ VulkanContextCreateResult VulkanDeviceContext::Create(
   instance_info.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
   instance_info.pApplicationInfo = &application_info;
 
+  VkInstance instance = VK_NULL_HANDLE;
   const VkResult instance_result =
-      create_instance(&instance_info, nullptr, &impl->instance);
+      create_instance(&instance_info, nullptr, &instance);
   if (instance_result != VK_SUCCESS) {
     AddDiagnostic(diagnostics, VulkanDiagnosticSeverity::kError,
                   VulkanDiagnosticCode::kInstanceCreationFailed,
@@ -740,6 +780,7 @@ VulkanContextCreateResult VulkanDeviceContext::Create(
     return Failure(VulkanContextStatus::kInstanceCreationFailed,
                    std::move(diagnostics));
   }
+  impl->instance = instance;
 
   if (!LoadInstanceDispatch(get_instance_proc_addr, impl->instance,
                             impl->instance_dispatch, diagnostics)) {
@@ -881,8 +922,9 @@ VulkanContextCreateResult VulkanDeviceContext::Create(
                                             ? nullptr
                                             : enabled_extension_names.data();
 
+  VkDevice device = VK_NULL_HANDLE;
   const VkResult device_result = impl->instance_dispatch.create_device(
-      impl->physical_device, &device_info, nullptr, &impl->device);
+      impl->physical_device, &device_info, nullptr, &device);
   if (device_result != VK_SUCCESS) {
     AddDiagnostic(diagnostics, VulkanDiagnosticSeverity::kError,
                   VulkanDiagnosticCode::kDeviceCreationFailed,
@@ -891,6 +933,7 @@ VulkanContextCreateResult VulkanDeviceContext::Create(
     return Failure(VulkanContextStatus::kDeviceCreationFailed,
                    std::move(diagnostics));
   }
+  impl->device = device;
 
   if (!LoadDeviceDispatch(impl->instance_dispatch, impl->device,
                           impl->device_dispatch, diagnostics)) {
@@ -954,8 +997,48 @@ VkQueue VulkanDeviceContext::queue() const noexcept {
   return impl_->queue;
 }
 
+PFN_vkVoidFunction VulkanDeviceContext::ResolveDeviceFunction(
+    const char* name) const noexcept {
+  if (name == nullptr || impl_->device == VK_NULL_HANDLE ||
+      impl_->instance_dispatch.get_device_proc_addr == nullptr) {
+    return nullptr;
+  }
+  return impl_->instance_dispatch.get_device_proc_addr(impl_->device, name);
+}
+
 std::mutex& VulkanDeviceContext::queue_mutex() noexcept {
   return impl_->queue_mutex;
+}
+
+bool VulkanDeviceContext::TryAcquireComputeExecutionOwner(
+    bool& context_is_device_lost) noexcept {
+  std::lock_guard lock(impl_->compute_execution_owner_mutex);
+  context_is_device_lost = impl_->device_lost;
+  if (context_is_device_lost) {
+    return false;
+  }
+  if (impl_->compute_execution_owner_attached) {
+    return false;
+  }
+  impl_->compute_execution_owner_attached = true;
+  return true;
+}
+
+void VulkanDeviceContext::ReleaseComputeExecutionOwner() noexcept {
+  std::lock_guard lock(impl_->compute_execution_owner_mutex);
+  impl_->compute_execution_owner_attached = false;
+}
+
+VkResult VulkanDeviceContext::WaitIdle() noexcept {
+  return impl_->WaitIdle();
+}
+
+void VulkanDeviceContext::MarkDeviceLost() noexcept {
+  impl_->MarkDeviceLost();
+}
+
+bool VulkanDeviceContext::IsDeviceLost() noexcept {
+  return impl_->IsDeviceLost();
 }
 
 const char* VulkanContextStatusName(VulkanContextStatus status) noexcept {

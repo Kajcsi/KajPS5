@@ -59,22 +59,31 @@ adapted paths change.
   observer, or a second address-space owner. Native direct guest writes remain
   unobserved until GuestMemory gains a fault-backed source; such a source must
   defer verified faults to the ordinary GuestMemory observation funnel.
-- M8 Vulkan-device bootstrap reviewed the current KytyPS5 pin's
+- M8 Vulkan-device and compute-execution bootstrap reviewed the current
+  KytyPS5 pin's
   `src/graphics/presentation/window/vulkanWindow.cpp`,
   `src/graphics/host_gpu/vulkanInstance.h`, and
-  `src/graphics/host_gpu/renderer/context.cpp`, including its complete
+  `src/graphics/host_gpu/renderer/{context,commandScheduler,masterSemaphore,render}.*`,
+  including its complete
   non-surface renderer-ready core feature baseline, universal graphics/compute
-  queue, and queue mutex. It also reviewed the current
+  queue, queue mutex, command ownership, and completion model. It also reviewed
+  the current
   SharpEmu pin's `src/SharpEmu.Libs/VideoOut/VulkanVideoPresenter.cs` and
   `tests/SharpEmu.Libs.Tests/VideoOut/VulkanPhysicalDeviceScoringTests.cs` for
-  deterministic device ranking and capability diagnostics. The related Kyty
+  deterministic device ranking, capability diagnostics, finite fence timeout,
+  and later abandoned-submission collection behavior. The related Kyty
   `3rdparty/Vulkan-Headers` submodule entry is
   `2fa203425eb4af9dfc6b03f97ef72b0b5bcb8350`; KajPS5 vendors only its exact C
   declarations, upstream `LICENSE.md`, and Apache-2.0 license text needed for
   dynamic loading, rather than a loader binary, SDK, VMA, window system, or
   renderer dependency. The new optional context remains the one C++
-  `GpuRuntime` owner and does not create a surface, swapchain, presentation
-  path, command buffer, or resource. Surface/swapchain/format work and the
+  `GpuRuntime` owner. Its sole child executor dynamically resolves only core
+  compute functions, accepts already-validated recompiler SPIR-V, and gives
+  each dispatch a private primary command buffer, fence, shader module, empty
+  pipeline layout, and compute pipeline. A finite timeout retains those
+  in-flight objects for status polling rather than freeing or reusing them;
+  it does not create buffers, descriptors, graphics pipelines, a surface,
+  swapchain, or presentation path. Surface/swapchain/format work and the
   extension-specific color-write and depth-clip feature gates remain deferred.
 - Mapping-token capture is serialized with GuestMemory Map/MapShared/Protect/
   Unmap operations, and callbacks run after GuestMemory releases its mapping
@@ -95,6 +104,16 @@ adapted paths change.
   `spirv-val --target-env vulkan1.2` checks passed in each build. The live smoke
   test selected an NVIDIA GeForce RTX 4090 with Vulkan 1.4.341 and queue family
   0 in all three configurations.
+- M8 Vulkan-compute validation adds injected transactional creation, recording,
+  submit, finite-timeout, retained-work, and resource-bound coverage plus a
+  live public-recompiler smoke dispatch. The latter must fail after device
+  selection/execution errors and skips only when the Vulkan host is unavailable
+  or cannot meet the renderer-ready device requirements. All 80 configured
+  CTest cases passed in Windows Debug, Release, and AddressSanitizer builds.
+  The seven external `spirv-val --target-env vulkan1.2` checks passed in each
+  build. Both Vulkan smokes passed; the compute smoke selected an NVIDIA
+  GeForce RTX 4090 with Vulkan 1.4.341, queue family 0, and completed a 1/1/1
+  dispatch with timeline 1.
 - KytyPS5 moved from `a65d17a5d689257a35644e01e9d15539361f0bf0`
   to `59b8fad34189816137c5cbe1982e9fd499532b6f`. The review covered all 23
   commits and the complete changed-path list. The current M7 work uses the

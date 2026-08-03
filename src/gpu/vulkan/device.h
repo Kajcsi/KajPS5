@@ -11,6 +11,7 @@
 
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -169,6 +170,9 @@ struct VulkanDeviceCandidate {
   std::uint32_t device_id = 0;
   VulkanPhysicalDeviceType type = VulkanPhysicalDeviceType::kOther;
   std::uint64_t min_storage_buffer_offset_alignment = 1;
+  // Copied from VkPhysicalDeviceLimits so compute execution can reject an
+  // invalid vkCmdDispatch before recording the command buffer.
+  std::array<std::uint32_t, 3> max_compute_work_group_count = {1, 1, 1};
   std::vector<VulkanQueueFamily> queue_families;
   VulkanFeatureSupport features;
   std::vector<std::string> extensions;
@@ -224,6 +228,7 @@ struct VulkanDeviceSelectionResult {
     const std::vector<VulkanDeviceCandidate>& candidates,
     const VulkanDeviceRequirements& requirements);
 
+class VulkanComputeExecution;
 class VulkanDeviceContext;
 
 struct VulkanContextCreateResult {
@@ -266,9 +271,28 @@ class VulkanDeviceContext final {
   [[nodiscard]] VkPhysicalDevice physical_device() const noexcept;
   [[nodiscard]] VkDevice device() const noexcept;
   [[nodiscard]] VkQueue queue() const noexcept;
+  // Child RAII owners resolve their own small, device-local dispatch tables
+  // through this context. No process-global Vulkan dispatch is exposed.
+  [[nodiscard]] PFN_vkVoidFunction ResolveDeviceFunction(
+      const char* name) const noexcept;
   [[nodiscard]] std::mutex& queue_mutex() noexcept;
 
  private:
+  friend class VulkanComputeExecution;
+
+  // Exactly one child execution owner may be attached while this device lives.
+  // It is intentionally not part of the public context surface.
+  // Ownership acquisition and terminal-loss validation are one state
+  // transition, so a creator cannot claim the slot after device loss wins.
+  [[nodiscard]] bool TryAcquireComputeExecutionOwner(
+      bool& context_is_device_lost) noexcept;
+  void ReleaseComputeExecutionOwner() noexcept;
+  // Compute execution uses the context's existing device dispatch to drain
+  // retained submitted work before destroying its child objects.
+  [[nodiscard]] VkResult WaitIdle() noexcept;
+  void MarkDeviceLost() noexcept;
+  [[nodiscard]] bool IsDeviceLost() noexcept;
+
   struct Impl;
 
   explicit VulkanDeviceContext(std::unique_ptr<Impl> impl) noexcept;

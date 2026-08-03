@@ -655,19 +655,22 @@ informed by SharpEmu
 `5ee7cd1dfafdeb0ce0e458a365692df4b2e1c445`. No SharpEmu compiler source
 was copied.
 
-The optional Vulkan device owner in `src/gpu/vulkan/{loader,device}.*`,
+The optional Vulkan owner in `src/gpu/vulkan/{loader,device,execution}.*`,
 `src/gpu/vulkan/vulkan_types.h`, `src/gpu/runtime.*`, and
-`tests/gpu_vulkan_{device,smoke}_test.cpp` adapts KytyPS5's instance,
-physical-device, universal queue, logical-device, and queue-mutex ownership
-shape from `src/graphics/host_gpu/vulkanInstance.h`,
+`tests/gpu_vulkan_{device,execution,smoke,compute_smoke}_test.cpp` adapts
+KytyPS5's instance, physical-device, universal queue, logical-device,
+queue-mutex, command-scheduler, and completion-ownership shape from
+`src/graphics/host_gpu/vulkanInstance.h`,
 `src/graphics/presentation/window/vulkanWindow.cpp`, and
-`src/graphics/host_gpu/renderer/context.cpp` at commit
+`src/graphics/host_gpu/renderer/{context,commandScheduler,masterSemaphore,render}.*` at commit
 `fb5ecec455cf6c67154134429485ffccbfc34203`. It preserves KytyPS5's complete
 non-surface renderer-ready core feature baseline, but intentionally does not
-import a window, surface, allocator, renderer, or command-buffer owner. Device
-ranking, capability diagnostics, and the focused injected-discovery tests
-re-express the device-scoring and
-capability reporting behavior in SharpEmu
+import a window, surface, allocator, renderer, global dispatch table, or a
+second GPU runtime. The child compute owner accepts precompiled SPIR-V and
+owns one command/fence/pipeline transaction per dispatch until completion.
+Device ranking, capability diagnostics, finite timeout retention, later fence
+status collection, and focused injected tests re-express the device-scoring,
+capability reporting, and abandoned-submission behavior in SharpEmu
 `src/SharpEmu.Libs/VideoOut/VulkanVideoPresenter.cs` and
 `tests/SharpEmu.Libs.Tests/VideoOut/VulkanPhysicalDeviceScoringTests.cs` at
 commit `4b5ea6a79346cb4529fa531cf2c1973f3978eb22`. The SharpEmu reference

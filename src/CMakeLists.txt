@@ -17,6 +17,7 @@ add_library(kajps5_core STATIC
   gpu/runtime.cpp
   gpu/shader_runtime.cpp
   gpu/vulkan/device.cpp
+  gpu/vulkan/execution.cpp
   gpu/vulkan/loader.cpp
   gpu/shader/recompiler/cfg/ShaderCFG.cpp
   gpu/shader/recompiler/decompiler/ExportOps.cpp
