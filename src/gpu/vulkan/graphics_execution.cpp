@@ -245,6 +245,44 @@ bool EqualPushRanges(const std::vector<VulkanGraphicsPushConstantPlan>& left,
   return true;
 }
 
+bool IsValidDepthStencil(const VulkanGraphicsDepthStencilState& state) noexcept {
+  const auto valid_compare = [](VkCompareOp value) {
+    return value != VK_COMPARE_OP_MAX_ENUM;
+  };
+  const auto valid_stencil = [&](const VkStencilOpState& stencil) {
+    return stencil.failOp != VK_STENCIL_OP_MAX_ENUM &&
+        stencil.passOp != VK_STENCIL_OP_MAX_ENUM &&
+        stencil.depthFailOp != VK_STENCIL_OP_MAX_ENUM &&
+        valid_compare(stencil.compareOp);
+  };
+  return valid_compare(state.depth_compare_op) &&
+      std::isfinite(state.min_depth_bounds) &&
+      std::isfinite(state.max_depth_bounds) &&
+      state.min_depth_bounds >= 0.0f && state.max_depth_bounds <= 1.0f &&
+      state.min_depth_bounds <= state.max_depth_bounds &&
+      (!state.stencil_test_enable ||
+       (valid_stencil(state.front) && valid_stencil(state.back)));
+}
+
+bool EqualDepthStencil(const VulkanGraphicsDepthStencilState& left,
+                       const VulkanGraphicsDepthStencilState& right) noexcept {
+  const auto equal_face = [](const VkStencilOpState& a,
+                             const VkStencilOpState& b) {
+    return a.failOp == b.failOp && a.passOp == b.passOp &&
+        a.depthFailOp == b.depthFailOp && a.compareOp == b.compareOp &&
+        a.compareMask == b.compareMask && a.writeMask == b.writeMask &&
+        a.reference == b.reference;
+  };
+  return left.depth_test_enable == right.depth_test_enable &&
+      left.depth_write_enable == right.depth_write_enable &&
+      left.depth_compare_op == right.depth_compare_op &&
+      left.depth_bounds_test_enable == right.depth_bounds_test_enable &&
+      left.min_depth_bounds == right.min_depth_bounds &&
+      left.max_depth_bounds == right.max_depth_bounds &&
+      left.stencil_test_enable == right.stencil_test_enable &&
+      equal_face(left.front, right.front) && equal_face(left.back, right.back);
+}
+
 }  // namespace
 
 struct VulkanGraphicsExecution::Impl {
@@ -252,10 +290,12 @@ struct VulkanGraphicsExecution::Impl {
     std::vector<std::uint32_t> vertex_spirv;
     std::vector<std::uint32_t> pixel_spirv;
     VkFormat format = VK_FORMAT_UNDEFINED;
+    VkFormat depth_format = VK_FORMAT_UNDEFINED;
     VkPrimitiveTopology topology = VK_PRIMITIVE_TOPOLOGY_MAX_ENUM;
     VkCullModeFlags cull_mode = VK_CULL_MODE_NONE;
     VkFrontFace front_face = VK_FRONT_FACE_COUNTER_CLOCKWISE;
     VulkanGraphicsBlendState blend{};
+    VulkanGraphicsDepthStencilState depth_stencil{};
     std::vector<VulkanGraphicsDescriptorSetPlan> set_layouts;
     std::vector<VulkanGraphicsPushConstantPlan> push_constants;
     std::vector<VkDescriptorSetLayout> descriptor_set_layouts;
@@ -276,6 +316,7 @@ struct VulkanGraphicsExecution::Impl {
     std::optional<VulkanGuestImageSetPreparation> vertex_images;
     std::optional<VulkanGuestImageSetPreparation> pixel_images;
     std::optional<VulkanGuestImagePreparation> target;
+    std::optional<VulkanGuestImagePreparation> depth_target;
     VulkanGraphicsBindingPlan plan;
     std::uint64_t timeline = 0;
   };
@@ -300,6 +341,9 @@ struct VulkanGraphicsExecution::Impl {
       submission.image_cache->Discard(*submission.pixel_images);
     if (submission.target.has_value() && submission.image_cache != nullptr) {
       submission.image_cache->Discard(*submission.target);
+    }
+    if (submission.depth_target.has_value() && submission.image_cache != nullptr) {
+      submission.image_cache->Discard(*submission.depth_target);
     }
     if (submission.command_pool != VK_NULL_HANDLE) {
       dispatch.destroy_command_pool(context.device(), submission.command_pool,
@@ -460,7 +504,9 @@ VulkanGraphicsResult VulkanGraphicsExecution::PollCompleted() {
         pixel_images_complete = it->image_cache->Complete(image) && pixel_images_complete;
       if (!vertex_buffers_complete || !pixel_buffers_complete ||
           !vertex_images_complete || !pixel_images_complete ||
-          !it->image_cache->Complete(*it->target)) {
+          !it->image_cache->Complete(*it->target) ||
+          (it->depth_target.has_value() &&
+           !it->image_cache->Complete(*it->depth_target))) {
         result.status = VulkanGraphicsStatus::kReadbackFailed;
         Add(result, VulkanGraphicsDiagnosticSeverity::kError,
             VulkanGraphicsDiagnosticCode::kReadbackFailed,
@@ -507,6 +553,7 @@ VulkanGraphicsResult VulkanGraphicsExecution::Submit(
     VulkanGuestBufferPreparation pixel_buffers, VulkanGuestImageCache& image_cache,
     VulkanGuestImageSetPreparation vertex_images,
     VulkanGuestImageSetPreparation pixel_images, VulkanGuestImagePreparation target,
+    std::optional<VulkanGuestImagePreparation> depth_target,
     VulkanGraphicsBindingPlan plan) {
   VulkanGraphicsResult result;
   std::lock_guard lock(impl_->mutex);
@@ -516,6 +563,7 @@ VulkanGraphicsResult VulkanGraphicsExecution::Submit(
     image_cache.Discard(vertex_images);
     image_cache.Discard(pixel_images);
     image_cache.Discard(target);
+    if (depth_target.has_value()) image_cache.Discard(*depth_target);
   };
   const auto reject = [&](VulkanGraphicsStatus status,
                           VulkanGraphicsDiagnosticCode code,
@@ -555,6 +603,20 @@ VulkanGraphicsResult VulkanGraphicsExecution::Submit(
                   VulkanGraphicsDiagnosticCode::kInputRejected,
                   "translated Vulkan graphics draw has invalid fixed or dynamic state");
   }
+  if (!IsValidDepthStencil(request.depth_stencil) ||
+      (!depth_target.has_value() &&
+       (request.depth_stencil.depth_test_enable ||
+        request.depth_stencil.depth_write_enable ||
+        request.depth_stencil.depth_bounds_test_enable ||
+        request.depth_stencil.stencil_test_enable)) ||
+      (depth_target.has_value() &&
+       (!*depth_target || !depth_target->writable ||
+        depth_target->aspect_mask != VK_IMAGE_ASPECT_DEPTH_BIT ||
+        depth_target->format.format != VK_FORMAT_D32_SFLOAT))) {
+    return reject(VulkanGraphicsStatus::kInvalidArgument,
+                  VulkanGraphicsDiagnosticCode::kInputRejected,
+                  "translated Vulkan graphics has invalid depth-stencil state or target");
+  }
   if (request.viewport.scissor.offset.x < 0 || request.viewport.scissor.offset.y < 0 ||
       static_cast<std::uint64_t>(request.viewport.scissor.offset.x) +
               request.viewport.scissor.extent.width > target.layout.mips[0].width ||
@@ -564,10 +626,26 @@ VulkanGraphicsResult VulkanGraphicsExecution::Submit(
                   VulkanGraphicsDiagnosticCode::kInputRejected,
                   "translated Vulkan graphics scissor is outside the color target");
   }
+  if (depth_target.has_value() &&
+      (static_cast<std::uint64_t>(request.viewport.scissor.offset.x) +
+           request.viewport.scissor.extent.width > depth_target->layout.mips[0].width ||
+       static_cast<std::uint64_t>(request.viewport.scissor.offset.y) +
+           request.viewport.scissor.extent.height > depth_target->layout.mips[0].height)) {
+    return reject(VulkanGraphicsStatus::kInvalidArgument,
+                  VulkanGraphicsDiagnosticCode::kInputRejected,
+                  "translated Vulkan graphics scissor is outside the depth target");
+  }
   if (!impl_->context.SupportsColorAttachmentFormat(target.format.format)) {
     return reject(VulkanGraphicsStatus::kUnsupported,
                   VulkanGraphicsDiagnosticCode::kFormatUnsupported,
                   "the color target format does not support optimal color attachment use");
+  }
+  if (depth_target.has_value() &&
+      !impl_->context.SupportsDepthStencilAttachmentFormat(
+          depth_target->format.format)) {
+    return reject(VulkanGraphicsStatus::kUnsupported,
+                  VulkanGraphicsDiagnosticCode::kFormatUnsupported,
+                  "the depth target format does not support optimal depth attachment use");
   }
   if (impl_->retained.size() >= kMaximumRetainedSubmissions) {
     return reject(VulkanGraphicsStatus::kResourceLimit,
@@ -583,25 +661,44 @@ VulkanGraphicsResult VulkanGraphicsExecution::Submit(
         target_address <= std::numeric_limits<std::uint64_t>::max() - target_size &&
         address < target_address + target_size && target_address < address + size;
   };
+  const auto overlaps_depth = [&](std::uint64_t address, std::uint64_t size) {
+    if (!depth_target.has_value()) return false;
+    const auto depth_address = depth_target->layout.storage_key.guest_address;
+    const auto depth_size = depth_target->layout.storage_key.byte_count;
+    return size != 0 && depth_size != 0 &&
+        address <= std::numeric_limits<std::uint64_t>::max() - size &&
+        depth_address <= std::numeric_limits<std::uint64_t>::max() - depth_size &&
+        address < depth_address + depth_size && depth_address < address + size;
+  };
+  if (depth_target.has_value() && overlaps_target(
+          depth_target->layout.storage_key.guest_address,
+          depth_target->layout.storage_key.byte_count)) {
+    return reject(VulkanGraphicsStatus::kInvalidArgument,
+                  VulkanGraphicsDiagnosticCode::kInputRejected,
+                  "color and depth targets overlap in guest memory");
+  }
   for (const auto& view : vertex_buffers.views) {
-    if (overlaps_target(view.guest_address, view.size)) {
+    if (overlaps_target(view.guest_address, view.size) ||
+        overlaps_depth(view.guest_address, view.size)) {
       return reject(VulkanGraphicsStatus::kInvalidArgument,
                     VulkanGraphicsDiagnosticCode::kInputRejected,
-                    "color target overlaps a planned vertex buffer guest range");
+                    "render target overlaps a planned vertex buffer guest range");
     }
   }
   for (const auto& view : pixel_buffers.views) {
-    if (overlaps_target(view.guest_address, view.size)) {
+    if (overlaps_target(view.guest_address, view.size) ||
+        overlaps_depth(view.guest_address, view.size)) {
       return reject(VulkanGraphicsStatus::kInvalidArgument,
                     VulkanGraphicsDiagnosticCode::kInputRejected,
-                    "color target overlaps a planned pixel buffer guest range");
+                    "render target overlaps a planned pixel buffer guest range");
     }
   }
   for (const auto& upload : plan.image_uploads) {
-    if (overlaps_target(upload.guest_address, upload.guest_size)) {
+    if (overlaps_target(upload.guest_address, upload.guest_size) ||
+        overlaps_depth(upload.guest_address, upload.guest_size)) {
       return reject(VulkanGraphicsStatus::kInvalidArgument,
                     VulkanGraphicsDiagnosticCode::kInputRejected,
-                    "color target overlaps a planned shader image guest range");
+                    "render target overlaps a planned shader image guest range");
     }
   }
 
@@ -612,9 +709,12 @@ VulkanGraphicsResult VulkanGraphicsExecution::Submit(
   for (Impl::Pipeline& pipeline : impl_->pipelines) {
     if (pipeline.vertex_spirv == request.vertex->spirv &&
         pipeline.pixel_spirv == request.pixel->spirv &&
-        pipeline.format == target.format.format && pipeline.topology == topology &&
+        pipeline.format == target.format.format &&
+        pipeline.depth_format == (depth_target ? depth_target->format.format : VK_FORMAT_UNDEFINED) &&
+        pipeline.topology == topology &&
         pipeline.cull_mode == cull_mode && pipeline.front_face == front_face &&
         EqualBlend(pipeline.blend, request.blend) &&
+        EqualDepthStencil(pipeline.depth_stencil, request.depth_stencil) &&
         EqualSetLayouts(pipeline.set_layouts, plan.set_layouts) &&
         EqualPushRanges(pipeline.push_constants, plan.push_constants)) {
       cached_pipeline = &pipeline;
@@ -736,6 +836,19 @@ VulkanGraphicsResult VulkanGraphicsExecution::Submit(
     blend.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
     blend.attachmentCount = 1;
     blend.pAttachments = &attachment;
+    VkPipelineDepthStencilStateCreateInfo depth_stencil{};
+    if (depth_target.has_value()) {
+      depth_stencil.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+      depth_stencil.depthTestEnable = request.depth_stencil.depth_test_enable ? VK_TRUE : VK_FALSE;
+      depth_stencil.depthWriteEnable = request.depth_stencil.depth_write_enable ? VK_TRUE : VK_FALSE;
+      depth_stencil.depthCompareOp = request.depth_stencil.depth_compare_op;
+      depth_stencil.depthBoundsTestEnable = request.depth_stencil.depth_bounds_test_enable ? VK_TRUE : VK_FALSE;
+      depth_stencil.stencilTestEnable = request.depth_stencil.stencil_test_enable ? VK_TRUE : VK_FALSE;
+      depth_stencil.front = request.depth_stencil.front;
+      depth_stencil.back = request.depth_stencil.back;
+      depth_stencil.minDepthBounds = request.depth_stencil.min_depth_bounds;
+      depth_stencil.maxDepthBounds = request.depth_stencil.max_depth_bounds;
+    }
     const VkDynamicState dynamic_states[] = {VK_DYNAMIC_STATE_VIEWPORT,
                                               VK_DYNAMIC_STATE_SCISSOR};
     VkPipelineDynamicStateCreateInfo dynamic{};
@@ -746,6 +859,8 @@ VulkanGraphicsResult VulkanGraphicsExecution::Submit(
     rendering.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
     rendering.colorAttachmentCount = 1;
     rendering.pColorAttachmentFormats = &target.format.format;
+    rendering.depthAttachmentFormat = depth_target ? depth_target->format.format
+                                                    : VK_FORMAT_UNDEFINED;
     VkGraphicsPipelineCreateInfo create_info{};
     create_info.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
     create_info.pNext = &rendering;
@@ -757,6 +872,7 @@ VulkanGraphicsResult VulkanGraphicsExecution::Submit(
     create_info.pRasterizationState = &raster;
     create_info.pMultisampleState = &multisample;
     create_info.pColorBlendState = &blend;
+    create_info.pDepthStencilState = depth_target ? &depth_stencil : nullptr;
     create_info.pDynamicState = &dynamic;
     create_info.layout = layout;
     api = impl_->dispatch.create_graphics_pipelines(device, VK_NULL_HANDLE, 1,
@@ -766,7 +882,8 @@ VulkanGraphicsResult VulkanGraphicsExecution::Submit(
     impl_->dispatch.destroy_shader_module(device, vertex_module, nullptr);
     cached_pipeline = &impl_->pipelines.emplace_back(Impl::Pipeline{
         request.vertex->spirv, request.pixel->spirv, target.format.format,
-        topology, cull_mode, front_face, request.blend, plan.set_layouts,
+        depth_target ? depth_target->format.format : VK_FORMAT_UNDEFINED,
+        topology, cull_mode, front_face, request.blend, request.depth_stencil, plan.set_layouts,
         plan.push_constants, std::move(descriptor_set_layouts), layout, pipeline});
   }
 
@@ -778,6 +895,7 @@ VulkanGraphicsResult VulkanGraphicsExecution::Submit(
   submission.vertex_images.emplace(std::move(vertex_images));
   submission.pixel_images.emplace(std::move(pixel_images));
   submission.target.emplace(std::move(target));
+  if (depth_target.has_value()) submission.depth_target.emplace(std::move(*depth_target));
   submission.plan = std::move(plan);
   const auto fail_submission = [&](VulkanGraphicsStatus status,
                                    VulkanGraphicsDiagnosticCode code,
@@ -894,18 +1012,39 @@ VulkanGraphicsResult VulkanGraphicsExecution::Submit(
                            VulkanGraphicsDiagnosticCode::kReadbackFailed,
                            "color-target upload recording", VK_SUCCESS);
   }
+  if (submission.depth_target.has_value() && !image_cache.RecordUpload(
+          submission.command_buffer, *submission.depth_target,
+          VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+          VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
+              VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+          VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+              VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT)) {
+    return fail_submission(VulkanGraphicsStatus::kReadbackFailed,
+                           VulkanGraphicsDiagnosticCode::kReadbackFailed,
+                           "depth-target upload recording", VK_SUCCESS);
+  }
   VkRenderingAttachmentInfo color_attachment{};
   color_attachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
   color_attachment.imageView = submission.target->view;
   color_attachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
   color_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
   color_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+  VkRenderingAttachmentInfo depth_attachment{};
+  if (submission.depth_target.has_value()) {
+    depth_attachment.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+    depth_attachment.imageView = submission.depth_target->view;
+    depth_attachment.imageLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+    depth_attachment.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
+    depth_attachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+  }
   VkRenderingInfo rendering_info{};
   rendering_info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
   rendering_info.renderArea = request.viewport.scissor;
   rendering_info.layerCount = 1;
   rendering_info.colorAttachmentCount = 1;
   rendering_info.pColorAttachments = &color_attachment;
+  rendering_info.pDepthAttachment = submission.depth_target.has_value()
+      ? &depth_attachment : nullptr;
   VkViewport viewport{request.viewport.x, request.viewport.y, request.viewport.width,
                       request.viewport.height, request.viewport.min_depth,
                       request.viewport.max_depth};
@@ -975,6 +1114,14 @@ VulkanGraphicsResult VulkanGraphicsExecution::Submit(
                            VulkanGraphicsDiagnosticCode::kReadbackFailed,
                            "color-target readback recording", VK_SUCCESS);
   }
+  if (submission.depth_target.has_value() && !image_cache.RecordReadback(
+          submission.command_buffer, *submission.depth_target,
+          VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+          VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT)) {
+    return fail_submission(VulkanGraphicsStatus::kReadbackFailed,
+                           VulkanGraphicsDiagnosticCode::kReadbackFailed,
+                           "depth-target readback recording", VK_SUCCESS);
+  }
   api = impl_->dispatch.end_command_buffer(submission.command_buffer);
   if (api != VK_SUCCESS) return fail_submission(VulkanGraphicsStatus::kFenceWaitFailed,
                                                  VulkanGraphicsDiagnosticCode::kInputRejected,
@@ -999,6 +1146,9 @@ VulkanGraphicsResult VulkanGraphicsExecution::Submit(
   for (auto& image : submission.pixel_images->images)
     marked = image_cache.MarkSubmitted(image) && marked;
   marked = image_cache.MarkSubmitted(*submission.target) && marked;
+  if (submission.depth_target.has_value()) {
+    marked = image_cache.MarkSubmitted(*submission.depth_target) && marked;
+  }
   if (!marked) {
     result.status = VulkanGraphicsStatus::kReadbackFailed;
     result.timeline = submission.timeline;
@@ -1024,7 +1174,9 @@ VulkanGraphicsResult VulkanGraphicsExecution::Submit(
       pixel_images_complete = image_cache.Complete(image) && pixel_images_complete;
     if (!vertex_buffers_complete || !pixel_buffers_complete ||
         !vertex_images_complete || !pixel_images_complete ||
-        !image_cache.Complete(*submission.target)) {
+        !image_cache.Complete(*submission.target) ||
+        (submission.depth_target.has_value() &&
+         !image_cache.Complete(*submission.depth_target))) {
       result.status = VulkanGraphicsStatus::kReadbackFailed;
       Add(result, VulkanGraphicsDiagnosticSeverity::kError,
           VulkanGraphicsDiagnosticCode::kReadbackFailed,

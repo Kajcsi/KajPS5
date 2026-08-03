@@ -389,6 +389,56 @@ std::optional<VulkanImageFormat> MapGuestImageFormat(std::uint32_t format) noexc
   }
 }
 
+VulkanGuestImagePreparation VulkanGuestImageCache::PrepareDepthStencil(
+    const VulkanGuestDepthStencilRequest& request) {
+  VulkanGuestImagePreparation preparation;
+  if (request.depth_format != Prospero::DepthFormat::kZ32F ||
+      request.stencil_format != Prospero::StencilFormat::kInvalid) {
+    Fail(preparation, VulkanGuestImageStatus::kUnsupportedFormat,
+         "only one-sample Z32 float depth without stencil is supported");
+    return preparation;
+  }
+  if (request.samples != VK_SAMPLE_COUNT_1_BIT || request.width == 0 ||
+      request.height == 0 || request.guest_address == 0 ||
+      (request.row_pitch_bytes != 0 &&
+       request.row_pitch_bytes < static_cast<std::uint64_t>(request.width) * 4)) {
+    Fail(preparation, VulkanGuestImageStatus::kInvalidLayout,
+         "depth target dimensions, pitch, samples, or address are invalid");
+    return preparation;
+  }
+  GuestImageLayoutInput input{};
+  input.guest_address = request.guest_address;
+  // The layout calculator's R32 float storage has the same guest byte shape
+  // as Z32 float. Vulkan image creation below overrides it to D32.
+  input.format = static_cast<std::uint32_t>(Prospero::BufferFormat::k32Float);
+  input.width = request.width;
+  input.height = request.height;
+  input.depth = 1;
+  input.image_type = Prospero::ImageType::kColor2D;
+  input.tile_mode = Prospero::TileMode::kLinear;
+  input.tightly_packed = request.row_pitch_bytes == 0;
+  input.row_pitch_bytes = request.row_pitch_bytes;
+  if (request.row_pitch_bytes != 0) {
+    if (request.row_pitch_bytes > std::numeric_limits<std::uint64_t>::max() /
+            request.height) {
+      Fail(preparation, VulkanGuestImageStatus::kInvalidLayout,
+           "depth target slice pitch overflows");
+      return preparation;
+    }
+    input.slice_pitch_bytes = request.row_pitch_bytes * request.height;
+  }
+  VulkanGuestImageRequest image_request{};
+  image_request.input = input;
+  image_request.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
+      VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+  image_request.samples = request.samples;
+  image_request.writable = request.writable;
+  image_request.format_override = VulkanImageFormat{
+      VK_FORMAT_D32_SFLOAT, VulkanImageStorageClass::kD32, std::nullopt};
+  image_request.aspect_mask = VK_IMAGE_ASPECT_DEPTH_BIT;
+  return Prepare(image_request);
+}
+
 VulkanGuestImageCache::VulkanGuestImageCache(VulkanDeviceContext& context,
                                                memory::GuestMemory& memory,
                                                GpuResourceCoherence& coherence) noexcept
@@ -403,7 +453,8 @@ VulkanGuestImagePreparation VulkanGuestImageCache::Prepare(const VulkanGuestImag
   VulkanGuestImagePreparation p;
   p.layout = CalculateGuestImageLayout(request.input);
   if (!p.layout.ok()) { Fail(p, VulkanGuestImageStatus::kInvalidLayout, p.layout.diagnostic.data()); return p; }
-  const auto format = MapGuestImageFormat(request.input.format);
+  const auto format = request.format_override.has_value()
+      ? request.format_override : MapGuestImageFormat(request.input.format);
   if (!format) { Fail(p, VulkanGuestImageStatus::kUnsupportedFormat, "guest image view format is unsupported by Vulkan"); return p; }
   if (request.samples != VK_SAMPLE_COUNT_1_BIT || request.usage == 0 ||
       request.view_base_mip_level >= request.input.mip_count ||
@@ -423,6 +474,14 @@ VulkanGuestImagePreparation VulkanGuestImageCache::Prepare(const VulkanGuestImag
     }
   }
   p.format = *format; p.writable = request.writable;
+  p.aspect_mask = request.aspect_mask;
+  if (p.aspect_mask == 0 || (p.aspect_mask & ~(
+          VK_IMAGE_ASPECT_COLOR_BIT | VK_IMAGE_ASPECT_DEPTH_BIT |
+          VK_IMAGE_ASPECT_STENCIL_BIT)) != 0) {
+    Fail(p, VulkanGuestImageStatus::kUnsupportedTopology,
+         "guest image has an unsupported Vulkan aspect mask");
+    return p;
+  }
   const auto read = memory::GuestMemoryProtection::kRead | memory::GuestMemoryProtection::kGpuRead;
   const auto write = memory::GuestMemoryProtection::kWrite | memory::GuestMemoryProtection::kGpuWrite;
   if (!memory_.CanAccess(request.input.guest_address, p.layout.total_bytes, read) ||
@@ -493,7 +552,7 @@ VulkanGuestImagePreparation VulkanGuestImageCache::Prepare(const VulkanGuestImag
     VkImageViewCreateInfo info{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO}; info.image = p.image;
     info.viewType = requested_view_type;
     info.format = view_format;
-    info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    info.subresourceRange.aspectMask = p.aspect_mask;
     info.subresourceRange.baseMipLevel = request.view_base_mip_level;
     info.subresourceRange.levelCount = request.view_level_count == 0 ?
         request.input.mip_count - request.view_base_mip_level : request.view_level_count;
@@ -562,7 +621,7 @@ VulkanGuestImagePreparation VulkanGuestImageCache::Prepare(const VulkanGuestImag
       copy.bufferImageHeight = static_cast<std::uint32_t>(layout.slice_bytes / layout.row_bytes) *
                                (block_bytes != 0 ? 4u : 1u);
     }
-    copy.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    copy.imageSubresource.aspectMask = p.aspect_mask;
     copy.imageSubresource.mipLevel = mip;
     copy.imageSubresource.layerCount = image_info.arrayLayers;
     copy.imageExtent = {layout.width, layout.height, layout.depth};
@@ -1030,7 +1089,7 @@ bool VulkanGuestImageCache::RecordUpload(
   to_transfer.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
   to_transfer.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
   to_transfer.image = p.image;
-  to_transfer.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+  to_transfer.subresourceRange.aspectMask = p.aspect_mask;
   to_transfer.subresourceRange.levelCount =
       static_cast<std::uint32_t>(p.copy_regions.size());
   to_transfer.subresourceRange.layerCount = p.layout.array_layers == 0 ? 1 : p.layout.array_layers;
@@ -1071,7 +1130,7 @@ bool VulkanGuestImageCache::RecordReadback(
   to_transfer.oldLayout = p.current_layout;
   to_transfer.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
   to_transfer.image = p.image;
-  to_transfer.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+  to_transfer.subresourceRange.aspectMask = p.aspect_mask;
   to_transfer.subresourceRange.levelCount = static_cast<std::uint32_t>(p.copy_regions.size());
   to_transfer.subresourceRange.layerCount = p.layout.array_layers == 0 ? 1 : p.layout.array_layers;
   VkBufferMemoryBarrier host_visible{VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER};

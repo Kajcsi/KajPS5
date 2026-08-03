@@ -293,6 +293,7 @@ class VulkanDeviceContext final {
       const char* name) const noexcept;
   [[nodiscard]] std::mutex& queue_mutex() noexcept;
   [[nodiscard]] bool SupportsColorAttachmentFormat(VkFormat format) const noexcept;
+  [[nodiscard]] bool SupportsDepthStencilAttachmentFormat(VkFormat format) const noexcept;
 
  private:
   friend class VulkanComputeExecution;

@@ -1104,6 +1104,19 @@ bool VulkanDeviceContext::SupportsColorAttachmentFormat(VkFormat format) const n
           VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT) != 0;
 }
 
+bool VulkanDeviceContext::SupportsDepthStencilAttachmentFormat(
+    VkFormat format) const noexcept {
+  if (format == VK_FORMAT_UNDEFINED ||
+      impl_->instance_dispatch.get_physical_device_format_properties == nullptr) {
+    return false;
+  }
+  VkFormatProperties properties{};
+  impl_->instance_dispatch.get_physical_device_format_properties(
+      impl_->physical_device, format, &properties);
+  return (properties.optimalTilingFeatures &
+          VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT) != 0;
+}
+
 VkResult VulkanDeviceContext::WaitIdle() noexcept {
   return impl_->WaitIdle();
 }

@@ -1,7 +1,9 @@
 // Copyright (C) 2026 KajPS5 contributors
-// Architecture reference: KytyPS5 renderer/pipeline/{pipelineCache,renderDraw}.*
+// Architecture reference: KytyPS5 renderer/{depthRenderTarget,renderDraw}.* and
+// pipeline/pipelineCache.*
 // at fb5ecec455cf6c67154134429485ffccbfc34203.
-// Behavior reference: SharpEmu VulkanVideoPresenter.cs at
+// Behavior reference: SharpEmu VulkanVideoPresenter.cs and
+// VulkanDepthAttachmentTests.cs at
 // 9e10d7c44a2821cfd5ccd3417c09c0cf269285a4.
 // SPDX-License-Identifier: GPL-2.0-only
 
@@ -10,6 +12,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -54,10 +57,34 @@ struct VulkanGraphicsViewportState {
   VkRect2D scissor{};
 };
 
+struct VulkanGraphicsDepthStencilTarget {
+  std::uint64_t guest_address = 0;
+  Prospero::DepthFormat depth_format = Prospero::DepthFormat::kInvalid;
+  Prospero::StencilFormat stencil_format = Prospero::StencilFormat::kInvalid;
+  std::uint32_t width = 0;
+  std::uint32_t height = 0;
+  std::uint64_t row_pitch_bytes = 0;
+  VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
+};
+
+struct VulkanGraphicsDepthStencilState {
+  bool depth_test_enable = false;
+  bool depth_write_enable = false;
+  VkCompareOp depth_compare_op = VK_COMPARE_OP_ALWAYS;
+  bool depth_bounds_test_enable = false;
+  float min_depth_bounds = 0.0f;
+  float max_depth_bounds = 1.0f;
+  bool stencil_test_enable = false;
+  VkStencilOpState front{};
+  VkStencilOpState back{};
+};
+
 struct VulkanTranslatedDrawRequest {
   const shader::recompiler::CompileResult* vertex = nullptr;
   const shader::recompiler::CompileResult* pixel = nullptr;
   GuestImageLayoutInput color_target{};
+  std::optional<VulkanGraphicsDepthStencilTarget> depth_stencil_target;
+  VulkanGraphicsDepthStencilState depth_stencil{};
   VulkanGraphicsTopology topology = VulkanGraphicsTopology::kTriangleList;
   VulkanGraphicsCullMode cull_mode = VulkanGraphicsCullMode::kNone;
   VulkanGraphicsFrontFace front_face = VulkanGraphicsFrontFace::kCounterClockwise;
@@ -139,7 +166,9 @@ class VulkanGraphicsExecution final {
       VulkanGuestImageCache& image_cache,
       VulkanGuestImageSetPreparation vertex_images,
       VulkanGuestImageSetPreparation pixel_images,
-      VulkanGuestImagePreparation target, VulkanGraphicsBindingPlan plan);
+      VulkanGuestImagePreparation target,
+      std::optional<VulkanGuestImagePreparation> depth_target,
+      VulkanGraphicsBindingPlan plan);
   [[nodiscard]] VulkanGraphicsResult PollCompleted();
 
  private:

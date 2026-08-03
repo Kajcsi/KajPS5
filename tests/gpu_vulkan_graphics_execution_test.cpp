@@ -226,6 +226,75 @@ void TestEarlyRejectionAndRetention() {
         "signalled retained graphics draw was not reclaimed by poll");
 }
 
+void TestDepthTargetPath() {
+  Reset();
+  using Protection = kajps5::memory::GuestMemoryProtection;
+  kajps5::memory::GuestMemory memory(
+      0x1000, 0x2000, Protection::kRead | Protection::kWrite |
+                         Protection::kGpuRead | Protection::kGpuWrite);
+  Check(memory.InitializeFill(0x1000, 0x1100, std::byte{0}),
+        "depth fixture initialization failed");
+  auto runtime = Runtime(memory);
+  const auto vertex = Program(ShaderType::Vertex);
+  const auto pixel = Program(ShaderType::Pixel);
+  auto request = Draw(vertex, pixel);
+  request.depth_stencil_target = vk::VulkanGraphicsDepthStencilTarget{
+      0x1200, P::DepthFormat::kZ32F, P::StencilFormat::kInvalid, 2, 2, 0,
+      VK_SAMPLE_COUNT_1_BIT};
+  request.depth_stencil.depth_test_enable = true;
+  request.depth_stencil.depth_write_enable = true;
+  request.depth_stencil.depth_compare_op = VK_COMPARE_OP_LESS_OR_EQUAL;
+  g.format_features = VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT |
+      VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT;
+  const auto submitted = runtime->SubmitVulkanTranslatedDraw(request);
+  Check(static_cast<bool>(submitted) &&
+            g.graphics_rendering_info.depthAttachmentFormat == VK_FORMAT_D32_SFLOAT &&
+            g.graphics_depth_stencil.depthTestEnable == VK_TRUE &&
+            g.graphics_depth_stencil.depthWriteEnable == VK_TRUE &&
+            g.graphics_depth_stencil.depthCompareOp == VK_COMPARE_OP_LESS_OR_EQUAL,
+        "depth target did not enter the exact graphics pipeline key and state");
+  Check(g.graphics_depth_attachment.imageView != VK_NULL_HANDLE &&
+            g.graphics_depth_attachment.imageLayout ==
+                VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL &&
+            g.graphics_depth_attachment.loadOp == VK_ATTACHMENT_LOAD_OP_LOAD &&
+            g.graphics_depth_attachment.storeOp == VK_ATTACHMENT_STORE_OP_STORE,
+        "dynamic rendering did not retain the depth attachment contract");
+  bool saw_depth_aspect = false;
+  for (const auto& barrier : g.barriers) {
+    for (const auto& image : barrier.images) {
+      saw_depth_aspect = saw_depth_aspect ||
+          image.subresourceRange.aspectMask == VK_IMAGE_ASPECT_DEPTH_BIT;
+    }
+  }
+  Check(saw_depth_aspect && g.upload_copies.back().imageSubresource.aspectMask ==
+          VK_IMAGE_ASPECT_DEPTH_BIT &&
+          g.readback_copies.back().imageSubresource.aspectMask ==
+          VK_IMAGE_ASPECT_DEPTH_BIT,
+        "depth upload/readback used a color image aspect");
+  const auto cached = runtime->SubmitVulkanTranslatedDraw(request);
+  Check(static_cast<bool>(cached) && g.graphics_pipelines == 1,
+        "identical depth state did not reuse its graphics pipeline");
+  auto changed = request;
+  changed.depth_stencil.depth_write_enable = false;
+  Check(static_cast<bool>(runtime->SubmitVulkanTranslatedDraw(changed)) &&
+            g.graphics_pipelines == 2,
+        "depth-state change did not create an exact graphics pipeline miss");
+  g.graphics_wait_result = VK_TIMEOUT;
+  const auto timed_out = runtime->SubmitVulkanTranslatedDraw(request);
+  Check(timed_out.status == vk::VulkanGraphicsStatus::kFenceWaitTimedOut &&
+            timed_out.retained_submission_count == 1,
+        "timed-out depth submission was not retained");
+  g.graphics_wait_result = VK_SUCCESS;
+  const auto polled = runtime->PollVulkanGraphics();
+  Check(static_cast<bool>(polled) && polled.reclaimed_submission_count == 1,
+        "retained depth submission was not completed exactly once");
+  auto overlap = request;
+  overlap.depth_stencil_target->guest_address = request.color_target.guest_address;
+  const auto rejected = runtime->SubmitVulkanTranslatedDraw(overlap);
+  Check(rejected.status == vk::VulkanGraphicsStatus::kInvalidArgument,
+        "overlapping color and depth targets were accepted");
+}
+
 void TestResourcefulGraphicsRuntimePath() {
   Reset();
   using Protection = kajps5::memory::GuestMemoryProtection;
@@ -263,6 +332,7 @@ void TestResourcefulGraphicsRuntimePath() {
 int main() {
   TestGraphicsRuntimePath();
   TestEarlyRejectionAndRetention();
+  TestDepthTargetPath();
   TestResourcefulGraphicsRuntimePath();
   return 0;
 }

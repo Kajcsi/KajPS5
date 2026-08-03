@@ -324,6 +324,21 @@ vulkan::VulkanGraphicsResult GpuRuntime::SubmitVulkanTranslatedDraw(
          "translated draw color-target format is not a supported color attachment"});
     return result;
   }
+  if (request.depth_stencil_target.has_value()) {
+    const auto& depth = *request.depth_stencil_target;
+    if (depth.depth_format != Prospero::DepthFormat::kZ32F ||
+        depth.stencil_format != Prospero::StencilFormat::kInvalid ||
+        depth.samples != VK_SAMPLE_COUNT_1_BIT || depth.width == 0 ||
+        depth.height == 0 || depth.guest_address == 0 ||
+        !vulkan_context_->SupportsDepthStencilAttachmentFormat(
+            VK_FORMAT_D32_SFLOAT)) {
+      result.status = vulkan::VulkanGraphicsStatus::kUnsupported;
+      result.diagnostics.push_back({vulkan::VulkanGraphicsDiagnosticSeverity::kError,
+          vulkan::VulkanGraphicsDiagnosticCode::kFormatUnsupported, 0, VK_SUCCESS,
+          "translated draw depth target requires supported one-sample Z32 float storage"});
+      return result;
+    }
+  }
   if (vulkan_buffer_cache_ == nullptr) {
     vulkan_buffer_cache_ = std::make_unique<vulkan::VulkanGuestBufferCache>(
         *vulkan_context_, memory_, *resource_coherence_);
@@ -414,6 +429,33 @@ vulkan::VulkanGraphicsResult GpuRuntime::SubmitVulkanTranslatedDraw(
     vulkan_image_cache_->Discard(pixel_images);
     return result;
   }
+  std::optional<vulkan::VulkanGuestImagePreparation> depth_target;
+  if (request.depth_stencil_target.has_value()) {
+    const auto& depth = *request.depth_stencil_target;
+    auto prepared_depth = vulkan_image_cache_->PrepareDepthStencil({
+        depth.guest_address, depth.depth_format, depth.stencil_format,
+        depth.width, depth.height, depth.row_pitch_bytes, depth.samples, true});
+    if (!prepared_depth) {
+      result.status = prepared_depth.status == vulkan::VulkanGuestImageStatus::kResourceLimit
+          ? vulkan::VulkanGraphicsStatus::kResourceLimit
+          : vulkan::VulkanGraphicsStatus::kInvalidArgument;
+      result.diagnostics.push_back({vulkan::VulkanGraphicsDiagnosticSeverity::kError,
+          result.status == vulkan::VulkanGraphicsStatus::kResourceLimit
+              ? vulkan::VulkanGraphicsDiagnosticCode::kResourceLimit
+              : vulkan::VulkanGraphicsDiagnosticCode::kInputRejected,
+          0, VK_SUCCESS, prepared_depth.diagnostics.empty()
+              ? "translated draw depth-target preparation failed"
+              : prepared_depth.diagnostics.front().message});
+      vulkan_image_cache_->Discard(prepared_depth);
+      vulkan_image_cache_->Discard(target);
+      vulkan_buffer_cache_->Discard(vertex_buffers);
+      vulkan_buffer_cache_->Discard(pixel_buffers);
+      vulkan_image_cache_->Discard(vertex_images);
+      vulkan_image_cache_->Discard(pixel_images);
+      return result;
+    }
+    depth_target.emplace(std::move(prepared_depth));
+  }
   vulkan::VulkanGraphicsBindingPlan plan;
   const auto plan_status = vulkan::BuildVulkanGraphicsBindingPlan(
       vulkan_context_->properties(), {request.vertex, &vertex_buffers, &vertex_images},
@@ -430,6 +472,7 @@ vulkan::VulkanGraphicsResult GpuRuntime::SubmitVulkanTranslatedDraw(
         plan.diagnostics.empty() ? "graphics binding plan failed"
                                  : plan.diagnostics.front().message});
     vulkan_image_cache_->Discard(target);
+    if (depth_target.has_value()) vulkan_image_cache_->Discard(*depth_target);
     vulkan_buffer_cache_->Discard(vertex_buffers);
     vulkan_buffer_cache_->Discard(pixel_buffers);
     vulkan_image_cache_->Discard(vertex_images);
@@ -440,6 +483,7 @@ vulkan::VulkanGraphicsResult GpuRuntime::SubmitVulkanTranslatedDraw(
     auto created = vulkan::VulkanGraphicsExecution::Create(*vulkan_context_);
     if (!created) {
       vulkan_image_cache_->Discard(target);
+      if (depth_target.has_value()) vulkan_image_cache_->Discard(*depth_target);
       vulkan_buffer_cache_->Discard(vertex_buffers);
       vulkan_buffer_cache_->Discard(pixel_buffers);
       vulkan_image_cache_->Discard(vertex_images);
@@ -451,7 +495,8 @@ vulkan::VulkanGraphicsResult GpuRuntime::SubmitVulkanTranslatedDraw(
   return vulkan_graphics_execution_->Submit(
       request, *vulkan_buffer_cache_, std::move(vertex_buffers),
       std::move(pixel_buffers), *vulkan_image_cache_, std::move(vertex_images),
-      std::move(pixel_images), std::move(target), std::move(plan));
+      std::move(pixel_images), std::move(target), std::move(depth_target),
+      std::move(plan));
 }
 
 vulkan::VulkanGraphicsResult GpuRuntime::PollVulkanGraphics() {

@@ -145,12 +145,14 @@ struct FakeState {
   VkFrontFace graphics_front_face = VK_FRONT_FACE_MAX_ENUM;
   VkPipelineRenderingCreateInfo graphics_rendering_info{};
   VkFormat graphics_color_format = VK_FORMAT_UNDEFINED;
+  VkPipelineDepthStencilStateCreateInfo graphics_depth_stencil{};
   VkPipelineShaderStageCreateInfo graphics_stages[2]{};
   VkPipelineColorBlendAttachmentState graphics_blend{};
   std::vector<std::string_view> graphics_commands;
   VkViewport graphics_viewport{};
   VkRect2D graphics_scissor{};
   VkRenderingAttachmentInfo graphics_attachment{};
+  VkRenderingAttachmentInfo graphics_depth_attachment{};
   std::array<std::uint32_t, 4> graphics_draw{};
 } g;
 
@@ -474,6 +476,9 @@ VKAPI_ATTR VkResult VKAPI_CALL FakeCreateGraphicsPipelines(VkDevice, VkPipelineC
   g.graphics_front_face = info->pRasterizationState->frontFace;
   g.graphics_rendering_info = *static_cast<const VkPipelineRenderingCreateInfo*>(info->pNext);
   g.graphics_color_format = g.graphics_rendering_info.pColorAttachmentFormats[0];
+  if (info->pDepthStencilState != nullptr) {
+    g.graphics_depth_stencil = *info->pDepthStencilState;
+  }
   g.graphics_stages[0] = info->pStages[0];
   g.graphics_stages[1] = info->pStages[1];
   g.graphics_blend = info->pColorBlendState->pAttachments[0];
@@ -504,7 +509,13 @@ VKAPI_ATTR void VKAPI_CALL FakeCmdSetViewport(VkCommandBuffer, std::uint32_t,
 VKAPI_ATTR void VKAPI_CALL FakeCmdSetScissor(VkCommandBuffer, std::uint32_t,
     std::uint32_t, const VkRect2D* scissor) { g.graphics_scissor = *scissor; g.graphics_commands.push_back("scissor"); }
 VKAPI_ATTR void VKAPI_CALL FakeCmdBeginRendering(
-    VkCommandBuffer, const VkRenderingInfo* info) { g.graphics_attachment = info->pColorAttachments[0]; g.graphics_commands.push_back("begin-rendering"); }
+    VkCommandBuffer, const VkRenderingInfo* info) {
+  g.graphics_attachment = info->pColorAttachments[0];
+  if (info->pDepthAttachment != nullptr) {
+    g.graphics_depth_attachment = *info->pDepthAttachment;
+  }
+  g.graphics_commands.push_back("begin-rendering");
+}
 VKAPI_ATTR void VKAPI_CALL FakeCmdEndRendering(VkCommandBuffer) { g.graphics_commands.push_back("end-rendering"); }
 VKAPI_ATTR void VKAPI_CALL FakeCmdDraw(VkCommandBuffer, std::uint32_t vertices,
     std::uint32_t instances, std::uint32_t first_vertex, std::uint32_t first_instance) {
@@ -1636,10 +1647,49 @@ void TestMappings() {
   Check(!vk::MapGuestImageFormat(P::GpuEnumValue(P::BufferFormat::k32_32_32Float)),
         "unsupported three-component format was guessed");
 }
+
+void TestDepthStencilPreparation() {
+  Reset();
+  auto context = Context();
+  using Protection = kajps5::memory::GuestMemoryProtection;
+  kajps5::memory::GuestMemory memory(
+      0x1000, 0x1000, Protection::kRead | Protection::kWrite |
+                         Protection::kGpuRead | Protection::kGpuWrite);
+  Check(memory.InitializeFill(0x1200, 16, std::byte{0}),
+        "depth image guest initialization failed");
+  kajps5::gpu::GpuRuntime runtime(memory);
+  vk::VulkanGuestImageCache cache(*context, memory, runtime.resource_coherence());
+  auto depth = cache.PrepareDepthStencil({0x1200, P::DepthFormat::kZ32F,
+      P::StencilFormat::kInvalid, 2, 2, 0, VK_SAMPLE_COUNT_1_BIT, true});
+  Check(depth && depth.format.format == VK_FORMAT_D32_SFLOAT &&
+            depth.aspect_mask == VK_IMAGE_ASPECT_DEPTH_BIT &&
+            (g.image_usage & VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT) != 0 &&
+            depth.layout.total_bytes == 16,
+        "Z32 depth target did not create a checked depth attachment lease");
+  const auto command_buffer = Handle<VkCommandBuffer>(0x73);
+  Check(cache.RecordUpload(command_buffer, depth,
+                           VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+                           VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
+                           VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT) &&
+            cache.RecordReadback(command_buffer, depth,
+                                 VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
+                                 VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT),
+        "depth target did not record checked upload/readback transitions");
+  Check(g.upload_copies.size() == 1 && g.readback_copies.size() == 1 &&
+            g.upload_copies[0].imageSubresource.aspectMask == VK_IMAGE_ASPECT_DEPTH_BIT &&
+            g.readback_copies[0].imageSubresource.aspectMask == VK_IMAGE_ASPECT_DEPTH_BIT,
+        "depth target transfer copies used a non-depth aspect");
+  cache.Discard(depth);
+  auto unsupported = cache.PrepareDepthStencil({0x1200, P::DepthFormat::kZ16,
+      P::StencilFormat::kInvalid, 2, 2, 0, VK_SAMPLE_COUNT_1_BIT, true});
+  Check(!unsupported && unsupported.status == vk::VulkanGuestImageStatus::kUnsupportedFormat,
+        "unsupported depth format was accepted without device evidence");
+}
 }  // namespace
 
 int main() {
   TestMappings();
+  TestDepthStencilPreparation();
   TestPreparationAndTopology();
   TestCoherentAndRollback();
   TestTransferLeaseAndCoherence();

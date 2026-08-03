@@ -1,6 +1,8 @@
 // Copyright (C) 2026 KajPS5 contributors
-// Architecture reference: KytyPS5 image/cache model at fb5ecec455cf6c67154134429485ffccbfc34203.
-// Behavior reference: SharpEmu guest-image sizing and alias tests at 9e10d7c44a2821cfd5ccd3417c09c0cf269285a4.
+// Architecture reference: KytyPS5 image/cache and depthRenderTarget model at
+// fb5ecec455cf6c67154134429485ffccbfc34203.
+// Behavior reference: SharpEmu guest-image sizing, alias, and depth-attachment
+// tests at 9e10d7c44a2821cfd5ccd3417c09c0cf269285a4.
 // SPDX-License-Identifier: GPL-2.0-only
 
 #pragma once
@@ -20,7 +22,7 @@ namespace kajps5::memory { class GuestMemory; }
 
 namespace kajps5::gpu::vulkan {
 
-enum class VulkanImageStorageClass : std::uint8_t { kR8, kR8G8, kR8G8B8A8, kR16, kR16G16, kR16G16B16A16, kR32, kR32G32, kR32G32B32A32, kBc1, kBc3, kBc4, kBc5, kBc6, kBc7 };
+enum class VulkanImageStorageClass : std::uint8_t { kR8, kR8G8, kR8G8B8A8, kR16, kR16G16, kR16G16B16A16, kR32, kR32G32, kR32G32B32A32, kBc1, kBc3, kBc4, kBc5, kBc6, kBc7, kD32 };
 struct VulkanImageFormat { VkFormat format = VK_FORMAT_UNDEFINED; VulkanImageStorageClass storage_class{}; std::optional<VkFormat> sibling_format; };
 [[nodiscard]] std::optional<VulkanImageFormat> MapGuestImageFormat(std::uint32_t format) noexcept;
 
@@ -38,6 +40,24 @@ struct VulkanGuestImageRequest {
   std::uint32_t view_base_array_layer = 0;
   std::uint32_t view_layer_count = 0;
   std::optional<VkImageViewType> view_type;
+  // Attachment formats are not guest texture descriptor formats. The cache
+  // accepts a narrow override so depth storage still follows its one lease and
+  // coherence path.
+  std::optional<VulkanImageFormat> format_override;
+  VkImageAspectFlags aspect_mask = VK_IMAGE_ASPECT_COLOR_BIT;
+};
+
+// Depth/stencil storage is separate from texture descriptors. It still uses
+// the one image cache and GuestMemory/coherence owner.
+struct VulkanGuestDepthStencilRequest {
+  std::uint64_t guest_address = 0;
+  Prospero::DepthFormat depth_format = Prospero::DepthFormat::kInvalid;
+  Prospero::StencilFormat stencil_format = Prospero::StencilFormat::kInvalid;
+  std::uint32_t width = 0;
+  std::uint32_t height = 0;
+  std::uint64_t row_pitch_bytes = 0;
+  VkSampleCountFlagBits samples = VK_SAMPLE_COUNT_1_BIT;
+  bool writable = false;
 };
 
 // Vulkan handles are command-recordable leases. They neither own GuestMemory
@@ -60,6 +80,7 @@ struct VulkanGuestImagePreparation {
   bool upload_recorded = false;
   bool readback_recorded = false;
   bool gpu_dirty = false;
+  VkImageAspectFlags aspect_mask = VK_IMAGE_ASPECT_COLOR_BIT;
   VkImageLayout current_layout = VK_IMAGE_LAYOUT_UNDEFINED;
   std::vector<std::byte> uploaded_bytes;
   std::vector<VkBufferImageCopy> copy_regions;
@@ -136,6 +157,8 @@ class VulkanGuestImageCache final {
   VulkanGuestImageCache(const VulkanGuestImageCache&) = delete;
   VulkanGuestImageCache& operator=(const VulkanGuestImageCache&) = delete;
   [[nodiscard]] VulkanGuestImagePreparation Prepare(const VulkanGuestImageRequest& request);
+  [[nodiscard]] VulkanGuestImagePreparation PrepareDepthStencil(
+      const VulkanGuestDepthStencilRequest& request);
   [[nodiscard]] VulkanGuestImageSetPreparation PrepareTranslated(
       const shader::recompiler::CompileResult& result);
   [[nodiscard]] bool RecordUpload(VkCommandBuffer command_buffer,
