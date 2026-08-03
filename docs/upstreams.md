@@ -7,6 +7,13 @@ KajPS5 uses these independent projects as references:
 | [KytyPS5](https://github.com/KytyPS5/KytyPS5) | Primary native architecture reference | C++ | GPL-2.0-only, with original Kyty portions under MIT | `fb5ecec455cf6c67154134429485ffccbfc34203` |
 | [SharpEmu](https://github.com/sharpemu/sharpemu) | Behavior and test reference | C# | GPL-2.0-or-later | `9e10d7c44a2821cfd5ccd3417c09c0cf269285a4` |
 
+## Hardware references
+
+Use AMD's official [RDNA 2 Shader Instruction Set Architecture](https://docs.amd.com/v/u/en-US/rdna2-shader-instruction-set-architecture)
+guide to verify shader instruction encodings and behavior when the emulator
+references do not provide enough evidence. Treat it as a hardware baseline;
+PS5-specific behavior still needs separate evidence and tests.
+
 The AGC command-buffer core closely adapts selected KytyPS5 algorithms. Other
 current integrations use upstream behavior as evidence. Exact provenance is
 recorded in `THIRD_PARTY_NOTICES.md`.
