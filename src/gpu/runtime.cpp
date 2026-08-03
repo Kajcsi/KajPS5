@@ -61,6 +61,28 @@ bool HasValidGraphicsPreflight(
          topology_valid && cull_valid && front_face_valid && blend_valid;
 }
 
+std::optional<GuestImageLayout> PlannedDepthLayout(
+    const vulkan::VulkanGraphicsDepthStencilTarget& target) {
+  GuestImageLayoutInput input{};
+  input.guest_address = target.guest_address;
+  input.format = static_cast<std::uint32_t>(Prospero::BufferFormat::k32Float);
+  input.width = target.width;
+  input.height = target.height;
+  input.depth = 1;
+  input.image_type = Prospero::ImageType::kColor2D;
+  input.tile_mode = Prospero::TileMode::kLinear;
+  input.tightly_packed = target.row_pitch_bytes == 0;
+  input.row_pitch_bytes = target.row_pitch_bytes;
+  if (target.row_pitch_bytes != 0) {
+    if (target.row_pitch_bytes > std::numeric_limits<std::uint64_t>::max() /
+                                     target.height) return std::nullopt;
+    input.slice_pitch_bytes = target.row_pitch_bytes * target.height;
+  }
+  auto layout = CalculateGuestImageLayout(input);
+  return layout.ok() ? std::optional<GuestImageLayout>{std::move(layout)}
+                     : std::nullopt;
+}
+
 constexpr std::uint32_t kPm4Type3 = 0xc0000000U;
 constexpr std::uint32_t kPm4LengthMask = 0x3fffU;
 constexpr std::uint32_t kPm4RegisterMask = 0x3fU;
@@ -346,6 +368,29 @@ vulkan::VulkanGraphicsResult GpuRuntime::SubmitVulkanTranslatedDraw(
   if (vulkan_image_cache_ == nullptr) {
     vulkan_image_cache_ = std::make_unique<vulkan::VulkanGuestImageCache>(
         *vulkan_context_, memory_, *resource_coherence_);
+  }
+  // Reclaim signalled work without blocking. If a writer remains in flight,
+  // GuestMemory still contains the older generation and cannot seed either an
+  // attachment load or a read-only feedback snapshot.
+  if (vulkan_graphics_execution_ != nullptr) {
+    const auto reclaimed = vulkan_graphics_execution_->PollCompleted();
+    if (!reclaimed) return reclaimed;
+  }
+  const auto color_layout = CalculateGuestImageLayout(request.color_target);
+  const auto depth_layout = request.depth_stencil_target.has_value()
+      ? PlannedDepthLayout(*request.depth_stencil_target) : std::nullopt;
+  const bool color_pending = color_layout.ok() &&
+      resource_coherence_->HasGpuWritePendingOverlap(
+          color_layout.storage_key.guest_address, color_layout.storage_key.byte_count);
+  const bool depth_pending = depth_layout.has_value() &&
+      resource_coherence_->HasGpuWritePendingOverlap(
+          depth_layout->storage_key.guest_address, depth_layout->storage_key.byte_count);
+  if (color_pending || depth_pending) {
+    result.status = vulkan::VulkanGraphicsStatus::kRetainedWorkPending;
+    result.diagnostics.push_back({vulkan::VulkanGraphicsDiagnosticSeverity::kWarning,
+        vulkan::VulkanGraphicsDiagnosticCode::kRetainedWorkPending, 0, VK_NOT_READY,
+        "translated draw retained overlapping GPU work; retry after PollVulkanGraphics"});
+    return result;
   }
   auto vertex_buffers = vulkan_buffer_cache_->Prepare(*request.vertex);
   if (!vertex_buffers) {

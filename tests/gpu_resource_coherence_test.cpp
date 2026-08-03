@@ -539,6 +539,28 @@ void TestGpuWriteStateIsExplicit() {
         "explicit GPU invalidation did not preserve CPU upload state");
 }
 
+void TestInFlightOverlapQueryIsCheckedAndNonConsuming() {
+  Fixture fixture;
+  auto& coherence = fixture.runtime.resource_coherence();
+  const auto resource = coherence.RegisterResource(kResourceAddress, kResourceSize);
+  Check(resource.has_value(), "in-flight query fixture resource was rejected");
+  Check(!coherence.HasGpuWritePendingOverlap(kResourceAddress, kResourceSize) &&
+            !coherence.HasGpuWritePendingOverlap(kResourceAddress + kResourceSize,
+                                                 1),
+        "clean or exact-boundary resource reported an in-flight GPU write");
+  Check(coherence.MarkGpuWrite(*resource) &&
+            coherence.HasGpuWritePendingOverlap(kResourceAddress - 1, 2) &&
+            coherence.HasGpuWritePendingOverlap(kResourceAddress + kResourceSize - 1,
+                                                 2),
+        "partial checked overlap did not find a pending GPU write");
+  Check(coherence.HasGpuWritePendingOverlap(
+            std::numeric_limits<std::uint64_t>::max(), 1),
+        "overflowing overlap query did not fail closed");
+  Check(coherence.InvalidateGpuWrite(*resource) &&
+            !coherence.HasGpuWritePendingOverlap(kResourceAddress, kResourceSize),
+        "in-flight query consumed or retained an invalidated GPU write");
+}
+
 void TestGpuOwnerCompositionFailureIsTransactional() {
   using kajps5::gpu::GpuRuntime;
   using kajps5::memory::GuestMemory;
@@ -696,6 +718,7 @@ int main() {
   TestOutOfOrderWriteNotificationsDoNotRegressResource();
   TestHostInitializersSerializeProtectionTransitions();
   TestGpuWriteStateIsExplicit();
+  TestInFlightOverlapQueryIsCheckedAndNonConsuming();
   TestGpuOwnerCompositionFailureIsTransactional();
   TestObserverIsUnlockedAndConcurrentWritesAreSafe();
   TestGenerationWrapPolicy();

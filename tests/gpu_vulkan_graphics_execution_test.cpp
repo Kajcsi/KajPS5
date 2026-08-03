@@ -77,6 +77,10 @@ kajps5::gpu::shader::recompiler::CompileResult ResourceProgram(
   result.resources.buffers.push_back(buffer);
   result.resources.user_data = {stage == ShaderType::Vertex ? 0x1234U : 0x5678U};
   result.resources.images[0].dwords[0] = image_address >> 8U;
+  // The generic cache fixture encodes a 5x2 texture. Graphics feedback tests
+  // need the exact 2x2 attachment storage descriptor.
+  result.resources.images[0].dwords[1] |= 1U << 30U;
+  result.resources.images[0].dwords[2] = 1U << 14U;
   return result;
 }
 
@@ -327,6 +331,79 @@ void TestResourcefulGraphicsRuntimePath() {
         "resourceful graphics draw did not record stage upload and readback barriers");
 }
 
+void TestReadOnlyAttachmentSnapshotAliases() {
+  Reset();
+  using Protection = kajps5::memory::GuestMemoryProtection;
+  kajps5::memory::GuestMemory memory(
+      0x1000, 0x1000, Protection::kRead | Protection::kWrite |
+                         Protection::kGpuRead | Protection::kGpuWrite);
+  Check(memory.InitializeFill(0x1000, 0x900, std::byte{0x45}),
+        "feedback snapshot fixture initialization failed");
+  auto runtime = Runtime(memory);
+  // This sampled image has the exact attachment storage descriptor. Prepare()
+  // gives it a distinct immutable VkImage lease before the writable target.
+  const auto vertex = ResourceProgram(ShaderType::Vertex, false, 0x1600, 0x1000);
+  const auto pixel = ResourceProgram(ShaderType::Pixel, false, 0x1700, 0x1400);
+  const auto aliased = runtime->SubmitVulkanTranslatedDraw(Draw(vertex, pixel));
+  Check(static_cast<bool>(aliased) && g.graphics_attachment.imageView != VK_NULL_HANDLE,
+        "exact read-only color alias did not submit through the snapshot path");
+
+  auto writable_vertex = ResourceProgram(ShaderType::Vertex, true, 0x1600, 0x1000);
+  const auto writable = runtime->SubmitVulkanTranslatedDraw(
+      Draw(writable_vertex, pixel));
+  Check(writable.status == vk::VulkanGraphicsStatus::kInvalidArgument,
+        "writable color attachment feedback was accepted");
+
+  auto partial_vertex = ResourceProgram(ShaderType::Vertex, false, 0x1600, 0x1000);
+  partial_vertex.resources.images[0].dwords[1] &= ~(3U << 30U);
+  const auto partial = runtime->SubmitVulkanTranslatedDraw(
+      Draw(partial_vertex, pixel));
+  Check(partial.status == vk::VulkanGraphicsStatus::kInvalidArgument,
+        "partial color attachment feedback was accepted");
+
+  const auto buffer_alias = ResourceProgram(ShaderType::Vertex, false, 0x1000, 0x1400);
+  const auto buffer = runtime->SubmitVulkanTranslatedDraw(Draw(buffer_alias, pixel));
+  Check(buffer.status == vk::VulkanGraphicsStatus::kInvalidArgument,
+        "buffer alias of a writable color attachment was accepted");
+}
+
+void TestDepthAttachmentSnapshotAliases() {
+  Reset();
+  using Protection = kajps5::memory::GuestMemoryProtection;
+  kajps5::memory::GuestMemory memory(
+      0x1000, 0x1000, Protection::kRead | Protection::kWrite |
+                         Protection::kGpuRead | Protection::kGpuWrite);
+  Check(memory.InitializeFill(0x1000, 0x900, std::byte{0x2f}),
+        "depth feedback snapshot fixture initialization failed");
+  auto runtime = Runtime(memory);
+  auto depth_snapshot = ResourceProgram(ShaderType::Vertex, false, 0x1600, 0x1000);
+  depth_snapshot.resources.images[0].dwords[1] =
+      (depth_snapshot.resources.images[0].dwords[1] & ~(0x1ffU << 20U)) |
+      (P::GpuEnumValue(P::BufferFormat::k32Float) << 20U);
+  depth_snapshot.program.info.images[0].depth_compare = true;
+  depth_snapshot.program.info.sampled_pairs.push_back({0, 0});
+  const auto pixel = ResourceProgram(ShaderType::Pixel, false, 0x1700, 0x1400);
+  auto request = Draw(depth_snapshot, pixel);
+  request.color_target.guest_address = 0x1800;
+  request.depth_stencil_target = vk::VulkanGraphicsDepthStencilTarget{
+      0x1000, P::DepthFormat::kZ32F, P::StencilFormat::kInvalid, 2, 2, 0,
+      VK_SAMPLE_COUNT_1_BIT};
+  g.format_features = VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT |
+      VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT;
+  const auto aliased = runtime->SubmitVulkanTranslatedDraw(request);
+  Check(static_cast<bool>(aliased),
+        "compatible Z32 depth alias did not submit through a D32 snapshot");
+
+  auto incompatible = depth_snapshot;
+  incompatible.program.info.images[0].depth_compare = false;
+  incompatible.program.info.sampled_pairs.clear();
+  auto incompatible_request = request;
+  incompatible_request.vertex = &incompatible;
+  const auto rejected = runtime->SubmitVulkanTranslatedDraw(incompatible_request);
+  Check(rejected.status == vk::VulkanGraphicsStatus::kInvalidArgument,
+        "color-aspect R32 descriptor was accepted as a depth snapshot");
+}
+
 }  // namespace
 
 int main() {
@@ -334,5 +411,7 @@ int main() {
   TestEarlyRejectionAndRetention();
   TestDepthTargetPath();
   TestResourcefulGraphicsRuntimePath();
+  TestReadOnlyAttachmentSnapshotAliases();
+  TestDepthAttachmentSnapshotAliases();
   return 0;
 }

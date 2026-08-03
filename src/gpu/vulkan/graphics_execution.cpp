@@ -653,6 +653,25 @@ VulkanGraphicsResult VulkanGraphicsExecution::Submit(
                   "the retained Vulkan graphics submission limit is exhausted");
   }
 
+  const auto snapshot_error = [](const VulkanGuestImagePreparation& snapshot,
+                                 const VulkanGuestImagePreparation& attachment)
+      -> const char* {
+    // Prepare() creates a separate VkImage allocation for every lease. The
+    // source lease is thus an immutable pre-draw snapshot once its guest bytes
+    // are recorded, never the live writable attachment.
+    if (snapshot.image == VK_NULL_HANDLE || snapshot.image == attachment.image ||
+        snapshot.view == VK_NULL_HANDLE || snapshot.view == attachment.view)
+      return "live attachment image or view";
+    if (snapshot.writable) return "writable snapshot lease";
+    if (snapshot.aspect_mask != attachment.aspect_mask) return "incompatible image aspect";
+    if (snapshot.format.storage_class != attachment.format.storage_class)
+      return "incompatible storage format";
+    if (snapshot.layout.storage_key.guest_address !=
+            attachment.layout.storage_key.guest_address ||
+        snapshot.layout.storage_key.byte_count != attachment.layout.storage_key.byte_count)
+      return "partial storage range";
+    return nullptr;
+  };
   const auto overlaps_target = [&](std::uint64_t address, std::uint64_t size) {
     const auto target_address = target.layout.storage_key.guest_address;
     const auto target_size = target.layout.storage_key.byte_count;
@@ -694,11 +713,39 @@ VulkanGraphicsResult VulkanGraphicsExecution::Submit(
     }
   }
   for (const auto& upload : plan.image_uploads) {
-    if (overlaps_target(upload.guest_address, upload.guest_size) ||
-        overlaps_depth(upload.guest_address, upload.guest_size)) {
+    auto& images = upload.stage_set == 0 ? vertex_images : pixel_images;
+    if (upload.preparation_index >= images.images.size()) {
       return reject(VulkanGraphicsStatus::kInvalidArgument,
                     VulkanGraphicsDiagnosticCode::kInputRejected,
-                    "render target overlaps a planned shader image guest range");
+                    "render-target alias has an invalid shader image preparation");
+    }
+    const auto& snapshot = images.images[upload.preparation_index];
+    const bool aliases_color = overlaps_target(upload.guest_address, upload.guest_size);
+    const bool aliases_depth = overlaps_depth(upload.guest_address, upload.guest_size);
+    if (!aliases_color && !aliases_depth) continue;
+    // Storage descriptors and partial/incompatible ranges have no defined
+    // feedback contract. Only an exact sampled, read-only snapshot is safe.
+    if (upload.layout != VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL ||
+        (upload.shader_access & VK_ACCESS_SHADER_WRITE_BIT) != 0 ||
+        (upload.shader_access & VK_ACCESS_SHADER_READ_BIT) == 0) {
+      return reject(VulkanGraphicsStatus::kInvalidArgument,
+                    VulkanGraphicsDiagnosticCode::kInputRejected,
+                    "render-target alias uses a writable or storage shader descriptor");
+    }
+    if (aliases_color) {
+      const char* error = snapshot_error(snapshot, target);
+      if (error == nullptr) continue;
+      return reject(VulkanGraphicsStatus::kInvalidArgument,
+                    VulkanGraphicsDiagnosticCode::kInputRejected,
+                    std::string("color-target alias is not an exact immutable snapshot: ") + error);
+    }
+    if (aliases_depth) {
+      const char* error = depth_target.has_value()
+          ? snapshot_error(snapshot, *depth_target) : "missing depth attachment";
+      if (error == nullptr) continue;
+      return reject(VulkanGraphicsStatus::kInvalidArgument,
+                    VulkanGraphicsDiagnosticCode::kInputRejected,
+                    std::string("depth-target alias lacks a compatible depth snapshot: ") + error);
     }
   }
 

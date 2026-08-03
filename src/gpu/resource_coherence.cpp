@@ -161,6 +161,17 @@ bool GpuResourceCoherence::InvalidateGpuWrite(
   return true;
 }
 
+bool GpuResourceCoherence::HasGpuWritePendingOverlap(
+    std::uint64_t address, std::uint64_t size) const noexcept {
+  if (!IsValidRange(address, size)) return true;
+  std::lock_guard lock(mutex_);
+  for (const auto& [_, record] : records_) {
+    if (record.gpu_write_pending &&
+        RangesOverlap(address, size, record.address, record.size)) return true;
+  }
+  return false;
+}
+
 void GpuResourceCoherence::OnGuestMemoryWrite(
     const memory::GuestMemoryWriteEvent& event) noexcept {
   if (!IsValidRange(event.address, event.size)) {

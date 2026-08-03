@@ -105,6 +105,7 @@ enum class VulkanGraphicsStatus : std::uint8_t {
   kDeviceFunctionUnavailable,
   kResourceLimit,
   kReadbackFailed,
+  kRetainedWorkPending,
   kFenceWaitTimedOut,
   kFenceWaitFailed,
   kFenceStatusFailed,
@@ -119,6 +120,7 @@ enum class VulkanGraphicsDiagnosticCode : std::uint8_t {
   kSubmissionReclaimed,
   kFenceWaitTimedOut,
   kReadbackFailed,
+  kRetainedWorkPending,
   kDeviceLost,
   kResourceLimit,
 };

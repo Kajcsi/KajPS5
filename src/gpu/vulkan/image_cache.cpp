@@ -724,6 +724,19 @@ VulkanGuestImageSetPreparation VulkanGuestImageCache::PrepareTranslated(
                   "image descriptor is null, tiled, multisampled, or malformed");
           return set;
         }
+        const bool depth_snapshot = !storage &&
+            program.info.images[dense].depth_compare &&
+            request.input.format == static_cast<std::uint32_t>(
+                Prospero::BufferFormat::k32Float);
+        // A depth-compare descriptor backed by the Z32 guest byte shape must
+        // retain a depth aspect. It is still a separately prepared sampled
+        // lease, so graphics feedback can bind it only as an immutable D32
+        // snapshot rather than as the live depth attachment.
+        if (depth_snapshot) {
+          request.format_override = VulkanImageFormat{
+              VK_FORMAT_D32_SFLOAT, VulkanImageStorageClass::kD32, std::nullopt};
+          request.aspect_mask = VK_IMAGE_ASPECT_DEPTH_BIT;
+        }
         const auto native_format = MapGuestImageFormat(request.input.format);
         if (!native_format) {
           FailSet(set, VulkanGuestImageSetStatus::kInvalidDescriptor,

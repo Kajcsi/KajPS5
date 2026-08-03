@@ -68,6 +68,12 @@ class GpuResourceCoherence final : public memory::GuestMemoryWriteObserver {
   [[nodiscard]] bool MarkGpuWrite(GpuResourceId resource) noexcept;
   [[nodiscard]] bool InvalidateGpuWrite(GpuResourceId resource) noexcept;
 
+  // Non-consuming, checked range query for submission ordering. Backends use
+  // this before copying guest bytes into an immutable snapshot: an overlapping
+  // retained GPU writer means GuestMemory is not yet the authoritative source.
+  [[nodiscard]] bool HasGpuWritePendingOverlap(
+      std::uint64_t address, std::uint64_t size) const noexcept;
+
  private:
   friend class GpuRuntime;
 
