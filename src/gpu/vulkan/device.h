@@ -170,6 +170,11 @@ struct VulkanDeviceCandidate {
   std::uint32_t device_id = 0;
   VulkanPhysicalDeviceType type = VulkanPhysicalDeviceType::kOther;
   std::uint64_t min_storage_buffer_offset_alignment = 1;
+  std::uint64_t max_storage_buffer_range = 0;
+  std::uint32_t max_per_stage_descriptor_storage_buffers = 0;
+  std::uint32_t max_descriptor_set_storage_buffers = 0;
+  std::uint32_t max_push_constants_size = 0;
+  std::uint64_t non_coherent_atom_size = 1;
   // Copied from VkPhysicalDeviceLimits so compute execution can reject an
   // invalid vkCmdDispatch before recording the command buffer.
   std::array<std::uint32_t, 3> max_compute_work_group_count = {1, 1, 1};
@@ -271,6 +276,9 @@ class VulkanDeviceContext final {
   [[nodiscard]] VkPhysicalDevice physical_device() const noexcept;
   [[nodiscard]] VkDevice device() const noexcept;
   [[nodiscard]] VkQueue queue() const noexcept;
+  [[nodiscard]] const std::optional<VkPhysicalDeviceMemoryProperties> &
+  memory_properties() const noexcept;
+  [[nodiscard]] bool is_device_lost() noexcept;
   // Child RAII owners resolve their own small, device-local dispatch tables
   // through this context. No process-global Vulkan dispatch is exposed.
   [[nodiscard]] PFN_vkVoidFunction ResolveDeviceFunction(

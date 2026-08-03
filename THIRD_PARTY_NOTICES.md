@@ -484,9 +484,20 @@ guest alias using a bounded exact event set and a conservative whole-memory
 fallback; its range-local mapping tokens are captured atomically with mapping
 updates, but remain snapshots rather than backend-lifetime reservations.
 `GpuRuntime` owns the scalar resource records, which preserve an explicit
-GPU-write-pending state, preserve monotonic CPU-write generations despite
-out-of-order callbacks, and require the future backend to perform any real
-upload, readback, or invalidation. Host-mapped initialization serializes its
+GPU-write-pending state and monotonic CPU-write generations despite
+out-of-order callbacks.
+
+The bounded guest-buffer preparation seam in
+`src/gpu/vulkan/buffer_cache.*` follows the cache ownership shape observed in
+KytyPS5 `src/graphics/host_gpu/renderer/cache/bufferCache.*` at commit
+`fb5ecec455cf6c67154134429485ffccbfc34203`. Its checked upload, bounded
+versioned backing pool, and live-CPU-preserving writeback are informed by SharpEmu commit
+`9e10d7c44a2821cfd5ccd3417c09c0cf269285a4` and the reviewed changes
+`f3d9439952a40c5b81b0d0dec443184e82a683d1` and `26bda04`. No upstream cache,
+page manager, scheduler, address-space owner, or source code was copied.
+The Vulkan backend performs checked upload and fence-complete readback through
+the existing `GuestMemory` and resource-coherence owners.
+Host-mapped initialization serializes its
 temporary native protection transitions. A future fault-backed observer must
 defer a verified fault into GuestMemory's ordinary write-observation funnel; it
 cannot invoke a GPU callback from fault context. The new GPU source and test use

@@ -199,6 +199,8 @@ struct InstanceDispatch {
   PFN_vkGetPhysicalDeviceProperties get_physical_device_properties = nullptr;
   PFN_vkGetPhysicalDeviceProperties2 get_physical_device_properties2 =
       nullptr;
+  PFN_vkGetPhysicalDeviceMemoryProperties
+      get_physical_device_memory_properties = nullptr;
   PFN_vkGetPhysicalDeviceFeatures2 get_physical_device_features2 = nullptr;
   PFN_vkGetPhysicalDeviceQueueFamilyProperties
       get_physical_device_queue_family_properties = nullptr;
@@ -229,6 +231,10 @@ bool LoadInstanceDispatch(PFN_vkGetInstanceProcAddr get_instance_proc_addr,
   dispatch.get_physical_device_properties2 =
       LoadInstanceFunction<PFN_vkGetPhysicalDeviceProperties2>(
           get_instance_proc_addr, instance, "vkGetPhysicalDeviceProperties2");
+  dispatch.get_physical_device_memory_properties =
+      LoadInstanceFunction<PFN_vkGetPhysicalDeviceMemoryProperties>(
+          get_instance_proc_addr, instance,
+          "vkGetPhysicalDeviceMemoryProperties");
   dispatch.get_physical_device_features2 =
       LoadInstanceFunction<PFN_vkGetPhysicalDeviceFeatures2>(
           get_instance_proc_addr, instance, "vkGetPhysicalDeviceFeatures2");
@@ -313,6 +319,14 @@ bool DiscoverCandidate(const InstanceDispatch& dispatch,
   candidate.min_storage_buffer_offset_alignment =
       std::max<std::uint64_t>(
           properties.limits.minStorageBufferOffsetAlignment, 1U);
+  candidate.max_storage_buffer_range = properties.limits.maxStorageBufferRange;
+  candidate.max_per_stage_descriptor_storage_buffers =
+      properties.limits.maxPerStageDescriptorStorageBuffers;
+  candidate.max_descriptor_set_storage_buffers =
+      properties.limits.maxDescriptorSetStorageBuffers;
+  candidate.max_push_constants_size = properties.limits.maxPushConstantsSize;
+  candidate.non_coherent_atom_size =
+      std::max<std::uint64_t>(properties.limits.nonCoherentAtomSize, 1U);
   candidate.max_compute_work_group_count = {
       properties.limits.maxComputeWorkGroupCount[0],
       properties.limits.maxComputeWorkGroupCount[1],
@@ -540,6 +554,7 @@ struct VulkanDeviceContext::Impl {
   VkQueue queue = VK_NULL_HANDLE;
   VulkanDeviceCandidate selected_candidate;
   VulkanFeatureEnablement enabled_capabilities;
+  std::optional<VkPhysicalDeviceMemoryProperties> memory_properties;
   std::uint32_t queue_family_index = 0;
   std::mutex queue_mutex;
   bool device_lost = false;
@@ -840,6 +855,13 @@ VulkanContextCreateResult VulkanDeviceContext::Create(
   impl->physical_device = physical_devices[selected.candidate_index];
   impl->selected_candidate = candidates[selected.candidate_index];
   impl->queue_family_index = selected.queue_family_index;
+  if (impl->instance_dispatch.get_physical_device_memory_properties !=
+      nullptr) {
+    VkPhysicalDeviceMemoryProperties memory_properties{};
+    impl->instance_dispatch.get_physical_device_memory_properties(
+        impl->physical_device, &memory_properties);
+    impl->memory_properties = memory_properties;
+  }
   AddDiagnostic(diagnostics, VulkanDiagnosticSeverity::kInfo,
                 VulkanDiagnosticCode::kSelectedDevice,
                 "selected Vulkan device '" + impl->selected_candidate.name +
@@ -996,6 +1018,13 @@ VkDevice VulkanDeviceContext::device() const noexcept {
 VkQueue VulkanDeviceContext::queue() const noexcept {
   return impl_->queue;
 }
+
+const std::optional<VkPhysicalDeviceMemoryProperties> &
+VulkanDeviceContext::memory_properties() const noexcept {
+  return impl_->memory_properties;
+}
+
+bool VulkanDeviceContext::is_device_lost() noexcept { return IsDeviceLost(); }
 
 PFN_vkVoidFunction VulkanDeviceContext::ResolveDeviceFunction(
     const char* name) const noexcept {

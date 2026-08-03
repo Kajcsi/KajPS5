@@ -34,11 +34,20 @@ struct ComputeDispatch {
   PFN_vkDestroyPipeline destroy_pipeline = nullptr;
   PFN_vkCmdBindPipeline cmd_bind_pipeline = nullptr;
   PFN_vkCmdDispatch cmd_dispatch = nullptr;
+  PFN_vkCmdPipelineBarrier cmd_pipeline_barrier = nullptr;
   PFN_vkCreateFence create_fence = nullptr;
   PFN_vkDestroyFence destroy_fence = nullptr;
   PFN_vkWaitForFences wait_for_fences = nullptr;
   PFN_vkGetFenceStatus get_fence_status = nullptr;
   PFN_vkQueueSubmit queue_submit = nullptr;
+  PFN_vkCreateDescriptorSetLayout create_descriptor_set_layout = nullptr;
+  PFN_vkDestroyDescriptorSetLayout destroy_descriptor_set_layout = nullptr;
+  PFN_vkCreateDescriptorPool create_descriptor_pool = nullptr;
+  PFN_vkDestroyDescriptorPool destroy_descriptor_pool = nullptr;
+  PFN_vkAllocateDescriptorSets allocate_descriptor_sets = nullptr;
+  PFN_vkUpdateDescriptorSets update_descriptor_sets = nullptr;
+  PFN_vkCmdBindDescriptorSets cmd_bind_descriptor_sets = nullptr;
+  PFN_vkCmdPushConstants cmd_push_constants = nullptr;
 };
 
 struct Submission {
@@ -48,6 +57,11 @@ struct Submission {
   VkPipelineLayout pipeline_layout = VK_NULL_HANDLE;
   VkPipeline pipeline = VK_NULL_HANDLE;
   VkFence fence = VK_NULL_HANDLE;
+  VkDescriptorSetLayout descriptor_set_layout = VK_NULL_HANDLE;
+  VkDescriptorPool descriptor_pool = VK_NULL_HANDLE;
+  VkDescriptorSet descriptor_set = VK_NULL_HANDLE;
+  VulkanGuestBufferCache *guest_cache = nullptr;
+  std::optional<VulkanGuestBufferPreparation> guest_preparation;
   std::uint64_t timeline = 0;
 };
 
@@ -72,6 +86,24 @@ void DestroySubmission(const ComputeDispatch& dispatch,
   if (submission.fence != VK_NULL_HANDLE) {
     dispatch.destroy_fence(device, submission.fence, nullptr);
     submission.fence = VK_NULL_HANDLE;
+  }
+  if (submission.guest_preparation.has_value() &&
+      submission.guest_cache != nullptr) {
+    submission.guest_cache->Discard(*submission.guest_preparation);
+    submission.guest_preparation.reset();
+    submission.guest_cache = nullptr;
+  }
+  if (submission.descriptor_pool != VK_NULL_HANDLE &&
+      dispatch.destroy_descriptor_pool != nullptr) {
+    dispatch.destroy_descriptor_pool(device, submission.descriptor_pool,
+                                     nullptr);
+    submission.descriptor_pool = VK_NULL_HANDLE;
+  }
+  if (submission.descriptor_set_layout != VK_NULL_HANDLE &&
+      dispatch.destroy_descriptor_set_layout != nullptr) {
+    dispatch.destroy_descriptor_set_layout(
+        device, submission.descriptor_set_layout, nullptr);
+    submission.descriptor_set_layout = VK_NULL_HANDLE;
   }
   if (submission.pipeline != VK_NULL_HANDLE) {
     dispatch.destroy_pipeline(device, submission.pipeline, nullptr);
@@ -157,6 +189,8 @@ bool LoadComputeDispatch(VulkanDeviceContext& context,
       resolve("vkCmdBindPipeline"));
   dispatch.cmd_dispatch =
       reinterpret_cast<PFN_vkCmdDispatch>(resolve("vkCmdDispatch"));
+  dispatch.cmd_pipeline_barrier = reinterpret_cast<PFN_vkCmdPipelineBarrier>(
+      resolve("vkCmdPipelineBarrier"));
   dispatch.create_fence =
       reinterpret_cast<PFN_vkCreateFence>(resolve("vkCreateFence"));
   dispatch.destroy_fence =
@@ -167,6 +201,29 @@ bool LoadComputeDispatch(VulkanDeviceContext& context,
       reinterpret_cast<PFN_vkGetFenceStatus>(resolve("vkGetFenceStatus"));
   dispatch.queue_submit =
       reinterpret_cast<PFN_vkQueueSubmit>(resolve("vkQueueSubmit"));
+  dispatch.create_descriptor_set_layout =
+      reinterpret_cast<PFN_vkCreateDescriptorSetLayout>(
+          resolve("vkCreateDescriptorSetLayout"));
+  dispatch.destroy_descriptor_set_layout =
+      reinterpret_cast<PFN_vkDestroyDescriptorSetLayout>(
+          resolve("vkDestroyDescriptorSetLayout"));
+  dispatch.create_descriptor_pool =
+      reinterpret_cast<PFN_vkCreateDescriptorPool>(
+          resolve("vkCreateDescriptorPool"));
+  dispatch.destroy_descriptor_pool =
+      reinterpret_cast<PFN_vkDestroyDescriptorPool>(
+          resolve("vkDestroyDescriptorPool"));
+  dispatch.allocate_descriptor_sets =
+      reinterpret_cast<PFN_vkAllocateDescriptorSets>(
+          resolve("vkAllocateDescriptorSets"));
+  dispatch.update_descriptor_sets =
+      reinterpret_cast<PFN_vkUpdateDescriptorSets>(
+          resolve("vkUpdateDescriptorSets"));
+  dispatch.cmd_bind_descriptor_sets =
+      reinterpret_cast<PFN_vkCmdBindDescriptorSets>(
+          resolve("vkCmdBindDescriptorSets"));
+  dispatch.cmd_push_constants =
+      reinterpret_cast<PFN_vkCmdPushConstants>(resolve("vkCmdPushConstants"));
 
   std::string missing;
   const auto require = [&](bool available, const char* name) {
@@ -262,6 +319,7 @@ struct VulkanComputeExecution::Impl {
   std::uint64_t next_timeline = 1;
   std::uint64_t completed_timeline = 0;
   bool device_lost = false;
+  std::size_t lost_dirty_resource_count = 0;
   bool owns_context_execution_slot = false;
 };
 
@@ -299,10 +357,29 @@ void DestroyRetainedSubmissions(ExecutionImpl& impl) noexcept {
 }
 
 template <typename ExecutionImpl>
+void DestroyLostRetainedSubmissions(ExecutionImpl &impl) noexcept {
+  VulkanGuestBufferCache *cache = nullptr;
+  for (std::optional<Submission> &retained_submission : impl.retained) {
+    if (!retained_submission.has_value())
+      continue;
+    if (retained_submission->guest_cache != nullptr)
+      cache = retained_submission->guest_cache;
+    DestroySubmission(impl.dispatch, impl.context.device(),
+                      *retained_submission);
+    retained_submission.reset();
+  }
+  if (cache != nullptr) {
+    impl.lost_dirty_resource_count = std::max(
+        impl.lost_dirty_resource_count, cache->lost_dirty_resource_count());
+  }
+}
+
+template <typename ExecutionImpl>
 void SnapshotExecutionState(const ExecutionImpl& impl,
                             VulkanComputeResult& result) {
   result.completed_timeline = impl.completed_timeline;
   result.retained_submission_count = RetainedSubmissionCount(impl);
+  result.lost_dirty_resource_count = impl.lost_dirty_resource_count;
 }
 
 template <typename ExecutionImpl>
@@ -320,6 +397,19 @@ bool ReclaimCompletedLocked(ExecutionImpl& impl,
       continue;
     }
     if (status == VK_SUCCESS) {
+      if (retained_submission->guest_preparation.has_value() &&
+          retained_submission->guest_cache != nullptr &&
+          !retained_submission->guest_cache->Complete(
+              *retained_submission->guest_preparation)) {
+        result.status = VulkanComputeStatus::kReadbackFailed;
+        AddDiagnostic(
+            result, VulkanDiagnosticSeverity::kError,
+            VulkanComputeDiagnosticCode::kReadbackFailed,
+            "Vulkan guest-buffer completion could not publish readback",
+            retained_submission->timeline);
+        SnapshotExecutionState(impl, result);
+        return false;
+      }
       impl.completed_timeline =
           std::max(impl.completed_timeline, retained_submission->timeline);
       AddDiagnostic(result, VulkanDiagnosticSeverity::kInfo,
@@ -335,12 +425,13 @@ bool ReclaimCompletedLocked(ExecutionImpl& impl,
     if (IsDeviceLost(status)) {
       impl.MarkDeviceLost();
       const std::uint64_t lost_timeline = retained_submission->timeline;
-      DestroyRetainedSubmissions(impl);
+      DestroyLostRetainedSubmissions(impl);
       result.status = VulkanComputeStatus::kDeviceLost;
       AddDiagnostic(result, VulkanDiagnosticSeverity::kError,
                     VulkanComputeDiagnosticCode::kDeviceLost,
                     "vkGetFenceStatus reported Vulkan device loss while "
-                    "polling retained compute work",
+          "polling retained compute work (retained lost-dirty resources: " +
+              std::to_string(impl.lost_dirty_resource_count) + ")",
                     lost_timeline, status);
     } else {
       result.status = VulkanComputeStatus::kFenceStatusFailed;
@@ -365,10 +456,11 @@ void AddDeviceLostDiagnostic(ExecutionImpl& impl,
                              std::uint64_t timeline,
                              VkResult api_result) {
   impl.MarkDeviceLost();
-  DestroyRetainedSubmissions(impl);
+  DestroyLostRetainedSubmissions(impl);
   result.status = VulkanComputeStatus::kDeviceLost;
   AddDiagnostic(result, VulkanDiagnosticSeverity::kError,
-                VulkanComputeDiagnosticCode::kDeviceLost, std::move(message),
+                VulkanComputeDiagnosticCode::kDeviceLost, std::move(message) + " (retained lost-dirty resources: " +
+                    std::to_string(impl.lost_dirty_resource_count) + ")",
                 timeline, api_result);
 }
 
@@ -700,6 +792,378 @@ VulkanComputeResult VulkanComputeExecution::Submit(
   return result;
 }
 
+VulkanComputeResult VulkanComputeExecution::SubmitTranslated(
+    const shader::recompiler::CompileResult &compile,
+    VulkanGuestBufferCache &cache, VulkanGuestBufferPreparation preparation,
+    std::uint32_t group_count_x, std::uint32_t group_count_y,
+    std::uint32_t group_count_z, std::uint64_t timeout_ns) {
+  VulkanComputeResult result;
+  const auto &layout = compile.program.bindings;
+  const auto &descriptors = layout.descriptors;
+  const bool descriptor_shape =
+      descriptors.size() == 1 &&
+      descriptors.front().kind ==
+          shader::recompiler::IR::DescriptorBindingKind::Buffers &&
+      descriptors.front().resources.size() == preparation.views.size();
+  const std::uint64_t push_end =
+      static_cast<std::uint64_t>(layout.push_constant_offset) +
+      static_cast<std::uint64_t>(layout.push_constant_size);
+  const VkDeviceSize storage_alignment = std::max<VkDeviceSize>(
+      impl_->context.properties().min_storage_buffer_offset_alignment, 1);
+  bool view_shape = true;
+  for (const VulkanGuestBufferView &view : preparation.views) {
+    view_shape =
+        view_shape && view.descriptor_offset % storage_alignment == 0 &&
+        view.data_offset ==
+            view.descriptor_offset +
+                static_cast<VkDeviceSize>(view.packed_offset_dword) * 4 &&
+        view.descriptor_range >=
+            static_cast<VkDeviceSize>(view.packed_offset_dword) * 4 +
+                view.size &&
+        view.descriptor_range <=
+            impl_->context.properties().max_storage_buffer_range;
+  }
+  if (!preparation || compile.spirv.empty() || group_count_x == 0 ||
+      group_count_y == 0 || group_count_z == 0 ||
+      timeout_ns == std::numeric_limits<std::uint64_t>::max() ||
+      layout.descriptor_set != 0 || !descriptor_shape || !view_shape ||
+      preparation.views.empty() ||
+      preparation.views.size() >
+          impl_->context.properties()
+              .max_per_stage_descriptor_storage_buffers ||
+      preparation.views.size() >
+          impl_->context.properties().max_descriptor_set_storage_buffers ||
+      (layout.push_constant_offset & 3U) != 0 ||
+      (layout.push_constant_size & 3U) != 0 ||
+      push_end > impl_->context.properties().max_push_constants_size ||
+      layout.push_constant_size !=
+          preparation.shader_data_dwords.size() * sizeof(std::uint32_t)) {
+    result.status = VulkanComputeStatus::kInvalidArgument;
+    AddDiagnostic(result, VulkanDiagnosticSeverity::kError,
+                  VulkanComputeDiagnosticCode::kInputRejected,
+                  "translated compute layout, limits, or prepared guest "
+                  "buffers are invalid");
+    cache.Discard(preparation);
+    return result;
+  }
+  std::lock_guard lock(impl_->mutex);
+  if (impl_->device_lost || impl_->context.IsDeviceLost()) {
+    result.status = VulkanComputeStatus::kDeviceLost;
+    AddDiagnostic(result, VulkanDiagnosticSeverity::kError,
+                  VulkanComputeDiagnosticCode::kDeviceLost,
+                  "translated Vulkan compute is unavailable after device loss");
+    cache.Discard(preparation);
+    return result;
+  }
+  const auto max_groups =
+      impl_->context.properties().max_compute_work_group_count;
+  if (group_count_x > max_groups[0] || group_count_y > max_groups[1] ||
+      group_count_z > max_groups[2] ||
+      !ReclaimCompletedLocked(*impl_, result) ||
+      RetainedSubmissionCount(*impl_) >=
+          kMaximumVulkanComputeRetainedSubmissions) {
+    if (result.status == VulkanComputeStatus::kOk)
+      result.status = VulkanComputeStatus::kResourceLimit;
+    cache.Discard(preparation);
+    return result;
+  }
+  auto *slot = FindFreeRetainedSlot(*impl_);
+  if (slot == nullptr) {
+    result.status = VulkanComputeStatus::kResourceLimit;
+    cache.Discard(preparation);
+    return result;
+  }
+  const auto required =
+      impl_->dispatch.create_descriptor_set_layout != nullptr &&
+      impl_->dispatch.destroy_descriptor_set_layout != nullptr &&
+      impl_->dispatch.create_descriptor_pool != nullptr &&
+      impl_->dispatch.destroy_descriptor_pool != nullptr &&
+      impl_->dispatch.allocate_descriptor_sets != nullptr &&
+      impl_->dispatch.update_descriptor_sets != nullptr &&
+      impl_->dispatch.cmd_bind_descriptor_sets != nullptr &&
+      impl_->dispatch.cmd_push_constants != nullptr &&
+      impl_->dispatch.cmd_pipeline_barrier != nullptr;
+  if (!required) {
+    result.status = VulkanComputeStatus::kDeviceFunctionUnavailable;
+    AddDiagnostic(result, VulkanDiagnosticSeverity::kError,
+                  VulkanComputeDiagnosticCode::kDeviceFunctionUnavailable,
+                  "translated Vulkan compute is missing descriptor or "
+                  "push-constant entry points");
+    cache.Discard(preparation);
+    return result;
+  }
+  const VkDevice device = impl_->context.device();
+  SubmissionTransaction transaction(impl_->dispatch, device);
+  Submission &submission = transaction.submission();
+  submission.guest_cache = &cache;
+  submission.guest_preparation.emplace(std::move(preparation));
+  const auto fail = [&](VulkanComputeStatus status,
+                        VulkanComputeDiagnosticCode code, const char *name,
+                        VkResult value) {
+    result.status =
+        IsDeviceLost(value) ? VulkanComputeStatus::kDeviceLost : status;
+    if (IsDeviceLost(value))
+      impl_->MarkDeviceLost();
+    AddDiagnostic(result, VulkanDiagnosticSeverity::kError,
+                  IsDeviceLost(value) ? VulkanComputeDiagnosticCode::kDeviceLost
+                                      : code,
+                  std::string(name) + " failed", 0, value);
+    return result;
+  };
+  VkDescriptorSetLayoutBinding binding{};
+  binding.binding = compile.program.bindings.descriptors.front().binding;
+  binding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+  binding.descriptorCount =
+      static_cast<std::uint32_t>(submission.guest_preparation->views.size());
+  binding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+  VkDescriptorSetLayoutCreateInfo set_layout_info{};
+  set_layout_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+  set_layout_info.bindingCount = 1;
+  set_layout_info.pBindings = &binding;
+  VkDescriptorSetLayout descriptor_set_layout = VK_NULL_HANDLE;
+  VkResult api = impl_->dispatch.create_descriptor_set_layout(
+      device, &set_layout_info, nullptr, &descriptor_set_layout);
+  if (api != VK_SUCCESS)
+    return fail(VulkanComputeStatus::kPipelineLayoutCreationFailed,
+                VulkanComputeDiagnosticCode::kPipelineLayoutCreationFailed,
+                "vkCreateDescriptorSetLayout", api);
+  submission.descriptor_set_layout = descriptor_set_layout;
+  VkDescriptorPoolSize pool_size{VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+                                 binding.descriptorCount};
+  VkDescriptorPoolCreateInfo pool_info{};
+  pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+  pool_info.maxSets = 1;
+  pool_info.poolSizeCount = 1;
+  pool_info.pPoolSizes = &pool_size;
+  VkDescriptorPool descriptor_pool = VK_NULL_HANDLE;
+  api = impl_->dispatch.create_descriptor_pool(device, &pool_info, nullptr,
+                                               &descriptor_pool);
+  if (api != VK_SUCCESS)
+    return fail(VulkanComputeStatus::kPipelineLayoutCreationFailed,
+                VulkanComputeDiagnosticCode::kPipelineLayoutCreationFailed,
+                "vkCreateDescriptorPool", api);
+  submission.descriptor_pool = descriptor_pool;
+  VkDescriptorSetAllocateInfo set_info{};
+  set_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+  set_info.descriptorPool = submission.descriptor_pool;
+  set_info.descriptorSetCount = 1;
+  set_info.pSetLayouts = &submission.descriptor_set_layout;
+  VkDescriptorSet descriptor_set = VK_NULL_HANDLE;
+  api = impl_->dispatch.allocate_descriptor_sets(device, &set_info,
+                                                 &descriptor_set);
+  if (api != VK_SUCCESS)
+    return fail(VulkanComputeStatus::kPipelineLayoutCreationFailed,
+                VulkanComputeDiagnosticCode::kPipelineLayoutCreationFailed,
+                "vkAllocateDescriptorSets", api);
+  submission.descriptor_set = descriptor_set;
+  std::array<VkDescriptorBufferInfo,
+             kMaximumVulkanComputeRetainedSubmissions * 4>
+      infos{};
+  if (binding.descriptorCount > infos.size()) {
+    result.status = VulkanComputeStatus::kResourceLimit;
+    return result;
+  }
+  for (std::size_t i = 0; i < binding.descriptorCount; ++i) {
+    const auto &view = submission.guest_preparation->views[i];
+    infos[i] = {submission.guest_preparation->buffer, view.descriptor_offset,
+                view.descriptor_range};
+  }
+  VkWriteDescriptorSet write{};
+  write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+  write.dstSet = submission.descriptor_set;
+  write.dstBinding = binding.binding;
+  write.descriptorCount = binding.descriptorCount;
+  write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+  write.pBufferInfo = infos.data();
+  impl_->dispatch.update_descriptor_sets(device, 1, &write, 0, nullptr);
+  VkPushConstantRange push{};
+  push.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+  push.offset = layout.push_constant_offset;
+  push.size = layout.push_constant_size;
+  VkPipelineLayoutCreateInfo pipeline_layout_info{};
+  pipeline_layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+  pipeline_layout_info.setLayoutCount = 1;
+  pipeline_layout_info.pSetLayouts = &submission.descriptor_set_layout;
+  pipeline_layout_info.pushConstantRangeCount = push.size == 0 ? 0 : 1;
+  pipeline_layout_info.pPushConstantRanges = push.size == 0 ? nullptr : &push;
+  VkPipelineLayout pipeline_layout = VK_NULL_HANDLE;
+  api = impl_->dispatch.create_pipeline_layout(device, &pipeline_layout_info,
+                                               nullptr, &pipeline_layout);
+  if (api != VK_SUCCESS)
+    return fail(VulkanComputeStatus::kPipelineLayoutCreationFailed,
+                VulkanComputeDiagnosticCode::kPipelineLayoutCreationFailed,
+                "vkCreatePipelineLayout", api);
+  submission.pipeline_layout = pipeline_layout;
+  VkShaderModuleCreateInfo module_info{};
+  module_info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+  module_info.codeSize = compile.spirv.size() * sizeof(std::uint32_t);
+  module_info.pCode = compile.spirv.data();
+  VkShaderModule shader_module = VK_NULL_HANDLE;
+  api = impl_->dispatch.create_shader_module(device, &module_info, nullptr,
+                                             &shader_module);
+  if (api != VK_SUCCESS)
+    return fail(VulkanComputeStatus::kShaderModuleCreationFailed,
+                VulkanComputeDiagnosticCode::kShaderModuleCreationFailed,
+                "vkCreateShaderModule", api);
+  submission.shader_module = shader_module;
+  VkPipelineShaderStageCreateInfo stage{};
+  stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+  stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+  stage.module = submission.shader_module;
+  stage.pName = "main";
+  VkComputePipelineCreateInfo pipeline_info{};
+  pipeline_info.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+  pipeline_info.stage = stage;
+  pipeline_info.layout = submission.pipeline_layout;
+  VkPipeline pipeline = VK_NULL_HANDLE;
+  api = impl_->dispatch.create_compute_pipelines(
+      device, VK_NULL_HANDLE, 1, &pipeline_info, nullptr, &pipeline);
+  if (api != VK_SUCCESS)
+    return fail(VulkanComputeStatus::kComputePipelineCreationFailed,
+                VulkanComputeDiagnosticCode::kComputePipelineCreationFailed,
+                "vkCreateComputePipelines", api);
+  submission.pipeline = pipeline;
+  VkCommandPoolCreateInfo cp{};
+  cp.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+  cp.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+  cp.queueFamilyIndex = impl_->context.queue_family_index();
+  VkCommandPool command_pool = VK_NULL_HANDLE;
+  api =
+      impl_->dispatch.create_command_pool(device, &cp, nullptr, &command_pool);
+  if (api != VK_SUCCESS)
+    return fail(VulkanComputeStatus::kCommandPoolCreationFailed,
+                VulkanComputeDiagnosticCode::kCommandPoolCreationFailed,
+                "vkCreateCommandPool", api);
+  submission.command_pool = command_pool;
+  VkCommandBufferAllocateInfo cb{};
+  cb.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+  cb.commandPool = submission.command_pool;
+  cb.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+  cb.commandBufferCount = 1;
+  VkCommandBuffer command_buffer = VK_NULL_HANDLE;
+  api = impl_->dispatch.allocate_command_buffers(device, &cb, &command_buffer);
+  if (api != VK_SUCCESS)
+    return fail(VulkanComputeStatus::kCommandBufferAllocationFailed,
+                VulkanComputeDiagnosticCode::kCommandBufferAllocationFailed,
+                "vkAllocateCommandBuffers", api);
+  submission.command_buffer = command_buffer;
+  VkFenceCreateInfo fence_info{};
+  fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+  VkFence fence = VK_NULL_HANDLE;
+  api = impl_->dispatch.create_fence(device, &fence_info, nullptr, &fence);
+  if (api != VK_SUCCESS)
+    return fail(VulkanComputeStatus::kFenceCreationFailed,
+                VulkanComputeDiagnosticCode::kFenceCreationFailed,
+                "vkCreateFence", api);
+  submission.fence = fence;
+  VkCommandBufferBeginInfo begin{};
+  begin.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+  begin.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+  api = impl_->dispatch.begin_command_buffer(submission.command_buffer, &begin);
+  if (api != VK_SUCCESS)
+    return fail(VulkanComputeStatus::kCommandBufferBeginFailed,
+                VulkanComputeDiagnosticCode::kCommandBufferBeginFailed,
+                "vkBeginCommandBuffer", api);
+  impl_->dispatch.cmd_bind_pipeline(submission.command_buffer,
+                                    VK_PIPELINE_BIND_POINT_COMPUTE,
+                                    submission.pipeline);
+  impl_->dispatch.cmd_bind_descriptor_sets(
+      submission.command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+      submission.pipeline_layout, 0, 1, &submission.descriptor_set, 0, nullptr);
+  if (!submission.guest_preparation->shader_data_dwords.empty()) {
+    impl_->dispatch.cmd_push_constants(
+        submission.command_buffer, submission.pipeline_layout,
+        VK_SHADER_STAGE_COMPUTE_BIT, layout.push_constant_offset,
+        static_cast<std::uint32_t>(
+            submission.guest_preparation->shader_data_dwords.size() * 4),
+        submission.guest_preparation->shader_data_dwords.data());
+  }
+  impl_->dispatch.cmd_dispatch(submission.command_buffer, group_count_x,
+                               group_count_y, group_count_z);
+  const bool shader_writes = std::any_of(
+      submission.guest_preparation->views.begin(),
+      submission.guest_preparation->views.end(),
+      [](const VulkanGuestBufferView &view) { return view.shader_writes; });
+  if (shader_writes) {
+    VkMemoryBarrier barrier{};
+    barrier.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER;
+    barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_HOST_READ_BIT;
+    impl_->dispatch.cmd_pipeline_barrier(
+        submission.command_buffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+        VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &barrier, 0, nullptr, 0, nullptr);
+  }
+  api = impl_->dispatch.end_command_buffer(submission.command_buffer);
+  if (api != VK_SUCCESS)
+    return fail(VulkanComputeStatus::kCommandBufferEndFailed,
+                VulkanComputeDiagnosticCode::kCommandBufferEndFailed,
+                "vkEndCommandBuffer", api);
+  VkSubmitInfo submit{};
+  submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+  submit.commandBufferCount = 1;
+  submit.pCommandBuffers = &submission.command_buffer;
+  submission.timeline = impl_->next_timeline++;
+  {
+    std::lock_guard queue_lock(impl_->context.queue_mutex());
+    api = impl_->dispatch.queue_submit(impl_->context.queue(), 1, &submit,
+                                       submission.fence);
+  }
+  if (api != VK_SUCCESS)
+    return fail(VulkanComputeStatus::kQueueSubmitFailed,
+                VulkanComputeDiagnosticCode::kQueueSubmitFailed,
+                "vkQueueSubmit", api);
+  slot->emplace(transaction.Release());
+  Submission &submitted = **slot;
+  result.timeline = submitted.timeline;
+  if (!submitted.guest_cache->MarkSubmitted(*submitted.guest_preparation)) {
+    result.status = VulkanComputeStatus::kReadbackFailed;
+    AddDiagnostic(result, VulkanDiagnosticSeverity::kError,
+                  VulkanComputeDiagnosticCode::kReadbackFailed,
+                  "submitted Vulkan guest buffer could not be marked GPU-dirty",
+                  result.timeline);
+    SnapshotExecutionState(*impl_, result);
+    return result;
+  }
+  const VkFence submitted_fence = submitted.fence;
+  api = impl_->dispatch.wait_for_fences(device, 1, &submitted_fence, VK_TRUE,
+                                        timeout_ns);
+  if (api == VK_SUCCESS) {
+    if (!submitted.guest_cache->Complete(*submitted.guest_preparation)) {
+      result.status = VulkanComputeStatus::kReadbackFailed;
+      AddDiagnostic(result, VulkanDiagnosticSeverity::kError,
+                    VulkanComputeDiagnosticCode::kReadbackFailed,
+                    "signalled Vulkan guest-buffer submission retained after "
+                    "readback failure",
+                    submitted.timeline);
+      SnapshotExecutionState(*impl_, result);
+      return result;
+    }
+    impl_->completed_timeline =
+        std::max(impl_->completed_timeline, submitted.timeline);
+    DestroySubmission(impl_->dispatch, device, submitted);
+    slot->reset();
+    SnapshotExecutionState(*impl_, result);
+    return result;
+  }
+  if (api == VK_TIMEOUT) {
+    result.status = VulkanComputeStatus::kFenceWaitTimedOut;
+    AddDiagnostic(
+        result, VulkanDiagnosticSeverity::kWarning,
+        VulkanComputeDiagnosticCode::kFenceWaitTimedOut,
+        "translated Vulkan compute timed out; retaining guest-buffer lease",
+        result.timeline, api);
+  } else if (IsDeviceLost(api)) {
+    AddDeviceLostDiagnostic(
+        *impl_, result,
+        "vkWaitForFences reported device loss for translated Vulkan compute",
+        result.timeline, api);
+  } else {
+    result.status = VulkanComputeStatus::kFenceWaitFailed;
+  }
+  SnapshotExecutionState(*impl_, result);
+  return result;
+}
+
 const char* VulkanComputeStatusName(VulkanComputeStatus status) noexcept {
   switch (status) {
     case VulkanComputeStatus::kOk:
@@ -736,6 +1200,8 @@ const char* VulkanComputeStatusName(VulkanComputeStatus status) noexcept {
       return "fence_wait_failed";
     case VulkanComputeStatus::kFenceStatusFailed:
       return "fence_status_failed";
+  case VulkanComputeStatus::kReadbackFailed:
+    return "readback_failed";
     case VulkanComputeStatus::kDeviceLost:
       return "device_lost";
     case VulkanComputeStatus::kResourceLimit:
@@ -779,7 +1245,9 @@ const char* VulkanComputeDiagnosticCodeName(
       return "fence_wait_failed";
     case VulkanComputeDiagnosticCode::kFenceStatusFailed:
       return "fence_status_failed";
-    case VulkanComputeDiagnosticCode::kSubmissionReclaimed:
+    case VulkanComputeDiagnosticCode::kReadbackFailed:
+    return "readback_failed";
+  case VulkanComputeDiagnosticCode::kSubmissionReclaimed:
       return "submission_reclaimed";
     case VulkanComputeDiagnosticCode::kDeviceLost:
       return "device_lost";

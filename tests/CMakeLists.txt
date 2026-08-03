@@ -351,6 +351,14 @@ kajps5_deploy_msvc_asan_runtime(kajps5_gpu_vulkan_execution_test)
 add_test(NAME kajps5_gpu_vulkan_execution
          COMMAND kajps5_gpu_vulkan_execution_test)
 
+add_executable(kajps5_gpu_vulkan_buffer_cache_test
+               gpu_vulkan_buffer_cache_test.cpp)
+target_link_libraries(kajps5_gpu_vulkan_buffer_cache_test PRIVATE kajps5_core)
+kajps5_deploy_msvc_asan_runtime(kajps5_gpu_vulkan_buffer_cache_test)
+
+add_test(NAME kajps5_gpu_vulkan_buffer_cache
+         COMMAND kajps5_gpu_vulkan_buffer_cache_test)
+
 add_executable(kajps5_gpu_vulkan_compute_smoke_test
                gpu_vulkan_compute_smoke_test.cpp)
 target_link_libraries(kajps5_gpu_vulkan_compute_smoke_test PRIVATE kajps5_core)
@@ -359,6 +367,16 @@ kajps5_deploy_msvc_asan_runtime(kajps5_gpu_vulkan_compute_smoke_test)
 add_test(NAME kajps5_gpu_vulkan_compute_smoke
          COMMAND kajps5_gpu_vulkan_compute_smoke_test)
 set_tests_properties(kajps5_gpu_vulkan_compute_smoke
+                     PROPERTIES SKIP_RETURN_CODE 77)
+
+add_executable(kajps5_gpu_vulkan_guest_buffer_smoke_test
+               gpu_vulkan_guest_buffer_smoke_test.cpp)
+target_link_libraries(kajps5_gpu_vulkan_guest_buffer_smoke_test PRIVATE kajps5_core)
+kajps5_deploy_msvc_asan_runtime(kajps5_gpu_vulkan_guest_buffer_smoke_test)
+
+add_test(NAME kajps5_gpu_vulkan_guest_buffer_smoke
+         COMMAND kajps5_gpu_vulkan_guest_buffer_smoke_test)
+set_tests_properties(kajps5_gpu_vulkan_guest_buffer_smoke
                      PROPERTIES SKIP_RETURN_CODE 77)
 
 add_executable(kajps5_gpu_vulkan_smoke_test gpu_vulkan_smoke_test.cpp)

@@ -158,6 +158,9 @@
 - [x] Execute validated recompiler SPIR-V through the optional, singular
       runtime-owned Vulkan compute executor with finite fence waits and safe
       retained-work polling.
+- [x] Bind recompiler-produced buffer descriptor arrays, push constants, and
+      host-visible Vulkan storage allocations; retain them through fence
+      completion and publish GPU changes without overwriting newer CPU bytes.
 - Add shader control-flow, IR, emission, and resource tests before game tests.
 - Add an audio queue test with stable timing.
 

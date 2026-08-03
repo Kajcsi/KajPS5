@@ -16,6 +16,7 @@
 #include <string>
 #include <vector>
 
+#include "gpu/vulkan/buffer_cache.h"
 #include "gpu/vulkan/device.h"
 
 namespace kajps5::gpu::vulkan {
@@ -42,6 +43,7 @@ enum class VulkanComputeStatus {
   kFenceWaitTimedOut,
   kFenceWaitFailed,
   kFenceStatusFailed,
+  kReadbackFailed,
   kDeviceLost,
   kResourceLimit,
 };
@@ -63,6 +65,7 @@ enum class VulkanComputeDiagnosticCode {
   kFenceWaitTimedOut,
   kFenceWaitFailed,
   kFenceStatusFailed,
+  kReadbackFailed,
   kSubmissionReclaimed,
   kDeviceLost,
   kResourceLimit,
@@ -87,6 +90,7 @@ struct VulkanComputeResult {
   std::uint64_t completed_timeline = 0;
   std::size_t retained_submission_count = 0;
   std::size_t reclaimed_submission_count = 0;
+  std::size_t lost_dirty_resource_count = 0;
   std::vector<VulkanComputeDiagnostic> diagnostics;
 
   [[nodiscard]] explicit operator bool() const noexcept {
@@ -133,6 +137,13 @@ class VulkanComputeExecution final {
       std::uint32_t group_count_z,
       std::uint64_t timeout_ns =
           kDefaultVulkanComputeFenceWaitNanoseconds);
+
+  [[nodiscard]] VulkanComputeResult SubmitTranslated(
+      const shader::recompiler::CompileResult &compile,
+      VulkanGuestBufferCache &cache, VulkanGuestBufferPreparation preparation,
+      std::uint32_t group_count_x, std::uint32_t group_count_y,
+      std::uint32_t group_count_z,
+      std::uint64_t timeout_ns = kDefaultVulkanComputeFenceWaitNanoseconds);
 
   // Nonblocking fence polling for retained timed-out work. Reclamation never
   // resets or frees a command resource before its individual fence signals.

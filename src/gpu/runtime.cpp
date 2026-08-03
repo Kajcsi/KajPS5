@@ -253,6 +253,62 @@ vulkan::VulkanComputeResult GpuRuntime::PollVulkanCompute() {
   return vulkan_execution_->PollCompleted();
 }
 
+vulkan::VulkanComputeResult GpuRuntime::SubmitVulkanTranslatedCompute(
+    const shader::recompiler::CompileResult& compile,
+    std::uint32_t group_count_x, std::uint32_t group_count_y,
+    std::uint32_t group_count_z, std::uint64_t timeout_ns) {
+  std::lock_guard lock(vulkan_mutex_);
+  vulkan::VulkanComputeResult result;
+  if (vulkan_context_ == nullptr) {
+    result.status = vulkan::VulkanComputeStatus::kContextUnavailable;
+    result.diagnostics.push_back(
+        {vulkan::VulkanDiagnosticSeverity::kError,
+         vulkan::VulkanComputeDiagnosticCode::kContextUnavailable, 0,
+         VK_SUCCESS,
+         "GpuRuntime cannot execute translated compute before "
+         "InitializeVulkan"});
+    return result;
+  }
+  if (timeout_ns == std::numeric_limits<std::uint64_t>::max() ||
+      group_count_x == 0 || group_count_y == 0 || group_count_z == 0) {
+    result.status = vulkan::VulkanComputeStatus::kInvalidArgument;
+    result.diagnostics.push_back(
+        {vulkan::VulkanDiagnosticSeverity::kError,
+         vulkan::VulkanComputeDiagnosticCode::kInputRejected, 0, VK_SUCCESS,
+         "translated compute requires nonzero groups and a finite timeout"});
+    return result;
+  }
+  if (vulkan_buffer_cache_ == nullptr) {
+    vulkan_buffer_cache_ = std::make_unique<vulkan::VulkanGuestBufferCache>(
+        *vulkan_context_, memory_, *resource_coherence_);
+  }
+  auto prepared = vulkan_buffer_cache_->Prepare(compile);
+  if (!prepared) {
+    result.status = vulkan::VulkanComputeStatus::kInvalidArgument;
+    const std::string message =
+        prepared.diagnostics.empty()
+            ? "translated compute guest-buffer preparation failed"
+            : prepared.diagnostics.front().message;
+    result.diagnostics.push_back(
+        {vulkan::VulkanDiagnosticSeverity::kError,
+         vulkan::VulkanComputeDiagnosticCode::kInputRejected, 0, VK_SUCCESS,
+         message});
+    vulkan_buffer_cache_->Discard(prepared);
+    return result;
+  }
+  if (vulkan_execution_ == nullptr) {
+    auto created = vulkan::VulkanComputeExecution::Create(*vulkan_context_);
+    if (!created) {
+      vulkan_buffer_cache_->Discard(prepared);
+      return std::move(created.initialization);
+    }
+    vulkan_execution_ = std::move(created.execution);
+  }
+  return vulkan_execution_->SubmitTranslated(
+      compile, *vulkan_buffer_cache_, std::move(prepared), group_count_x,
+      group_count_y, group_count_z, timeout_ns);
+}
+
 bool GpuRuntime::has_vulkan_compute_execution() const noexcept {
   std::lock_guard lock(vulkan_mutex_);
   return vulkan_execution_ != nullptr;

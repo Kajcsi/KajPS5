@@ -5,7 +5,7 @@ KajPS5 uses these independent projects as references:
 | Project | Role | Language | License | Pinned commit |
 | --- | --- | --- | --- | --- |
 | [KytyPS5](https://github.com/KytyPS5/KytyPS5) | Primary native architecture reference | C++ | GPL-2.0-only, with original Kyty portions under MIT | `fb5ecec455cf6c67154134429485ffccbfc34203` |
-| [SharpEmu](https://github.com/sharpemu/sharpemu) | Behavior and test reference | C# | GPL-2.0-or-later | `4b5ea6a79346cb4529fa531cf2c1973f3978eb22` |
+| [SharpEmu](https://github.com/sharpemu/sharpemu) | Behavior and test reference | C# | GPL-2.0-or-later | `9e10d7c44a2821cfd5ccd3417c09c0cf269285a4` |
 
 The AGC command-buffer core closely adapts selected KytyPS5 algorithms. Other
 current integrations use upstream behavior as evidence. Exact provenance is
@@ -36,6 +36,10 @@ and KajPS5 validation. Update `THIRD_PARTY_NOTICES.md` when the referenced or
 adapted paths change.
 
 ## Refresh record
+
+### 2026-08-03
+
+- M8 guest-buffer work retained KytyPS5 at `fb5ecec455cf6c67154134429485ffccbfc34203` after review through `d09c81d`: the relevant buffer-cache ownership model did not change. SharpEmu moved to reviewed commit `9e10d7c44a2821cfd5ccd3417c09c0cf269285a4`; `f3d9439952a40c5b81b0d0dec443184e82a683d1` and `26bda04` were also reviewed for preserving newer CPU bytes during GPU writeback and for overflow/degenerate-range guards. KajPS5 retains one GpuRuntime owner and one checked GuestMemory observer; no upstream scheduler, page manager, or address-space owner was imported.
 
 ### 2026-08-02
 

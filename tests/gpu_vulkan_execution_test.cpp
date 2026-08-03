@@ -18,6 +18,7 @@
 #include <optional>
 #include <string_view>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 #include "core/memory/guest_memory.h"
@@ -61,11 +62,34 @@ enum class FailurePoint {
   kBeginCommandBuffer,
   kEndCommandBuffer,
   kQueueSubmit,
+  kCreateBuffer,
+  kAllocateMemory,
+  kBindBufferMemory,
+  kMapMemory,
+  kFlushMappedMemoryRanges,
+  kCreateDescriptorSetLayout,
+  kCreateDescriptorPool,
+  kAllocateDescriptorSets,
+  kInvalidateMappedMemoryRanges,
 };
 
 struct FenceRecord {
   VkFence fence = VK_NULL_HANDLE;
   VkResult status = VK_NOT_READY;
+};
+
+struct FakeMemoryRecord {
+  VkDeviceMemory memory = VK_NULL_HANDLE;
+  VkDeviceSize allocation_size = 0;
+  std::vector<std::byte> bytes;
+  bool mapped = false;
+  bool freed = false;
+};
+
+enum class CommandEvent {
+  kDispatch,
+  kPipelineBarrier,
+  kEndCommandBuffer,
 };
 
 struct FakeVulkanState {
@@ -97,6 +121,12 @@ struct FakeVulkanState {
   std::uint32_t dispatch_calls = 0;
   std::array<std::uint32_t, 3> dispatch_groups = {};
   std::vector<std::array<std::uint32_t, 3>> dispatches;
+  std::vector<CommandEvent> command_events;
+  std::uint32_t pipeline_barrier_calls = 0;
+  VkPipelineStageFlags barrier_src_stage_mask = 0;
+  VkPipelineStageFlags barrier_dst_stage_mask = 0;
+  VkAccessFlags barrier_src_access_mask = 0;
+  VkAccessFlags barrier_dst_access_mask = 0;
   bool saw_primary_command_buffer = false;
   bool saw_empty_pipeline_layout = false;
   std::uint32_t device_wait_idle_calls = 0;
@@ -104,6 +134,21 @@ struct FakeVulkanState {
   std::uint32_t devices_destroyed = 0;
   std::uint32_t instances_created = 0;
   std::uint32_t instances_destroyed = 0;
+  std::vector<FakeMemoryRecord> memories;
+  std::unordered_map<std::uintptr_t, VkDeviceMemory> buffer_memories;
+  std::vector<VkDescriptorBufferInfo> descriptor_infos;
+  std::vector<std::vector<VkDescriptorBufferInfo>> descriptor_history;
+  std::vector<std::uint32_t> pushed_words;
+  std::uint32_t descriptor_binding = 0;
+  std::uint32_t flush_calls = 0;
+  std::uint32_t invalidate_calls = 0;
+  VkMappedMemoryRange flush_range{};
+  VkMappedMemoryRange invalidate_range{};
+  std::uint32_t buffers_created = 0, buffers_destroyed = 0;
+  std::uint32_t memories_allocated = 0, memories_freed = 0, unmap_calls = 0;
+  std::uint32_t descriptor_layouts_created = 0,
+                descriptor_layouts_destroyed = 0;
+  std::uint32_t descriptor_pools_created = 0, descriptor_pools_destroyed = 0;
 };
 
 FakeVulkanState g_fake;
@@ -151,6 +196,24 @@ void SignalFence(VkFence fence) {
 
 bool ShouldFail(FailurePoint point) {
   return g_fake.failure == point;
+}
+
+FakeMemoryRecord *FindMemory(VkDeviceMemory memory) {
+  const auto found = std::find_if(
+      g_fake.memories.begin(), g_fake.memories.end(),
+      [&](const FakeMemoryRecord &record) { return record.memory == memory; });
+  return found == g_fake.memories.end() ? nullptr : &*found;
+}
+
+std::vector<std::byte> &BytesForBuffer(VkBuffer buffer) {
+  const auto found =
+      g_fake.buffer_memories.find(reinterpret_cast<std::uintptr_t>(buffer));
+  Check(found != g_fake.buffer_memories.end(),
+        "fake buffer has no bound memory");
+  FakeMemoryRecord *record = FindMemory(found->second);
+  Check(record != nullptr && !record->freed,
+        "fake buffer references missing memory");
+  return record->bytes;
 }
 
 void CheckRetainedChildTeardownOrdering() {
@@ -203,11 +266,181 @@ VKAPI_ATTR void VKAPI_CALL FakeGetPhysicalDeviceProperties(
   properties->apiVersion = VK_API_VERSION_1_3;
   properties->deviceType = VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
   properties->limits.minStorageBufferOffsetAlignment = 256;
+  properties->limits.maxStorageBufferRange = 4096;
+  properties->limits.maxPerStageDescriptorStorageBuffers = 32;
+  properties->limits.maxDescriptorSetStorageBuffers = 32;
+  properties->limits.maxPushConstantsSize = 128;
+  properties->limits.nonCoherentAtomSize = 64;
   properties->limits.maxComputeWorkGroupCount[0] = 7;
   properties->limits.maxComputeWorkGroupCount[1] = 11;
   properties->limits.maxComputeWorkGroupCount[2] = 13;
   std::strncpy(properties->deviceName, "KajPS5 injected Vulkan device",
                VK_MAX_PHYSICAL_DEVICE_NAME_SIZE - 1);
+}
+
+VKAPI_ATTR void VKAPI_CALL FakeGetPhysicalDeviceMemoryProperties(
+    VkPhysicalDevice, VkPhysicalDeviceMemoryProperties *properties) {
+  *properties = {};
+  properties->memoryTypeCount = 1;
+  properties->memoryTypes[0].propertyFlags =
+      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT;
+  properties->memoryHeaps[0].size = 4096;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL FakeCreateBuffer(VkDevice,
+                                                const VkBufferCreateInfo *,
+                                                const VkAllocationCallbacks *,
+                                                VkBuffer *buffer) {
+  if (ShouldFail(FailurePoint::kCreateBuffer)) {
+    *buffer = FailureOutputHandle<VkBuffer>();
+    return VK_ERROR_OUT_OF_HOST_MEMORY;
+  }
+  *buffer = MakeHandle<VkBuffer>();
+  ++g_fake.buffers_created;
+  return VK_SUCCESS;
+}
+VKAPI_ATTR void VKAPI_CALL FakeDestroyBuffer(VkDevice, VkBuffer,
+                                             const VkAllocationCallbacks *) {
+  ++g_fake.buffers_destroyed;
+}
+VKAPI_ATTR void VKAPI_CALL
+FakeGetBufferMemoryRequirements(VkDevice, VkBuffer, VkMemoryRequirements *r) {
+  *r = {};
+  r->size = 4096;
+  r->alignment = 256;
+  r->memoryTypeBits = 1;
+}
+VKAPI_ATTR VkResult VKAPI_CALL
+FakeAllocateMemory(VkDevice, const VkMemoryAllocateInfo *info,
+                   const VkAllocationCallbacks *, VkDeviceMemory *memory) {
+  if (ShouldFail(FailurePoint::kAllocateMemory)) {
+    *memory = FailureOutputHandle<VkDeviceMemory>();
+    return VK_ERROR_OUT_OF_HOST_MEMORY;
+  }
+  *memory = MakeHandle<VkDeviceMemory>();
+  g_fake.memories.push_back(
+      {*memory, info->allocationSize,
+       std::vector<std::byte>(static_cast<std::size_t>(info->allocationSize))});
+  ++g_fake.memories_allocated;
+  return VK_SUCCESS;
+}
+VKAPI_ATTR void VKAPI_CALL FakeFreeMemory(VkDevice, VkDeviceMemory memory,
+                                          const VkAllocationCallbacks *) {
+  FakeMemoryRecord *record = FindMemory(memory);
+  Check(record != nullptr && !record->freed && !record->mapped,
+        "fake memory freed out of order");
+  record->freed = true;
+  ++g_fake.memories_freed;
+}
+VKAPI_ATTR VkResult VKAPI_CALL FakeBindBufferMemory(VkDevice, VkBuffer buffer,
+                                                    VkDeviceMemory memory,
+                                                    VkDeviceSize) {
+  if (ShouldFail(FailurePoint::kBindBufferMemory))
+    return VK_ERROR_OUT_OF_HOST_MEMORY;
+  Check(FindMemory(memory) != nullptr, "fake bind used unknown memory");
+  g_fake.buffer_memories[reinterpret_cast<std::uintptr_t>(buffer)] = memory;
+  return VK_SUCCESS;
+}
+VKAPI_ATTR VkResult VKAPI_CALL FakeMapMemory(VkDevice, VkDeviceMemory memory,
+                                             VkDeviceSize offset,
+                                             VkDeviceSize size,
+                                             VkMemoryMapFlags, void **p) {
+  if (ShouldFail(FailurePoint::kMapMemory)) {
+    *p = reinterpret_cast<void *>(1);
+    return VK_ERROR_OUT_OF_HOST_MEMORY;
+  }
+  FakeMemoryRecord *record = FindMemory(memory);
+  Check(record != nullptr && !record->freed && !record->mapped &&
+            offset <= record->allocation_size &&
+            size <= record->allocation_size - offset,
+        "fake map used an invalid memory range");
+  record->mapped = true;
+  *p = record->bytes.data() + offset;
+  return VK_SUCCESS;
+}
+VKAPI_ATTR void VKAPI_CALL FakeUnmapMemory(VkDevice, VkDeviceMemory memory) {
+  FakeMemoryRecord *record = FindMemory(memory);
+  Check(record != nullptr && record->mapped && !record->freed,
+        "fake unmap ordering invalid");
+  record->mapped = false;
+  ++g_fake.unmap_calls;
+}
+VKAPI_ATTR VkResult VKAPI_CALL FakeFlush(VkDevice, std::uint32_t,
+                                         const VkMappedMemoryRange *range) {
+  ++g_fake.flush_calls;
+  g_fake.flush_range = *range;
+  return ShouldFail(FailurePoint::kFlushMappedMemoryRanges)
+             ? VK_ERROR_OUT_OF_HOST_MEMORY
+             : VK_SUCCESS;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL
+FakeInvalidate(VkDevice, std::uint32_t, const VkMappedMemoryRange *range) {
+  ++g_fake.invalidate_calls;
+  g_fake.invalidate_range = *range;
+  return ShouldFail(FailurePoint::kInvalidateMappedMemoryRanges)
+             ? VK_ERROR_OUT_OF_HOST_MEMORY
+             : VK_SUCCESS;
+}
+VKAPI_ATTR VkResult VKAPI_CALL
+FakeCreateDsl(VkDevice, const VkDescriptorSetLayoutCreateInfo *,
+              const VkAllocationCallbacks *, VkDescriptorSetLayout *h) {
+  if (ShouldFail(FailurePoint::kCreateDescriptorSetLayout)) {
+    *h = FailureOutputHandle<VkDescriptorSetLayout>();
+    return VK_ERROR_OUT_OF_HOST_MEMORY;
+  }
+  *h = MakeHandle<VkDescriptorSetLayout>();
+  ++g_fake.descriptor_layouts_created;
+  return VK_SUCCESS;
+}
+VKAPI_ATTR void VKAPI_CALL FakeDestroyDsl(VkDevice, VkDescriptorSetLayout,
+                                          const VkAllocationCallbacks *) {
+  ++g_fake.descriptor_layouts_destroyed;
+}
+VKAPI_ATTR VkResult VKAPI_CALL FakeCreateDp(VkDevice,
+                                            const VkDescriptorPoolCreateInfo *,
+                                            const VkAllocationCallbacks *,
+                                            VkDescriptorPool *h) {
+  if (ShouldFail(FailurePoint::kCreateDescriptorPool)) {
+    *h = FailureOutputHandle<VkDescriptorPool>();
+    return VK_ERROR_OUT_OF_HOST_MEMORY;
+  }
+  *h = MakeHandle<VkDescriptorPool>();
+  ++g_fake.descriptor_pools_created;
+  return VK_SUCCESS;
+}
+VKAPI_ATTR void VKAPI_CALL FakeDestroyDp(VkDevice, VkDescriptorPool,
+                                         const VkAllocationCallbacks *) {
+  ++g_fake.descriptor_pools_destroyed;
+}
+VKAPI_ATTR VkResult VKAPI_CALL FakeAllocateDs(
+    VkDevice, const VkDescriptorSetAllocateInfo *, VkDescriptorSet *h) {
+  if (ShouldFail(FailurePoint::kAllocateDescriptorSets)) {
+    *h = FailureOutputHandle<VkDescriptorSet>();
+    return VK_ERROR_OUT_OF_HOST_MEMORY;
+  }
+  *h = MakeHandle<VkDescriptorSet>();
+  return VK_SUCCESS;
+}
+VKAPI_ATTR void VKAPI_CALL FakeUpdateDs(VkDevice, std::uint32_t,
+                                        const VkWriteDescriptorSet *w,
+                                        std::uint32_t,
+                                        const VkCopyDescriptorSet *) {
+  g_fake.descriptor_binding = w->dstBinding;
+  g_fake.descriptor_infos.assign(w->pBufferInfo,
+                                 w->pBufferInfo + w->descriptorCount);
+  g_fake.descriptor_history.push_back(g_fake.descriptor_infos);
+}
+VKAPI_ATTR void VKAPI_CALL FakeCmdBindDs(VkCommandBuffer, VkPipelineBindPoint,
+                                         VkPipelineLayout, std::uint32_t,
+                                         std::uint32_t, const VkDescriptorSet *,
+                                         std::uint32_t, const std::uint32_t *) {
+}
+VKAPI_ATTR void VKAPI_CALL FakeCmdPush(VkCommandBuffer, VkPipelineLayout,
+                                       VkShaderStageFlags, std::uint32_t,
+                                       std::uint32_t size, const void *data) {
+  auto *p = static_cast<const std::uint32_t *>(data);
+  g_fake.pushed_words.assign(p, p + size / 4);
 }
 
 VKAPI_ATTR void VKAPI_CALL FakeGetPhysicalDeviceProperties2(
@@ -344,6 +577,7 @@ VKAPI_ATTR VkResult VKAPI_CALL FakeBeginCommandBuffer(
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL FakeEndCommandBuffer(VkCommandBuffer) {
+  g_fake.command_events.push_back(CommandEvent::kEndCommandBuffer);
   return ShouldFail(FailurePoint::kEndCommandBuffer) ? VK_ERROR_OUT_OF_HOST_MEMORY
                                                        : VK_SUCCESS;
 }
@@ -419,6 +653,23 @@ VKAPI_ATTR void VKAPI_CALL FakeCmdDispatch(VkCommandBuffer,
   ++g_fake.dispatch_calls;
   g_fake.dispatch_groups = {group_count_x, group_count_y, group_count_z};
   g_fake.dispatches.push_back(g_fake.dispatch_groups);
+  g_fake.command_events.push_back(CommandEvent::kDispatch);
+}
+
+VKAPI_ATTR void VKAPI_CALL FakeCmdPipelineBarrier(
+    VkCommandBuffer, VkPipelineStageFlags src_stage_mask,
+    VkPipelineStageFlags dst_stage_mask, VkDependencyFlags,
+    std::uint32_t memory_barrier_count, const VkMemoryBarrier *memory_barriers,
+    std::uint32_t, const VkBufferMemoryBarrier *, std::uint32_t,
+    const VkImageMemoryBarrier *) {
+  Check(memory_barrier_count == 1 && memory_barriers != nullptr,
+        "execution recorded an invalid memory barrier");
+  ++g_fake.pipeline_barrier_calls;
+  g_fake.barrier_src_stage_mask = src_stage_mask;
+  g_fake.barrier_dst_stage_mask = dst_stage_mask;
+  g_fake.barrier_src_access_mask = memory_barriers[0].srcAccessMask;
+  g_fake.barrier_dst_access_mask = memory_barriers[0].dstAccessMask;
+  g_fake.command_events.push_back(CommandEvent::kPipelineBarrier);
 }
 
 VKAPI_ATTR VkResult VKAPI_CALL FakeCreateFence(
@@ -540,6 +791,9 @@ VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL FakeGetDeviceProcAddr(VkDevice,
   if (std::strcmp(name, "vkCmdDispatch") == 0) {
     return reinterpret_cast<PFN_vkVoidFunction>(FakeCmdDispatch);
   }
+  if (std::strcmp(name, "vkCmdPipelineBarrier") == 0) {
+    return reinterpret_cast<PFN_vkVoidFunction>(FakeCmdPipelineBarrier);
+  }
   if (std::strcmp(name, "vkCreateFence") == 0) {
     return reinterpret_cast<PFN_vkVoidFunction>(FakeCreateFence);
   }
@@ -555,6 +809,43 @@ VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL FakeGetDeviceProcAddr(VkDevice,
   if (std::strcmp(name, "vkQueueSubmit") == 0) {
     return reinterpret_cast<PFN_vkVoidFunction>(FakeQueueSubmit);
   }
+  if (std::strcmp(name, "vkCreateBuffer") == 0)
+    return reinterpret_cast<PFN_vkVoidFunction>(FakeCreateBuffer);
+  if (std::strcmp(name, "vkDestroyBuffer") == 0)
+    return reinterpret_cast<PFN_vkVoidFunction>(FakeDestroyBuffer);
+  if (std::strcmp(name, "vkGetBufferMemoryRequirements") == 0)
+    return reinterpret_cast<PFN_vkVoidFunction>(
+        FakeGetBufferMemoryRequirements);
+  if (std::strcmp(name, "vkAllocateMemory") == 0)
+    return reinterpret_cast<PFN_vkVoidFunction>(FakeAllocateMemory);
+  if (std::strcmp(name, "vkFreeMemory") == 0)
+    return reinterpret_cast<PFN_vkVoidFunction>(FakeFreeMemory);
+  if (std::strcmp(name, "vkBindBufferMemory") == 0)
+    return reinterpret_cast<PFN_vkVoidFunction>(FakeBindBufferMemory);
+  if (std::strcmp(name, "vkMapMemory") == 0)
+    return reinterpret_cast<PFN_vkVoidFunction>(FakeMapMemory);
+  if (std::strcmp(name, "vkUnmapMemory") == 0)
+    return reinterpret_cast<PFN_vkVoidFunction>(FakeUnmapMemory);
+  if (std::strcmp(name, "vkFlushMappedMemoryRanges") == 0)
+    return reinterpret_cast<PFN_vkVoidFunction>(FakeFlush);
+  if (std::strcmp(name, "vkInvalidateMappedMemoryRanges") == 0)
+    return reinterpret_cast<PFN_vkVoidFunction>(FakeInvalidate);
+  if (std::strcmp(name, "vkCreateDescriptorSetLayout") == 0)
+    return reinterpret_cast<PFN_vkVoidFunction>(FakeCreateDsl);
+  if (std::strcmp(name, "vkDestroyDescriptorSetLayout") == 0)
+    return reinterpret_cast<PFN_vkVoidFunction>(FakeDestroyDsl);
+  if (std::strcmp(name, "vkCreateDescriptorPool") == 0)
+    return reinterpret_cast<PFN_vkVoidFunction>(FakeCreateDp);
+  if (std::strcmp(name, "vkDestroyDescriptorPool") == 0)
+    return reinterpret_cast<PFN_vkVoidFunction>(FakeDestroyDp);
+  if (std::strcmp(name, "vkAllocateDescriptorSets") == 0)
+    return reinterpret_cast<PFN_vkVoidFunction>(FakeAllocateDs);
+  if (std::strcmp(name, "vkUpdateDescriptorSets") == 0)
+    return reinterpret_cast<PFN_vkVoidFunction>(FakeUpdateDs);
+  if (std::strcmp(name, "vkCmdBindDescriptorSets") == 0)
+    return reinterpret_cast<PFN_vkVoidFunction>(FakeCmdBindDs);
+  if (std::strcmp(name, "vkCmdPushConstants") == 0)
+    return reinterpret_cast<PFN_vkVoidFunction>(FakeCmdPush);
   return nullptr;
 }
 
@@ -579,6 +870,9 @@ VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL FakeGetInstanceProcAddr(
     return reinterpret_cast<PFN_vkVoidFunction>(
         FakeGetPhysicalDeviceProperties2);
   }
+  if (std::strcmp(name, "vkGetPhysicalDeviceMemoryProperties") == 0)
+    return reinterpret_cast<PFN_vkVoidFunction>(
+        FakeGetPhysicalDeviceMemoryProperties);
   if (std::strcmp(name, "vkGetPhysicalDeviceFeatures2") == 0) {
     return reinterpret_cast<PFN_vkVoidFunction>(FakeGetPhysicalDeviceFeatures2);
   }
@@ -803,7 +1097,8 @@ void TestMissingDispatchAndRuntimeOwnerBoundary() {
                   missing.initialization,
                   vk::VulkanComputeDiagnosticCode::kDeviceFunctionUnavailable,
                   vk::VulkanDiagnosticSeverity::kError),
-          "missing core device dispatch was not diagnosed during executor creation");
+          "missing core device dispatch was not diagnosed during executor "
+          "creation");
   }
 
   g_fake = {};
@@ -922,7 +1217,8 @@ void TestSeparateTimedOutExecutionsAlwaysDrainBeforeTeardown() {
       "separate timed-out executor teardown retained Vulkan children");
   context.context.reset();
   Check(g_fake.devices_destroyed == 1 && g_fake.device_wait_idle_calls >= 2,
-        "separate timed-out executor teardown did not destroy the context safely");
+        "separate timed-out executor teardown did not destroy the context "
+        "safely");
 }
 
 void TestTimeoutTeardownHandlesWaitIdleDeviceLoss() {
@@ -948,7 +1244,8 @@ void TestTimeoutTeardownHandlesWaitIdleDeviceLoss() {
         "context accepted a new execution owner after terminal device loss");
   context.context.reset();
   Check(g_fake.devices_destroyed == 1 && g_fake.device_wait_idle_calls == 1,
-        "wait-idle device loss caused a duplicate wait or unsafe device teardown");
+        "wait-idle device loss caused a duplicate wait or unsafe device "
+        "teardown");
 }
 
 void TestDeviceLossWinsOwnerAcquisitionRace() {
@@ -1025,7 +1322,8 @@ void TestRetainedSubmissionBound() {
   Check(reclaimed && reclaimed.reclaimed_submission_count ==
                             vk::kMaximumVulkanComputeRetainedSubmissions &&
             reclaimed.retained_submission_count == 0,
-        "bounded retained submissions did not reclaim after all fences signalled");
+        "bounded retained submissions did not reclaim after all fences "
+        "signalled");
   CheckNoLiveExecutionResources(
       "reclaiming bounded retained work leaked execution resources");
 }
@@ -1062,6 +1360,673 @@ void TestDeviceLossIsExplicitAndTerminal() {
         "device-loss teardown destroyed the device before Vulkan children");
 }
 
+void TestTranslatedDescriptorAlignmentAndPushData(
+    FailurePoint failure = FailurePoint::kNone) {
+  g_fake = {};
+  g_fake.failure = failure;
+  g_fake.poison_outputs_on_failure = failure != FailurePoint::kNone;
+  using Protection = kajps5::memory::GuestMemoryProtection;
+  kajps5::memory::GuestMemory memory(0x700000, 0x1000,
+                                     Protection::kRead | Protection::kWrite |
+                                         Protection::kGpuRead |
+                                         Protection::kGpuWrite);
+  const std::array<std::byte, 16> bytes{};
+  Check(memory.Initialize(0x700004, bytes) &&
+            memory.Initialize(0x700108, bytes),
+        "translated fixture guest initialization failed");
+  kajps5::gpu::GpuRuntime runtime(memory);
+  Check(static_cast<bool>(runtime.InitializeVulkan(FakeLoader())),
+        "translated fixture Vulkan initialization failed");
+  kajps5::gpu::shader::recompiler::CompileResult compile;
+  compile.spirv.assign(kValidatedSpirv.begin(), kValidatedSpirv.end());
+  auto &program = compile.program;
+  program.stage = kajps5::gpu::ShaderType::Compute;
+  program.resource_tracking_complete = program.shader_info_complete =
+      program.binding_layout_complete = true;
+  program.bindings.descriptor_set = 0;
+  program.bindings.push_constant_size = 8;
+  program.bindings.buffer_offset_dword = 1;
+  program.bindings.buffer_offset_count = 2;
+  program.bindings.user_data_registers = {0};
+  program.bindings.descriptors.push_back(
+      {kajps5::gpu::shader::recompiler::IR::DescriptorBindingKind::Buffers,
+       5,
+       {0, 1}});
+  for (std::uint32_t address : {0x700004U, 0x700108U}) {
+    program.info.buffers.push_back({.max_byte_extent = 16,
+                                    .packed_stride = 4,
+                                    .descriptor_format = 0,
+                                    .read = true,
+                                    .written = true});
+    kajps5::gpu::shader::recompiler::IR::DescriptorValue value;
+    value.dword_count = 4;
+    value.dwords[0] = address;
+    value.dwords[1] = 4U << 16U;
+    value.dwords[2] = 4;
+    compile.resources.buffers.push_back(value);
+  }
+  compile.resources.user_data = {0x12345678U};
+  const auto submitted =
+      runtime.SubmitVulkanTranslatedCompute(compile, 2, 3, 4, 10);
+  if (failure != FailurePoint::kNone) {
+    Check(!submitted && submitted.retained_submission_count == 0,
+          "translated injected failure retained work");
+    const bool queue_failure = failure == FailurePoint::kQueueSubmit;
+    Check(
+        g_fake.queue_submit_calls == (queue_failure ? 1U : 0U),
+        "translated injected failure reached an unexpected queue-submit count");
+    Check(g_fake.buffers_created == g_fake.buffers_destroyed &&
+              g_fake.memories_allocated == g_fake.memories_freed &&
+              g_fake.descriptor_layouts_created ==
+                  g_fake.descriptor_layouts_destroyed &&
+              g_fake.descriptor_pools_created ==
+                  g_fake.descriptor_pools_destroyed,
+          "translated injected failure leaked an adopted backing or descriptor "
+          "child");
+    return;
+  }
+  Check(submitted && g_fake.descriptor_binding == 5 &&
+            g_fake.descriptor_infos.size() == 2,
+        "translated submission did not create the expected descriptor array");
+  Check(g_fake.descriptor_infos[0].offset == 0 &&
+            g_fake.descriptor_infos[0].range == 16 &&
+            g_fake.descriptor_infos[1].offset == 256 &&
+            g_fake.descriptor_infos[1].range == 20 &&
+            g_fake.descriptor_infos[0].buffer ==
+                g_fake.descriptor_infos[1].buffer,
+        "translated descriptor offsets did not use one aligned backing with "
+        "prefix range");
+  Check(g_fake.pushed_words.size() == 2 &&
+            g_fake.pushed_words[0] == 0x12345678U &&
+            g_fake.pushed_words[1] == (1U << 10U) &&
+            g_fake.dispatch_groups == std::array<std::uint32_t, 3>{2, 3, 4},
+        "translated push constants did not preserve user data and packed "
+        "prefix offsets");
+  Check(g_fake.pipeline_barrier_calls == 1 &&
+            g_fake.barrier_src_stage_mask ==
+                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT &&
+            g_fake.barrier_dst_stage_mask == VK_PIPELINE_STAGE_HOST_BIT &&
+            g_fake.barrier_src_access_mask == VK_ACCESS_SHADER_WRITE_BIT &&
+            g_fake.barrier_dst_access_mask == VK_ACCESS_HOST_READ_BIT &&
+            g_fake.command_events ==
+                std::vector<CommandEvent>{CommandEvent::kDispatch,
+                                          CommandEvent::kPipelineBarrier,
+                                          CommandEvent::kEndCommandBuffer},
+        "translated writable work did not record the compute-to-host memory "
+        "barrier");
+  const auto &mapped = BytesForBuffer(g_fake.descriptor_infos.front().buffer);
+  Check(std::equal(bytes.begin(), bytes.end(), mapped.begin()) &&
+            std::equal(bytes.begin(), bytes.end(), mapped.begin() + 260),
+        "translated upload did not place guest bytes at data offsets");
+}
+
+void TestTranslatedTransactionalFailures() {
+  constexpr std::array failures = {FailurePoint::kCreateBuffer,
+                                   FailurePoint::kAllocateMemory,
+                                   FailurePoint::kBindBufferMemory,
+                                   FailurePoint::kMapMemory,
+                                   FailurePoint::kFlushMappedMemoryRanges,
+                                   FailurePoint::kCreateDescriptorSetLayout,
+                                   FailurePoint::kCreateDescriptorPool,
+                                   FailurePoint::kAllocateDescriptorSets,
+                                   FailurePoint::kCreatePipelineLayout,
+                                   FailurePoint::kCreateShaderModule,
+                                   FailurePoint::kCreateComputePipelines,
+                                   FailurePoint::kCreateCommandPool,
+                                   FailurePoint::kAllocateCommandBuffers,
+                                   FailurePoint::kCreateFence,
+                                   FailurePoint::kBeginCommandBuffer,
+                                   FailurePoint::kEndCommandBuffer,
+                                   FailurePoint::kQueueSubmit};
+  for (const FailurePoint failure : failures) {
+    TestTranslatedDescriptorAlignmentAndPushData(failure);
+    TestTranslatedDescriptorAlignmentAndPushData();
+  }
+}
+
+void TestTranslatedTimeoutReadbackRetry() {
+  g_fake = {};
+  using Protection = kajps5::memory::GuestMemoryProtection;
+  kajps5::memory::GuestMemory memory(0x700000, 0x1000,
+                                     Protection::kRead | Protection::kWrite |
+                                         Protection::kGpuRead |
+                                         Protection::kGpuWrite);
+  std::array<std::byte, 16> first{};
+  std::array<std::byte, 16> second{};
+  for (std::size_t i = 0; i < first.size(); ++i) {
+    first[i] = static_cast<std::byte>(0x20U + i);
+    second[i] = static_cast<std::byte>(0x60U + i);
+  }
+  const std::array<std::byte, 4> before = {std::byte{0xa1}, std::byte{0xa2},
+                                           std::byte{0xa3}, std::byte{0xa4}};
+  const std::array<std::byte, 4> after = {std::byte{0xb1}, std::byte{0xb2},
+                                          std::byte{0xb3}, std::byte{0xb4}};
+  Check(memory.Initialize(0x700000, before) &&
+            memory.Initialize(0x700004, first) &&
+            memory.Initialize(0x700108, second) &&
+            memory.Initialize(0x700118, after),
+        "timeout fixture guest initialization failed");
+  kajps5::gpu::GpuRuntime runtime(memory);
+  Check(static_cast<bool>(runtime.InitializeVulkan(FakeLoader())),
+        "timeout fixture Vulkan initialization failed");
+  kajps5::gpu::shader::recompiler::CompileResult compile;
+  compile.spirv.assign(kValidatedSpirv.begin(), kValidatedSpirv.end());
+  auto &program = compile.program;
+  program.stage = kajps5::gpu::ShaderType::Compute;
+  program.resource_tracking_complete = program.shader_info_complete =
+      program.binding_layout_complete = true;
+  program.bindings.descriptor_set = 0;
+  program.bindings.push_constant_size = 8;
+  program.bindings.buffer_offset_dword = 1;
+  program.bindings.buffer_offset_count = 2;
+  program.bindings.user_data_registers = {0};
+  program.bindings.descriptors.push_back(
+      {kajps5::gpu::shader::recompiler::IR::DescriptorBindingKind::Buffers,
+       5,
+       {0, 1}});
+  for (std::uint32_t address : {0x700004U, 0x700108U}) {
+    program.info.buffers.push_back({.max_byte_extent = 16,
+                                    .packed_stride = 4,
+                                    .descriptor_format = 0,
+                                    .read = true,
+                                    .written = true});
+    kajps5::gpu::shader::recompiler::IR::DescriptorValue value;
+    value.dword_count = 4;
+    value.dwords[0] = address;
+    value.dwords[1] = 4U << 16U;
+    value.dwords[2] = 4;
+    compile.resources.buffers.push_back(value);
+  }
+  compile.resources.user_data = {0x12345678U};
+  g_fake.wait_results = {VK_TIMEOUT};
+  const auto timed_out =
+      runtime.SubmitVulkanTranslatedCompute(compile, 1, 1, 1, 0);
+  Check(timed_out.status == vk::VulkanComputeStatus::kFenceWaitTimedOut &&
+            timed_out.retained_submission_count == 1 &&
+            g_fake.invalidate_calls == 0,
+        "translated timeout did not retain work without readback");
+  Check(g_fake.flush_calls == 1 && g_fake.flush_range.offset == 0 &&
+            g_fake.flush_range.size % 64 == 0,
+        "translated upload did not use an atom-aligned noncoherent flush");
+  const std::array<std::byte, 1> cpu_new = {std::byte{0xee}};
+  Check(memory.Write(0x700006, cpu_new), "timeout fixture CPU update failed");
+  BytesForBuffer(g_fake.descriptor_infos.front().buffer)[1] = std::byte{0x99};
+  SignalFence(g_fake.submitted_fences.front());
+  g_fake.failure = FailurePoint::kInvalidateMappedMemoryRanges;
+  const auto failed = runtime.PollVulkanCompute();
+  Check(failed.status == vk::VulkanComputeStatus::kReadbackFailed &&
+            failed.retained_submission_count == 1,
+        "failed invalidate did not retain translated readback work");
+  std::array<std::byte, 16> unchanged{};
+  first[2] = cpu_new[0];
+  Check(memory.Read(0x700004, unchanged) && unchanged == first,
+        "failed invalidate fabricated a guest writeback");
+  unchanged[2] = cpu_new[0];
+  g_fake.failure = FailurePoint::kNone;
+  const auto completed = runtime.PollVulkanCompute();
+  Check(
+      completed && completed.retained_submission_count == 0 &&
+          g_fake.invalidate_calls == 2 && g_fake.invalidate_range.offset == 0 &&
+          g_fake.invalidate_range.size % 64 == 0,
+      "translated retry did not complete one atom-aligned invalidate/readback");
+  std::array<std::byte, 16> readback{};
+  std::array<std::byte, 4> read_before{};
+  std::array<std::byte, 4> read_after{};
+  Check(memory.Read(0x700004, readback) && memory.Read(0x700000, read_before) &&
+            memory.Read(0x700118, read_after) &&
+            readback[1] == std::byte{0x99} && readback[2] == cpu_new[0] &&
+            read_before == before && read_after == after,
+        "translated readback did not merge GPU delta with newer CPU data and "
+        "sentinels");
+  const std::uint32_t invalidates = g_fake.invalidate_calls;
+  const auto third = runtime.PollVulkanCompute();
+  Check(third && g_fake.invalidate_calls == invalidates,
+        "third poll performed a second translated readback");
+}
+
+void TestTranslatedDeviceLossPreservesDirtyState() {
+  g_fake = {};
+  using Protection = kajps5::memory::GuestMemoryProtection;
+  kajps5::memory::GuestMemory memory(0x700000, 0x1000,
+                                     Protection::kRead | Protection::kWrite |
+                                         Protection::kGpuRead |
+                                         Protection::kGpuWrite);
+  const std::array<std::byte, 16> bytes = {std::byte{1}, std::byte{2}};
+  const std::array<std::byte, 4> sentinel = {std::byte{0xa1}, std::byte{0xa2},
+                                             std::byte{0xa3}, std::byte{0xa4}};
+  Check(memory.Initialize(0x700000, sentinel) &&
+            memory.Initialize(0x700004, bytes) &&
+            memory.Initialize(0x700108, bytes) &&
+            memory.Initialize(0x700118, sentinel),
+        "device-loss fixture initialization failed");
+  kajps5::gpu::GpuRuntime runtime(memory);
+  Check(static_cast<bool>(runtime.InitializeVulkan(FakeLoader())),
+        "device-loss fixture Vulkan initialization failed");
+  kajps5::gpu::shader::recompiler::CompileResult compile;
+  compile.spirv.assign(kValidatedSpirv.begin(), kValidatedSpirv.end());
+  auto &p = compile.program;
+  p.stage = kajps5::gpu::ShaderType::Compute;
+  p.resource_tracking_complete = p.shader_info_complete =
+      p.binding_layout_complete = true;
+  p.bindings.descriptor_set = 0;
+  p.bindings.push_constant_size = 8;
+  p.bindings.buffer_offset_dword = 1;
+  p.bindings.buffer_offset_count = 2;
+  p.bindings.user_data_registers = {0};
+  p.bindings.descriptors.push_back(
+      {kajps5::gpu::shader::recompiler::IR::DescriptorBindingKind::Buffers,
+       5,
+       {0, 1}});
+  for (std::uint32_t address : {0x700004U, 0x700108U}) {
+    p.info.buffers.push_back({.max_byte_extent = 16,
+                              .packed_stride = 4,
+                              .descriptor_format = 0,
+                              .read = true,
+                              .written = true});
+    kajps5::gpu::shader::recompiler::IR::DescriptorValue d;
+    d.dword_count = 4;
+    d.dwords[0] = address;
+    d.dwords[1] = 4U << 16U;
+    d.dwords[2] = 4;
+    compile.resources.buffers.push_back(d);
+  }
+  compile.resources.user_data = {0};
+  g_fake.wait_results = {VK_ERROR_DEVICE_LOST};
+  const auto lost = runtime.SubmitVulkanTranslatedCompute(compile, 1, 1, 1, 10);
+  Check(lost.status == vk::VulkanComputeStatus::kDeviceLost &&
+            g_fake.queue_submit_calls == 1 &&
+            lost.retained_submission_count == 0 &&
+            lost.lost_dirty_resource_count == 2 && g_fake.invalidate_calls == 0,
+        "translated device loss did not preserve two dirty resources");
+  std::array<std::byte, 16> check_bytes{};
+  std::array<std::byte, 4> check_sentinel{};
+  Check(memory.Read(0x700004, check_bytes) && check_bytes == bytes &&
+            memory.Read(0x700000, check_sentinel) && check_sentinel == sentinel,
+        "device loss fabricated translated guest readback");
+  const auto polled = runtime.PollVulkanCompute();
+  Check(polled.status == vk::VulkanComputeStatus::kDeviceLost &&
+            polled.retained_submission_count == 0 &&
+            polled.lost_dirty_resource_count == 2 &&
+            g_fake.invalidate_calls == 0,
+        "terminal translated device loss was not stable across poll");
+}
+
+void TestTranslatedReadOnlyDeviceLossHasNoDirtyRecords() {
+  g_fake = {};
+  using Protection = kajps5::memory::GuestMemoryProtection;
+  kajps5::memory::GuestMemory memory(0x700000, 0x1000,
+                                     Protection::kRead | Protection::kGpuRead);
+  kajps5::gpu::GpuRuntime runtime(memory);
+  Check(static_cast<bool>(runtime.InitializeVulkan(FakeLoader())),
+        "read-only device-loss Vulkan initialization failed");
+  kajps5::gpu::shader::recompiler::CompileResult compile;
+  compile.spirv.assign(kValidatedSpirv.begin(), kValidatedSpirv.end());
+  auto &p = compile.program;
+  p.stage = kajps5::gpu::ShaderType::Compute;
+  p.resource_tracking_complete = p.shader_info_complete =
+      p.binding_layout_complete = true;
+  p.bindings.descriptor_set = 0;
+  p.bindings.push_constant_size = 4;
+  p.bindings.buffer_offset_count = 1;
+  p.bindings.descriptors.push_back(
+      {kajps5::gpu::shader::recompiler::IR::DescriptorBindingKind::Buffers,
+       5,
+       {0}});
+  p.info.buffers.push_back({.max_byte_extent = 16,
+                            .packed_stride = 4,
+                            .descriptor_format = 0,
+                            .read = true});
+  kajps5::gpu::shader::recompiler::IR::DescriptorValue d;
+  d.dword_count = 4;
+  d.dwords[0] = 0x700000;
+  d.dwords[1] = 4U << 16U;
+  d.dwords[2] = 4;
+  compile.resources.buffers.push_back(d);
+  g_fake.wait_results = {VK_ERROR_DEVICE_LOST};
+  const auto lost = runtime.SubmitVulkanTranslatedCompute(compile, 1, 1, 1, 10);
+  Check(lost.status == vk::VulkanComputeStatus::kDeviceLost &&
+            lost.retained_submission_count == 0 &&
+            lost.lost_dirty_resource_count == 0 && g_fake.invalidate_calls == 0,
+        "read-only translated device loss retained a dirty resource");
+  Check(g_fake.pipeline_barrier_calls == 0 &&
+            g_fake.command_events ==
+                std::vector<CommandEvent>{CommandEvent::kDispatch,
+                                          CommandEvent::kEndCommandBuffer},
+        "read-only translated work recorded an unnecessary host-read barrier");
+  const auto polled = runtime.PollVulkanCompute();
+  Check(polled.status == vk::VulkanComputeStatus::kDeviceLost &&
+            polled.lost_dirty_resource_count == 0 &&
+            g_fake.invalidate_calls == 0,
+        "read-only terminal loss changed state during poll");
+}
+
+void TestTranslatedSequentialBackingReuseAndCpuRefresh() {
+  g_fake = {};
+  using Protection = kajps5::memory::GuestMemoryProtection;
+  kajps5::memory::GuestMemory memory(0x700000, 0x1000,
+                                     Protection::kRead | Protection::kWrite |
+                                         Protection::kGpuRead |
+                                         Protection::kGpuWrite);
+  std::array<std::byte, 16> initial{};
+  std::array<std::byte, 16> refreshed{};
+  initial[0] = std::byte{0x11};
+  refreshed[0] = std::byte{0x77};
+  Check(memory.Initialize(0x700000, initial),
+        "reuse fixture initialization failed");
+  {
+    kajps5::gpu::GpuRuntime runtime(memory);
+    Check(static_cast<bool>(runtime.InitializeVulkan(FakeLoader())),
+          "reuse fixture Vulkan initialization failed");
+    kajps5::gpu::shader::recompiler::CompileResult compile;
+    compile.spirv.assign(kValidatedSpirv.begin(), kValidatedSpirv.end());
+    auto &p = compile.program;
+    p.stage = kajps5::gpu::ShaderType::Compute;
+    p.resource_tracking_complete = p.shader_info_complete =
+        p.binding_layout_complete = true;
+    p.bindings.descriptor_set = 0;
+    p.bindings.push_constant_size = 4;
+    p.bindings.buffer_offset_count = 1;
+    p.bindings.descriptors.push_back(
+        {kajps5::gpu::shader::recompiler::IR::DescriptorBindingKind::Buffers,
+         5,
+         {0}});
+    p.info.buffers.push_back({.max_byte_extent = 16,
+                              .packed_stride = 4,
+                              .descriptor_format = 0,
+                              .read = true,
+                              .written = true});
+    kajps5::gpu::shader::recompiler::IR::DescriptorValue d;
+    d.dword_count = 4;
+    d.dwords[0] = 0x700000;
+    d.dwords[1] = 4U << 16U;
+    d.dwords[2] = 4;
+    compile.resources.buffers.push_back(d);
+    const auto first =
+        runtime.SubmitVulkanTranslatedCompute(compile, 1, 1, 1, 10);
+    Check(first && g_fake.descriptor_history.size() == 1,
+          "first reuse fixture submission failed");
+    const VkBuffer first_buffer = g_fake.descriptor_history[0][0].buffer;
+    const auto buffers = g_fake.buffers_created;
+    const auto memories = g_fake.memories_allocated;
+    Check(memory.Write(0x700000, refreshed),
+          "reuse fixture CPU refresh failed");
+    const auto second =
+        runtime.SubmitVulkanTranslatedCompute(compile, 1, 1, 1, 10);
+    Check(second && g_fake.descriptor_history.size() == 2 &&
+              g_fake.descriptor_history[1][0].buffer == first_buffer &&
+              g_fake.buffers_created == buffers &&
+              g_fake.memories_allocated == memories &&
+              BytesForBuffer(first_buffer)[0] == refreshed[0],
+          "completed translated backing was not reused and refreshed");
+  }
+  Check(g_fake.buffers_created == g_fake.buffers_destroyed &&
+            g_fake.memories_allocated == g_fake.memories_freed &&
+            g_fake.unmap_calls == g_fake.memories_allocated,
+        "pooled translated backing was not released exactly once at teardown");
+}
+
+void TestTranslatedInFlightVersionSeparation() {
+  g_fake = {};
+  using Protection = kajps5::memory::GuestMemoryProtection;
+  kajps5::memory::GuestMemory memory(0x700000, 0x1000,
+                                     Protection::kRead | Protection::kWrite |
+                                         Protection::kGpuRead |
+                                         Protection::kGpuWrite);
+  std::array<std::byte, 16> initial{};
+  initial[1] = std::byte{0x12};
+  const std::array<std::byte, 4> before = {std::byte{0xa1}, std::byte{0xa2},
+                                           std::byte{0xa3}, std::byte{0xa4}};
+  const std::array<std::byte, 4> after = {std::byte{0xb1}, std::byte{0xb2},
+                                          std::byte{0xb3}, std::byte{0xb4}};
+  Check(memory.Initialize(0x700000, before) &&
+            memory.Initialize(0x700004, initial) &&
+            memory.Initialize(0x700014, after),
+        "version fixture initialization failed");
+  {
+    kajps5::gpu::GpuRuntime runtime(memory);
+    Check(static_cast<bool>(runtime.InitializeVulkan(FakeLoader())),
+          "version fixture Vulkan initialization failed");
+    kajps5::gpu::shader::recompiler::CompileResult compile;
+    compile.spirv.assign(kValidatedSpirv.begin(), kValidatedSpirv.end());
+    auto &p = compile.program;
+    p.stage = kajps5::gpu::ShaderType::Compute;
+    p.resource_tracking_complete = p.shader_info_complete =
+        p.binding_layout_complete = true;
+    p.bindings.descriptor_set = 0;
+    p.bindings.push_constant_size = 4;
+    p.bindings.buffer_offset_count = 1;
+    p.bindings.descriptors.push_back(
+        {kajps5::gpu::shader::recompiler::IR::DescriptorBindingKind::Buffers,
+         5,
+         {0}});
+    p.info.buffers.push_back({.max_byte_extent = 16,
+                              .packed_stride = 4,
+                              .descriptor_format = 0,
+                              .read = true,
+                              .written = true});
+    kajps5::gpu::shader::recompiler::IR::DescriptorValue d;
+    d.dword_count = 4;
+    d.dwords[0] = 0x700004;
+    d.dwords[1] = 4U << 16U;
+    d.dwords[2] = 4;
+    compile.resources.buffers.push_back(d);
+    g_fake.wait_results = {VK_TIMEOUT};
+    const auto first =
+        runtime.SubmitVulkanTranslatedCompute(compile, 1, 1, 1, 0);
+    Check(first.status == vk::VulkanComputeStatus::kFenceWaitTimedOut &&
+              g_fake.descriptor_history.size() == 1,
+          "first version was not retained");
+    const VkBuffer first_buffer = g_fake.descriptor_history[0][0].buffer;
+    BytesForBuffer(first_buffer)[1] = std::byte{0x99};
+    const std::array<std::byte, 1> cpu_new = {std::byte{0xee}};
+    Check(memory.Write(0x700006, cpu_new), "version fixture CPU update failed");
+    const auto second =
+        runtime.SubmitVulkanTranslatedCompute(compile, 1, 1, 1, 10);
+    const VkBuffer second_buffer = g_fake.descriptor_history[1][0].buffer;
+    Check(second && second_buffer != first_buffer &&
+              g_fake.buffers_created == 2 && g_fake.memories_allocated == 2 &&
+              BytesForBuffer(second_buffer)[2] == cpu_new[0],
+          "in-flight version reused or failed to refresh the first backing");
+    SignalFence(g_fake.submitted_fences.front());
+    const auto reclaimed = runtime.PollVulkanCompute();
+    std::array<std::byte, 16> readback{};
+    std::array<std::byte, 4> read_before{};
+    std::array<std::byte, 4> read_after{};
+    Check(reclaimed && reclaimed.retained_submission_count == 0 &&
+              memory.Read(0x700004, readback) &&
+              memory.Read(0x700000, read_before) &&
+              memory.Read(0x700014, read_after) &&
+              readback[1] == std::byte{0x99} && readback[2] == cpu_new[0] &&
+              read_before == before && read_after == after,
+          "first-version readback overwrote newer CPU bytes or sentinels");
+  }
+  Check(g_fake.buffers_created == g_fake.buffers_destroyed &&
+            g_fake.memories_allocated == g_fake.memories_freed &&
+            g_fake.unmap_calls == g_fake.memories_allocated,
+        "versioned translated backings were not released exactly once");
+}
+
+void TestTranslatedBackingBound() {
+  g_fake = {};
+  using Protection = kajps5::memory::GuestMemoryProtection;
+  kajps5::memory::GuestMemory memory(0x700000, 0x1000,
+                                     Protection::kRead | Protection::kWrite |
+                                         Protection::kGpuRead |
+                                         Protection::kGpuWrite);
+  Check(memory.InitializeFill(0x700000, 16, std::byte{0x42}),
+        "bound fixture initialization failed");
+  {
+    kajps5::gpu::GpuRuntime runtime(memory);
+    Check(static_cast<bool>(runtime.InitializeVulkan(FakeLoader())),
+          "bound fixture Vulkan initialization failed");
+    kajps5::gpu::shader::recompiler::CompileResult compile;
+    compile.spirv.assign(kValidatedSpirv.begin(), kValidatedSpirv.end());
+    auto &p = compile.program;
+    p.stage = kajps5::gpu::ShaderType::Compute;
+    p.resource_tracking_complete = p.shader_info_complete =
+        p.binding_layout_complete = true;
+    p.bindings.descriptor_set = 0;
+    p.bindings.push_constant_size = 4;
+    p.bindings.buffer_offset_count = 1;
+    p.bindings.descriptors.push_back(
+        {kajps5::gpu::shader::recompiler::IR::DescriptorBindingKind::Buffers,
+         5,
+         {0}});
+    p.info.buffers.push_back({.max_byte_extent = 16,
+                              .packed_stride = 4,
+                              .descriptor_format = 0,
+                              .read = true,
+                              .written = true});
+    kajps5::gpu::shader::recompiler::IR::DescriptorValue d;
+    d.dword_count = 4;
+    d.dwords[0] = 0x700000;
+    d.dwords[1] = 4U << 16U;
+    d.dwords[2] = 4;
+    compile.resources.buffers.push_back(d);
+    g_fake.wait_results.assign(8, VK_TIMEOUT);
+    std::vector<VkBuffer> buffers;
+    for (std::size_t index = 0; index < 8; ++index) {
+      const auto timed_out =
+          runtime.SubmitVulkanTranslatedCompute(compile, 1, 1, 1, 0);
+      Check(timed_out.status == vk::VulkanComputeStatus::kFenceWaitTimedOut &&
+                timed_out.retained_submission_count == index + 1,
+            "translated backing bound did not retain timed-out work");
+      buffers.push_back(g_fake.descriptor_history.back()[0].buffer);
+    }
+    std::sort(buffers.begin(), buffers.end());
+    Check(
+        std::adjacent_find(buffers.begin(), buffers.end()) == buffers.end() &&
+            g_fake.buffers_created == 8 && g_fake.memories_allocated == 8,
+        "eight retained translated submissions did not own distinct backings");
+    const auto ninth =
+        runtime.SubmitVulkanTranslatedCompute(compile, 1, 1, 1, 0);
+    Check(ninth.status == vk::VulkanComputeStatus::kResourceLimit &&
+              ninth.retained_submission_count == 8 &&
+              g_fake.queue_submit_calls == 8,
+          "ninth translated submission exceeded retained backing bound");
+    for (VkFence fence : g_fake.submitted_fences)
+      SignalFence(fence);
+    const auto reclaimed = runtime.PollVulkanCompute();
+    Check(reclaimed && reclaimed.reclaimed_submission_count == 8 &&
+              reclaimed.retained_submission_count == 0,
+          "translated backing bound did not reclaim all signalled submissions");
+  }
+  Check(g_fake.buffers_created == g_fake.buffers_destroyed &&
+            g_fake.memories_allocated == g_fake.memories_freed &&
+            g_fake.unmap_calls == g_fake.memories_allocated,
+        "bounded translated backings did not balance at teardown");
+}
+
+void TestTranslatedOverlappingAliasCoalescing() {
+  g_fake = {};
+  using Protection = kajps5::memory::GuestMemoryProtection;
+  kajps5::memory::GuestMemory memory(0x700000, 0x1000,
+                                     Protection::kRead | Protection::kWrite |
+                                         Protection::kGpuRead |
+                                         Protection::kGpuWrite);
+  std::array<std::byte, 24> bytes{};
+  for (std::size_t index = 0; index < bytes.size(); ++index) {
+    bytes[index] = static_cast<std::byte>(0x20U + index);
+  }
+  const std::array<std::byte, 4> before = {std::byte{0xa1}, std::byte{0xa2},
+                                           std::byte{0xa3}, std::byte{0xa4}};
+  const std::array<std::byte, 4> after = {std::byte{0xb1}, std::byte{0xb2},
+                                          std::byte{0xb3}, std::byte{0xb4}};
+  Check(memory.Initialize(0x700000, before) &&
+            memory.Initialize(0x700004, bytes) &&
+            memory.Initialize(0x70001c, after),
+        "overlapping-alias fixture initialization failed");
+  {
+    kajps5::gpu::GpuRuntime runtime(memory);
+    Check(static_cast<bool>(runtime.InitializeVulkan(FakeLoader())),
+          "overlapping-alias Vulkan initialization failed");
+    kajps5::gpu::shader::recompiler::CompileResult compile;
+    compile.spirv.assign(kValidatedSpirv.begin(), kValidatedSpirv.end());
+    auto &program = compile.program;
+    program.stage = kajps5::gpu::ShaderType::Compute;
+    program.resource_tracking_complete = program.shader_info_complete =
+        program.binding_layout_complete = true;
+    program.bindings.descriptor_set = 0;
+    program.bindings.push_constant_size = 8;
+    program.bindings.buffer_offset_dword = 1;
+    program.bindings.buffer_offset_count = 2;
+    program.bindings.user_data_registers = {0};
+    program.bindings.descriptors.push_back(
+        {kajps5::gpu::shader::recompiler::IR::DescriptorBindingKind::Buffers,
+         5,
+         {0, 1}});
+    for (std::uint32_t address : {0x700004U, 0x70000cU}) {
+      program.info.buffers.push_back({.max_byte_extent = 16,
+                                      .packed_stride = 4,
+                                      .descriptor_format = 0,
+                                      .read = true,
+                                      .written = true});
+      kajps5::gpu::shader::recompiler::IR::DescriptorValue descriptor;
+      descriptor.dword_count = 4;
+      descriptor.dwords[0] = address;
+      descriptor.dwords[1] = 4U << 16U;
+      descriptor.dwords[2] = 4;
+      compile.resources.buffers.push_back(descriptor);
+    }
+    compile.resources.user_data = {0x12345678U};
+    g_fake.wait_results = {VK_TIMEOUT};
+    const auto timed_out =
+        runtime.SubmitVulkanTranslatedCompute(compile, 1, 1, 1, 0);
+    Check(timed_out.status == vk::VulkanComputeStatus::kFenceWaitTimedOut &&
+              timed_out.retained_submission_count == 1 &&
+              g_fake.descriptor_infos.size() == 2 &&
+              g_fake.buffers_created == 1 && g_fake.memories_allocated == 1,
+          "overlapping aliases did not submit through one retained backing");
+    const VkDescriptorBufferInfo &first_descriptor = g_fake.descriptor_infos[0];
+    const VkDescriptorBufferInfo &second_descriptor =
+        g_fake.descriptor_infos[1];
+    Check(first_descriptor.buffer == second_descriptor.buffer &&
+              first_descriptor.offset == 0 && first_descriptor.range == 16 &&
+              second_descriptor.offset == 0 && second_descriptor.range == 24 &&
+              g_fake.pushed_words.size() == 2 &&
+              g_fake.pushed_words[0] == 0x12345678U &&
+              g_fake.pushed_words[1] == (2U << 10U),
+          "overlapping aliases did not retain aligned descriptor offsets and "
+          "prefixes");
+
+    auto &mapped = BytesForBuffer(first_descriptor.buffer);
+    constexpr std::size_t kOverlapOffset = 11;
+    constexpr std::size_t kSecondViewOverlapOffset = kOverlapOffset - 8;
+    constexpr std::size_t kSecondViewUniqueOffset = 20;
+    const std::byte gpu_overlap = std::byte{0xe1};
+    const std::byte gpu_unique = std::byte{0xe2};
+    const std::array<std::byte, 1> cpu_new = {std::byte{0xee}};
+    mapped[kOverlapOffset] = gpu_overlap;
+    mapped[kSecondViewUniqueOffset] = gpu_unique;
+    Check(memory.Write(0x700005, cpu_new),
+          "overlapping-alias CPU mutation failed");
+    SignalFence(g_fake.submitted_fences.front());
+    const auto reclaimed = runtime.PollVulkanCompute();
+    std::array<std::byte, 16> first_view{};
+    std::array<std::byte, 16> second_view{};
+    std::array<std::byte, 4> read_before{};
+    std::array<std::byte, 4> read_after{};
+    Check(reclaimed && reclaimed.retained_submission_count == 0 &&
+              memory.Read(0x700004, first_view) &&
+              memory.Read(0x70000c, second_view) &&
+              memory.Read(0x700000, read_before) &&
+              memory.Read(0x70001c, read_after) &&
+              first_view[kOverlapOffset] == gpu_overlap &&
+              second_view[kSecondViewOverlapOffset] == gpu_overlap &&
+              second_view[kSecondViewUniqueOffset - 8] == gpu_unique &&
+              first_view[1] == cpu_new[0] && read_before == before &&
+              read_after == after && g_fake.buffers_destroyed == 0 &&
+              g_fake.memories_freed == 0 && g_fake.unmap_calls == 0,
+          "overlapping alias readback did not preserve GPU, CPU, and sentinel "
+          "data");
+  }
+  Check(g_fake.buffers_created == 1 && g_fake.buffers_destroyed == 1 &&
+            g_fake.memories_allocated == 1 && g_fake.memories_freed == 1 &&
+            g_fake.unmap_calls == 1,
+        "pooled overlapping-alias backing was not released exactly once at "
+        "teardown");
+}
+
 }  // namespace
 
 int main() {
@@ -1076,5 +2041,14 @@ int main() {
   TestDeviceLossWinsOwnerAcquisitionRace();
   TestRetainedSubmissionBound();
   TestDeviceLossIsExplicitAndTerminal();
+  TestTranslatedDescriptorAlignmentAndPushData();
+  TestTranslatedTransactionalFailures();
+  TestTranslatedTimeoutReadbackRetry();
+  TestTranslatedDeviceLossPreservesDirtyState();
+  TestTranslatedReadOnlyDeviceLossHasNoDirtyRecords();
+  TestTranslatedSequentialBackingReuseAndCpuRefresh();
+  TestTranslatedInFlightVersionSeparation();
+  TestTranslatedBackingBound();
+  TestTranslatedOverlappingAliasCoalescing();
   return 0;
 }

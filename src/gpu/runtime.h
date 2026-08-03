@@ -19,6 +19,7 @@
 #include "gpu/resource_coherence.h"
 #include "gpu/shader_runtime.h"
 #include "gpu/submission_queue.h"
+#include "gpu/vulkan/buffer_cache.h"
 #include "gpu/vulkan/device.h"
 #include "gpu/vulkan/execution.h"
 
@@ -181,7 +182,17 @@ class GpuRuntime final {
   [[nodiscard]] vulkan::VulkanComputeResult PollVulkanCompute();
   [[nodiscard]] bool has_vulkan_compute_execution() const noexcept;
 
- private:
+  // The immutable CompileResult remains the sole binding contract. This
+  // preflights guest descriptors through the runtime-owned cache before the
+  // descriptor-capable execution path is entered.
+  [[nodiscard]] vulkan::VulkanComputeResult SubmitVulkanTranslatedCompute(
+      const shader::recompiler::CompileResult &compile,
+      std::uint32_t group_count_x, std::uint32_t group_count_y,
+      std::uint32_t group_count_z,
+      std::uint64_t timeout_ns =
+          vulkan::kDefaultVulkanComputeFenceWaitNanoseconds);
+
+private:
   [[nodiscard]] GpuPacketResult AppendPacket(
       std::uint64_t command_buffer, std::span<const std::uint32_t> packet);
 
@@ -199,6 +210,9 @@ class GpuRuntime final {
   GpuSubmissionSink* submission_sink_ = nullptr;
   mutable std::mutex vulkan_mutex_;
   std::unique_ptr<vulkan::VulkanDeviceContext> vulkan_context_;
+  // Declared before execution so destruction releases retained execution
+  // leases before the guest buffer cache and then the device context.
+  std::unique_ptr<vulkan::VulkanGuestBufferCache> vulkan_buffer_cache_;
   // Declared after the context so destruction reverses this order: retained
   // execution resources are dealt with before the Vulkan device disappears.
   std::unique_ptr<vulkan::VulkanComputeExecution> vulkan_execution_;

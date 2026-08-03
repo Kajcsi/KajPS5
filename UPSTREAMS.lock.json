@@ -10,7 +10,7 @@
     {
       "name": "SharpEmu",
       "repository": "https://github.com/sharpemu/sharpemu.git",
-      "commit": "4b5ea6a79346cb4529fa531cf2c1973f3978eb22",
+      "commit": "9e10d7c44a2821cfd5ccd3417c09c0cf269285a4",
       "role": "behavior-and-test-reference"
     }
   ]
