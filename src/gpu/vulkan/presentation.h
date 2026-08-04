@@ -65,6 +65,8 @@ struct VulkanPresentationTestHooks {
   std::function<VkResult()> present;
   std::function<VkResult()> fence_status;
   std::function<bool(VkSwapchainKHR, VkSwapchainKHR&, std::vector<VkImage>&)> recreate;
+  std::function<bool(VkFormat, VkFormatFeatureFlags)>
+      supports_optimal_tiling_features;
 };
 
 [[nodiscard]] VulkanPresentationChoice ChooseVulkanPresentationChoice(

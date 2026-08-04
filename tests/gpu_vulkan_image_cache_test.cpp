@@ -1851,10 +1851,26 @@ void TestDepthStencilPreparation() {
   Check(!unsupported && unsupported.status == vk::VulkanGuestImageStatus::kUnsupportedFormat,
         "unsupported depth format was accepted without device evidence");
 }
+
+void TestOptimalTilingFeatureQuery() {
+  Reset();
+  g.format_features = VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT |
+                      VK_FORMAT_FEATURE_BLIT_SRC_BIT;
+  auto context = Context();
+  Check(context->SupportsOptimalTilingFeatures(
+            VK_FORMAT_R8G8B8A8_UNORM,
+            VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT | VK_FORMAT_FEATURE_BLIT_SRC_BIT) &&
+            context->SupportsColorAttachmentFormat(VK_FORMAT_R8G8B8A8_UNORM) &&
+            !context->SupportsDepthStencilAttachmentFormat(VK_FORMAT_R8G8B8A8_UNORM) &&
+            !context->SupportsOptimalTilingFeatures(
+                VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_FEATURE_BLIT_DST_BIT),
+        "optimal-tiling feature query did not preserve exact required bits");
+}
 }  // namespace
 
 int main() {
   TestMappings();
+  TestOptimalTilingFeatureQuery();
   TestDepthStencilPreparation();
   TestReadOnlyRenderTargetDetilePreparation();
   TestPreparationAndTopology();

@@ -1217,28 +1217,27 @@ void VulkanDeviceContext::ReleasePresentationOwner() noexcept {
   impl_->presentation_owner_attached = false;
 }
 
-bool VulkanDeviceContext::SupportsColorAttachmentFormat(VkFormat format) const noexcept {
+bool VulkanDeviceContext::SupportsOptimalTilingFeatures(
+    VkFormat format, VkFormatFeatureFlags required_features) const noexcept {
   if (format == VK_FORMAT_UNDEFINED ||
       impl_->instance_dispatch.get_physical_device_format_properties == nullptr)
     return false;
   VkFormatProperties properties{};
   impl_->instance_dispatch.get_physical_device_format_properties(
       impl_->physical_device, format, &properties);
-  return (properties.optimalTilingFeatures &
-          VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT) != 0;
+  return (properties.optimalTilingFeatures & required_features) ==
+         required_features;
+}
+
+bool VulkanDeviceContext::SupportsColorAttachmentFormat(VkFormat format) const noexcept {
+  return SupportsOptimalTilingFeatures(
+      format, VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT);
 }
 
 bool VulkanDeviceContext::SupportsDepthStencilAttachmentFormat(
     VkFormat format) const noexcept {
-  if (format == VK_FORMAT_UNDEFINED ||
-      impl_->instance_dispatch.get_physical_device_format_properties == nullptr) {
-    return false;
-  }
-  VkFormatProperties properties{};
-  impl_->instance_dispatch.get_physical_device_format_properties(
-      impl_->physical_device, format, &properties);
-  return (properties.optimalTilingFeatures &
-          VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT) != 0;
+  return SupportsOptimalTilingFeatures(
+      format, VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT);
 }
 
 VkResult VulkanDeviceContext::WaitIdle() noexcept {

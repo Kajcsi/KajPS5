@@ -62,6 +62,9 @@ struct Fixture {
   kajps5::gpu::GuestImageLayoutInput prepared_input{};
   VkImageUsageFlags prepared_usage = 0;
   std::optional<vk::VulkanImageFormat> prepared_format_override;
+  VkFormatFeatureFlags format_features = VK_FORMAT_FEATURE_BLIT_SRC_BIT |
+                                          VK_FORMAT_FEATURE_BLIT_DST_BIT;
+  std::deque<VkResult> submit_results;
   int prepare=0, discard=0, complete=0, mark=0, submit=0, recreate=0;
   static VkResult Next(std::deque<VkResult>& scripted) {
     if (scripted.empty()) return VK_ERROR_INITIALIZATION_FAILED;
@@ -69,13 +72,14 @@ struct Fixture {
   }
   vk::VulkanPresentationTestHooks Hooks() {
     return {
-      .prepare=[this](const vk::VulkanGuestImageRequest& request) { ++prepare; prepared_input=request.input; prepared_usage=request.usage; prepared_format_override=request.format_override; const auto& input=request.input; vk::VulkanGuestImagePreparation p; if (input.width == 0 || input.height == 0 || input.depth == 0 || input.guest_address == 0) { p.status=vk::VulkanGuestImageStatus::kInvalidLayout; return p; } p.status=vk::VulkanGuestImageStatus::kOk; p.image=reinterpret_cast<VkImage>(static_cast<std::uintptr_t>(1)); return p; },
+      .prepare=[this](const vk::VulkanGuestImageRequest& request) { ++prepare; prepared_input=request.input; prepared_usage=request.usage; prepared_format_override=request.format_override; const auto& input=request.input; vk::VulkanGuestImagePreparation p; if (input.width == 0 || input.height == 0 || input.depth == 0 || input.guest_address == 0) { p.status=vk::VulkanGuestImageStatus::kInvalidLayout; return p; } p.status=vk::VulkanGuestImageStatus::kOk; p.format=request.format_override.value_or(vk::VulkanImageFormat{VK_FORMAT_R8G8B8A8_UNORM, vk::VulkanImageStorageClass::kR8G8B8A8, std::nullopt}); p.image=reinterpret_cast<VkImage>(static_cast<std::uintptr_t>(1)); return p; },
       .discard=[this](auto&) { ++discard; }, .complete=[this](auto&) { ++complete; return true; },
       .mark_submitted=[this](auto&) { ++mark; return true; },
       .acquire=[this](std::uint64_t, std::uint32_t* index) { *index=0; return Next(acquire); },
-      .submit=[this] { ++submit; return VK_SUCCESS; }, .present=[this] { return Next(present); },
+      .submit=[this] { ++submit; return submit_results.empty() ? VK_SUCCESS : Next(submit_results); }, .present=[this] { return Next(present); },
       .fence_status=[this] { return Next(fence); },
       .recreate=[this](VkSwapchainKHR old, VkSwapchainKHR& swapchain, std::vector<VkImage>& images) { old_swapchains.push_back(old); ++recreate; swapchain=reinterpret_cast<VkSwapchainKHR>(static_cast<std::uintptr_t>(recreate)); images={reinterpret_cast<VkImage>(static_cast<std::uintptr_t>(1))}; return true; },
+      .supports_optimal_tiling_features=[this](VkFormat, VkFormatFeatureFlags required) { return (format_features & required) == required; },
     };
   }
 };
@@ -83,7 +87,7 @@ kajps5::gpu::GuestImageLayoutInput ValidInput() { kajps5::gpu::GuestImageLayoutI
 void TestInjectedStateMachine() {
   Fixture f; f.acquire={VK_TIMEOUT,VK_SUCCESS,VK_SUCCESS}; f.present={VK_SUCCESS,VK_SUCCESS}; f.fence={VK_NOT_READY,VK_SUCCESS,VK_SUCCESS};
   vk::VulkanPresentationResult created; auto presenter=vk::VulkanPresentation::CreateForTesting(f.Hooks(),created); Check(presenter&&created,"test presentation creation failed");
-  Check(presenter->Present(ValidInput(),1).status==vk::VulkanPresentationStatus::kAcquireTimeout&&f.submit==0&&f.discard==1,"acquire timeout retained or submitted work");
+  Check(presenter->Present(ValidInput(),1).status==vk::VulkanPresentationStatus::kAcquireTimeout&&f.submit==0&&f.discard==1&&f.recreate==1,"acquire timeout retained or forced recreation");
   Check(presenter->Present(ValidInput(),1)&&f.submit==1,"later acquire did not submit");
   Check(presenter->Poll().status==vk::VulkanPresentationStatus::kRetainedWorkPending&&f.complete==0,"fence timeout released retained work");
   Check(presenter->Poll()&&f.complete==1&&f.discard==2,"completion did not reclaim exactly once");
@@ -136,8 +140,16 @@ void TestInjectedStateMachine() {
   Check(present_out_p->Poll()&&present_out.recreate==2,"present out-of-date did not retire and recreate after completion");
   Fixture invalid; vk::VulkanPresentationResult bad_result; auto bad=vk::VulkanPresentation::CreateForTesting(invalid.Hooks(),bad_result); auto malformed=ValidInput(); malformed.width=0;
   Check(bad->Present(malformed,1).status==vk::VulkanPresentationStatus::kInvalidFrame&&invalid.acquire.size()==1&&invalid.submit==0,"malformed frame reached acquire or submit");
-  Fixture lost; lost.acquire={VK_ERROR_DEVICE_LOST}; vk::VulkanPresentationResult lost_result; auto terminal=vk::VulkanPresentation::CreateForTesting(lost.Hooks(),lost_result);
-  Check(terminal->Present(ValidInput(),1).status==vk::VulkanPresentationStatus::kDeviceLost&&terminal->Poll().status==vk::VulkanPresentationStatus::kDeviceLost&&lost.discard==1,"device loss was not terminal or cleanup was not exactly once");
+  Fixture recovery; recovery.acquire={VK_SUCCESS,VK_SUCCESS}; recovery.submit_results={VK_ERROR_INITIALIZATION_FAILED,VK_SUCCESS}; vk::VulkanPresentationResult recovery_result;
+  auto recovered=vk::VulkanPresentation::CreateForTesting(recovery.Hooks(),recovery_result);
+  Check(recovered->Present(ValidInput(),1).status==vk::VulkanPresentationStatus::kDeviceFailure&&recovery.discard==1&&recovery.recreate==1,"post-acquire submit failure did not discard exactly once");
+  Check(recovered->Present(ValidInput(),1)&&recovery.recreate==2&&recovery.submit==2,"post-acquire submit failure did not recreate before later acquire");
+  (void)recovered->Poll();
+  Fixture denied_blit; denied_blit.format_features=VK_FORMAT_FEATURE_BLIT_DST_BIT; vk::VulkanPresentationResult denied_result;
+  auto denied=vk::VulkanPresentation::CreateForTesting(denied_blit.Hooks(),denied_result);
+  Check(denied->Present(ValidInput(),1).status==vk::VulkanPresentationStatus::kDeviceFailure&&denied_blit.acquire.size()==1&&denied_blit.submit==0&&denied_blit.discard==1,"denied blit source reached acquire or submit");
+  Fixture lost; lost.submit_results={VK_ERROR_DEVICE_LOST}; vk::VulkanPresentationResult lost_result; auto terminal=vk::VulkanPresentation::CreateForTesting(lost.Hooks(),lost_result);
+  Check(terminal->Present(ValidInput(),1).status==vk::VulkanPresentationStatus::kDeviceLost&&terminal->Poll().status==vk::VulkanPresentationStatus::kDeviceLost&&lost.discard==1&&lost.recreate==1,"device loss was not terminal or cleanup was not exactly once");
 }
 }  // namespace
 int main() { TestChoiceAndPlan(); TestPresentQueueSelection(); TestInjectedStateMachine(); std::cout << "presentation policy tests passed\n"; }

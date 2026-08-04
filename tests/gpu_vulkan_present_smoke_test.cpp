@@ -3,11 +3,13 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
 #include <optional>
 #include <span>
+#include <thread>
 #include <vector>
 
 #include "core/memory/guest_memory.h"
@@ -82,7 +84,9 @@ bool PresentAndPoll(kajps5::gpu::GpuRuntime& runtime,
               << kajps5::gpu::vulkan::VulkanPresentationStatusName(present.status) << '\n';
     return false;
   }
-  for (int spin = 0; spin != 1'000; ++spin) {
+  constexpr auto kCompletionTimeout = std::chrono::seconds(2);
+  const auto deadline = std::chrono::steady_clock::now() + kCompletionTimeout;
+  for (;;) {
     window.PumpMessages();
     const auto poll = runtime.PollVulkanPresentation();
     if (poll.status == VulkanPresentationStatus::kOk) {
@@ -94,8 +98,12 @@ bool PresentAndPoll(kajps5::gpu::GpuRuntime& runtime,
                 << kajps5::gpu::vulkan::VulkanPresentationStatusName(poll.status) << '\n';
       return false;
     }
+    if (std::chrono::steady_clock::now() >= deadline) break;
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
-  std::cerr << "FAIL: " << frame_name << " presentation did not complete\n";
+  std::cerr << "FAIL: " << frame_name << " presentation did not complete within "
+            << std::chrono::duration_cast<std::chrono::milliseconds>(kCompletionTimeout).count()
+            << "ms\n";
   return false;
 }
 

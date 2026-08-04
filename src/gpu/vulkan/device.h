@@ -318,6 +318,8 @@ class VulkanDeviceContext final {
   [[nodiscard]] PFN_vkVoidFunction ResolveInstanceFunction(
       const char* name) const noexcept;
   [[nodiscard]] std::mutex& queue_mutex() noexcept;
+  [[nodiscard]] bool SupportsOptimalTilingFeatures(
+      VkFormat format, VkFormatFeatureFlags required_features) const noexcept;
   [[nodiscard]] bool SupportsColorAttachmentFormat(VkFormat format) const noexcept;
   [[nodiscard]] bool SupportsDepthStencilAttachmentFormat(VkFormat format) const noexcept;
 
