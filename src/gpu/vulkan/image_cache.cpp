@@ -1215,12 +1215,15 @@ bool VulkanGuestImageCache::Complete(VulkanGuestImagePreparation& p) noexcept {
     const std::byte* gpu = static_cast<const std::byte*>(p.staging_mapped);
     std::vector<std::byte> current(p.uploaded_bytes.size());
     if (!memory_.Read(p.layout.storage_key.guest_address, current)) return false;
+    // Three-way merge against the upload baseline keeps newer CPU bytes.
     std::size_t offset = 0;
     while (offset < current.size()) {
-      if (gpu[offset] == p.uploaded_bytes[offset]) { ++offset; continue; }
+      if (gpu[offset] == p.uploaded_bytes[offset] ||
+          current[offset] != p.uploaded_bytes[offset]) { ++offset; continue; }
       const std::size_t start = offset;
       do { ++offset; } while (offset < current.size() &&
-                              gpu[offset] != p.uploaded_bytes[offset]);
+                              (gpu[offset] != p.uploaded_bytes[offset] &&
+                               current[offset] == p.uploaded_bytes[offset]));
       std::memcpy(current.data() + start, gpu + start, offset - start);
       if (!memory_.Write(p.layout.storage_key.guest_address + start,
                          std::span<const std::byte>(current).subspan(

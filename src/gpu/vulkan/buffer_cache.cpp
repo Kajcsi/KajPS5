@@ -663,9 +663,12 @@ bool VulkanGuestBufferCache::Complete(
       std::vector<std::byte> current(static_cast<std::size_t>(view.size));
       if (!memory_.Read(view.guest_address, current))
         return false;
+      // Three-way merge: publish a GPU change only when GuestMemory still
+      // contains the byte uploaded to the device for this submission.
       std::size_t offset = 0;
       while (offset < current.size()) {
-        if (gpu[offset] == view.uploaded_bytes[offset]) {
+        if (gpu[offset] == view.uploaded_bytes[offset] ||
+            current[offset] != view.uploaded_bytes[offset]) {
           ++offset;
           continue;
         }
@@ -673,7 +676,8 @@ bool VulkanGuestBufferCache::Complete(
         do {
           ++offset;
         } while (offset < current.size() &&
-                 gpu[offset] != view.uploaded_bytes[offset]);
+                 (gpu[offset] != view.uploaded_bytes[offset] &&
+                  current[offset] == view.uploaded_bytes[offset]));
         for (std::size_t index = start; index < offset; ++index)
           current[index] = gpu[index];
         if (!memory_.Write(view.guest_address + start,

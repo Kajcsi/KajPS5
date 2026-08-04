@@ -1140,23 +1140,26 @@ void TestTransferLeaseAndCoherence() {
         "submitted writable readback did not mark coherence dirty");
   Check(!cache.MarkSubmitted(prepared) && prepared.gpu_dirty,
         "duplicate submission changed GPU-dirty state");
-  const std::array<std::byte, 1> cpu_only = {std::byte{0xe1}};
-  Check(memory.Write(0x1008, cpu_only), "CPU-only guest mutation failed");
+  const std::array<std::byte, 1> cpu_conflict = {std::byte{0xe1}};
+  const std::array<std::byte, 1> cpu_only = {std::byte{0xd4}};
+  Check(memory.Write(0x1003, cpu_conflict) && memory.Write(0x1008, cpu_only),
+        "CPU guest mutations failed");
   g.mapped_bytes[3] = std::byte{0x9a};
+  g.mapped_bytes[4] = std::byte{0xab};
   g.invalidate_available = false;
   std::array<std::byte, 16> before_completion{};
   Check(!cache.Complete(prepared) && prepared.gpu_dirty && g.invalidates == 0 &&
             memory.Read(0x1000, before_completion) &&
-            before_completion[3] == initial[3] &&
+            before_completion[3] == cpu_conflict[0] &&
             before_completion[8] == cpu_only[0],
         "missing noncoherent invalidate changed a dirty image lease");
   g.invalidate_available = true;
   Check(cache.Complete(prepared) && !prepared.gpu_dirty && g.invalidates == 1,
         "noncoherent readback completion did not invalidate and resolve dirty state");
   std::array<std::byte, 16> resolved{};
-  Check(memory.Read(0x1000, resolved) && resolved[3] == std::byte{0x9a} &&
-            resolved[8] == std::byte{0xe1},
-        "readback did not preserve exact newer CPU-only bytes");
+  Check(memory.Read(0x1000, resolved) && resolved[3] == cpu_conflict[0] &&
+            resolved[4] == std::byte{0xab} && resolved[8] == cpu_only[0],
+        "readback three-way merge did not preserve conflicts or apply disjoint bytes");
   const auto state = runtime.resource_coherence().Query(prepared.resource);
   Check(state && !state->gpu_write_pending,
         "coherence GPU-write pending flag was not cleared after completion");
@@ -1196,6 +1199,60 @@ void TestCoherentCompletion() {
   std::array<std::byte, 1> value{};
   Check(memory.Read(0x1005, value) && value[0] == std::byte{0xbd},
         "coherent completion did not publish the GPU byte");
+  cache.Discard(prepared);
+}
+
+void TestBufferReadbackThreeWayMerge() {
+  Reset();
+  auto context = Context();
+  using Protection = kajps5::memory::GuestMemoryProtection;
+  kajps5::memory::GuestMemory memory(
+      0x1000, 0x1000, Protection::kRead | Protection::kWrite |
+                         Protection::kGpuRead | Protection::kGpuWrite);
+  const std::array<std::byte, 16> initial = {
+      std::byte{1}, std::byte{2}, std::byte{3}, std::byte{4},
+      std::byte{5}, std::byte{6}, std::byte{7}, std::byte{8},
+      std::byte{9}, std::byte{10}, std::byte{11}, std::byte{12},
+      std::byte{13}, std::byte{14}, std::byte{15}, std::byte{16}};
+  Check(memory.Initialize(0x1000, initial), "buffer merge guest initialization failed");
+  kajps5::gpu::GpuRuntime runtime(memory);
+  vk::VulkanGuestBufferCache cache(*context, memory, runtime.resource_coherence());
+  kajps5::gpu::shader::recompiler::CompileResult compile;
+  auto& program = compile.program;
+  program.stage = kajps5::gpu::ShaderType::Compute;
+  program.resource_tracking_complete = program.shader_info_complete =
+      program.binding_layout_complete = true;
+  program.bindings.descriptor_set = 0;
+  program.bindings.push_constant_size = 4;
+  program.bindings.buffer_offset_count = 1;
+  program.bindings.descriptors.push_back(
+      {ir::DescriptorBindingKind::Buffers, 3, {0}});
+  program.info.buffers.push_back({.source = 0, .max_byte_extent = 16,
+                                  .packed_stride = 4, .descriptor_format = 0,
+                                  .read = true, .written = true});
+  ir::DescriptorValue descriptor;
+  descriptor.dword_count = 4;
+  descriptor.dwords[0] = 0x1000;
+  descriptor.dwords[1] = 4U << 16U;
+  descriptor.dwords[2] = 4;
+  compile.resources.buffers.push_back(descriptor);
+  auto prepared = cache.Prepare(compile);
+  Check(prepared && prepared.views.size() == 1 && prepared.views[0].shader_writes &&
+            cache.MarkSubmitted(prepared),
+        "writable buffer lease did not reach GPU-pending completion");
+  const std::array<std::byte, 1> cpu_conflict = {std::byte{0xe1}};
+  const std::array<std::byte, 1> cpu_only = {std::byte{0xd4}};
+  Check(memory.Write(0x1003, cpu_conflict) && memory.Write(0x1008, cpu_only),
+        "buffer CPU guest mutations failed");
+  auto* gpu = static_cast<std::byte*>(prepared.mapped) + prepared.views[0].data_offset;
+  gpu[3] = std::byte{0x9a};
+  gpu[4] = std::byte{0xab};
+  Check(cache.Complete(prepared) && !prepared.views[0].gpu_dirty,
+        "buffer readback completion failed");
+  std::array<std::byte, 16> resolved{};
+  Check(memory.Read(0x1000, resolved) && resolved[3] == cpu_conflict[0] &&
+            resolved[4] == std::byte{0xab} && resolved[8] == cpu_only[0],
+        "buffer three-way merge did not preserve conflicts or apply disjoint bytes");
   cache.Discard(prepared);
 }
 
@@ -1877,6 +1934,7 @@ int main() {
   TestCoherentAndRollback();
   TestTransferLeaseAndCoherence();
   TestCoherentCompletion();
+  TestBufferReadbackThreeWayMerge();
   TestMissingCommandFunctionsAreSideEffectFree();
   TestTranslatedImageSamplerSet();
   TestTranslatedDescriptorDeviceLimits();
