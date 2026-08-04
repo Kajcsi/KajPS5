@@ -116,7 +116,11 @@ int main() {
   constexpr std::uint64_t kStatus = kBase + 0x300;
   constexpr std::uint64_t kLegacyAttribute = kBase + 0x400;
   constexpr std::uint64_t kLegacyAttributeShort = kBase + 0x440;
-  GuestMemory memory(kBase, 0x2000,
+  constexpr std::uint64_t kTiledAttribute = kBase + 0x500;
+  constexpr std::uint64_t kTiledFrame = kBase + 0x10000;
+  constexpr std::uint64_t kTiledStorageBytes = 64 * 1024ULL;
+  constexpr std::uint64_t kTiledLinearBytes = 17 * 9 * 4ULL;
+  GuestMemory memory(kBase, 0x20000,
                      GuestMemoryProtection::kRead | GuestMemoryProtection::kWrite);
   kajps5::kernel::KernelRuntime kernel_runtime;
   GpuRuntime runtime(memory, nullptr, &kernel_runtime.event_queues());
@@ -306,7 +310,7 @@ int main() {
         "guest frame protection restore failed");
 
   std::array<std::byte, 0x20> invalid_range_buffer{};
-  Write64(invalid_range_buffer, 0x00, kBase + 0x1ff0);
+  Write64(invalid_range_buffer, 0x00, kBase + 0x1fff0);
   Check(memory.Write(kBuffers + 0x20, invalid_range_buffer),
         "invalid-range buffer entry setup failed");
   SetArguments(context, {1, 1, 1, kBuffers + 0x20, 1, kAttribute, 0, 0});
@@ -345,7 +349,8 @@ int main() {
   CheckRejectedFlip("raw internal format alias changed flip state or fired an event");
 
   service.SetPresentationCallbacksForTesting({
-      [](const kajps5::gpu::GuestImageLayoutInput&) {
+      [](const kajps5::gpu::GuestImageLayoutInput&,
+         const kajps5::gpu::vulkan::VulkanImageFormat&) {
         return VulkanPresentationResult{VulkanPresentationStatus::kDeviceFailure, 73, {}};
       },
       {}});
@@ -357,11 +362,15 @@ int main() {
   CheckRejectedFlip("terminal presentation failure changed flip state or fired an event");
 
   kajps5::gpu::GuestImageLayoutInput submitted{};
+  kajps5::gpu::vulkan::VulkanImageFormat submitted_format{};
   std::size_t present_calls = 0;
   std::size_t poll_calls = 0;
   service.SetPresentationCallbacksForTesting({
-      [&submitted, &present_calls](const kajps5::gpu::GuestImageLayoutInput& input) {
+      [&submitted, &submitted_format, &present_calls](
+          const kajps5::gpu::GuestImageLayoutInput& input,
+          const kajps5::gpu::vulkan::VulkanImageFormat& format_override) {
         submitted = input;
+        submitted_format = format_override;
         ++present_calls;
         return VulkanPresentationResult{VulkanPresentationStatus::kRetainedWorkPending,
                                         77, {}};
@@ -374,14 +383,24 @@ int main() {
   Check(registry.Dispatch("sceVideoOutSubmitFlip", context).handler_status ==
                 HleContextStatus::kOk && Result(context) == 0 &&
             present_calls == 1 && submitted.guest_address == kBase + 0x800 &&
-            submitted.format == 56 && submitted.width == 4 && submitted.height == 3 &&
-            submitted.row_pitch_bytes == 16 &&
-            submitted.tile_mode == kajps5::gpu::Prospero::TileMode::kLinear,
+            submitted.format == kajps5::gpu::Prospero::GpuEnumValue(
+                                    kajps5::gpu::Prospero::BufferFormat::k8_8_8_8Srgb) &&
+            submitted.width == 4 && submitted.height == 3 &&
+            submitted.row_pitch_bytes == 16 && submitted.slice_pitch_bytes == 48 &&
+            submitted.tile_mode == kajps5::gpu::Prospero::TileMode::kLinear &&
+            !submitted.tightly_packed &&
+            submitted_format.format == VK_FORMAT_R8G8B8A8_SRGB &&
+            submitted_format.storage_class ==
+                kajps5::gpu::vulkan::VulkanImageStorageClass::kR8G8B8A8 &&
+            !submitted_format.sibling_format.has_value(),
         "SubmitFlip did not issue exactly one frame with the registered layout");
   SetArguments(context, {1});
   Check(registry.Dispatch("sceVideoOutIsFlipPending", context).handler_status ==
                 HleContextStatus::kOk && Result(context) == 0 && poll_calls == 1,
         "retained flip did not complete on the next service poll");
+  event = kernel_runtime.event_queues().Poll(queue.handle, 1);
+  Check(event && event.events.size() == 1 && event.events[0].data == 0x66,
+        "retained flip did not trigger its event");
 
   SetArguments(context, {kAttribute10, 0x8100000022000000ULL, 1ULL,
                          4ULL, 3ULL, 0ULL, 0ULL, 0ULL});
@@ -401,8 +420,11 @@ int main() {
                 HleContextStatus::kOk && Result(context) == 3,
         "10-bit fixture registration failed");
   service.SetPresentationCallbacksForTesting({
-      [&submitted, &present_calls](const kajps5::gpu::GuestImageLayoutInput& input) {
+      [&submitted, &submitted_format, &present_calls](
+          const kajps5::gpu::GuestImageLayoutInput& input,
+          const kajps5::gpu::vulkan::VulkanImageFormat& format_override) {
         submitted = input;
+        submitted_format = format_override;
         ++present_calls;
         return VulkanPresentationResult{VulkanPresentationStatus::kOk, 79, {}};
       },
@@ -411,9 +433,160 @@ int main() {
   const auto ten_bit_dispatch =
       registry.Dispatch("sceVideoOutSubmitFlip", context);
   Check(ten_bit_dispatch.handler_status == HleContextStatus::kOk && Result(context) == 0 &&
-            present_calls == 2 && submitted.format == 9 &&
-            submitted.tile_mode == kajps5::gpu::Prospero::TileMode::kLinear,
-        "exact 64-bit 10-bit VideoOut format did not reach format 9");
+            present_calls == 2 &&
+            submitted.format == kajps5::gpu::Prospero::GpuEnumValue(
+                                    kajps5::gpu::Prospero::BufferFormat::k10_10_10_2UNorm) &&
+            submitted.tile_mode == kajps5::gpu::Prospero::TileMode::kLinear &&
+            submitted.row_pitch_bytes == 16 && submitted.slice_pitch_bytes == 48 &&
+            !submitted.tightly_packed &&
+            submitted_format.format == VK_FORMAT_A2B10G10R10_UNORM_PACK32 &&
+            submitted_format.storage_class ==
+                kajps5::gpu::vulkan::VulkanImageStorageClass::kA2B10G10R10 &&
+            !submitted_format.sibling_format.has_value(),
+        "exact 64-bit 10-bit VideoOut format did not retain its exact layout and override");
+  event = kernel_runtime.event_queues().Poll(queue.handle, 1);
+  Check(event && event.events.size() == 1 && event.events[0].data == 0x67,
+        "10-bit flip did not trigger its event");
+  SetArguments(context, {1, 3});
+  Check(registry.Dispatch("sceVideoOutUnregisterBuffers", context).handler_status ==
+                HleContextStatus::kOk && Result(context) == 0,
+        "10-bit fixture unregister failed");
+
+  SetArguments(context, {kTiledAttribute, 0x8000000022000000ULL, 0ULL,
+                         17ULL, 9ULL, 0ULL, 0ULL, 0ULL});
+  Check(registry.Dispatch("sceVideoOutSetBufferAttribute2", context).handler_status ==
+                HleContextStatus::kOk && Result(context) == 0,
+        "tiled attribute setup failed");
+  std::array<std::byte, 0x20> tiled_buffer{};
+  Write64(tiled_buffer, 0x00, kTiledFrame);
+  Check(memory.Write(kBuffers + 0x60, tiled_buffer) &&
+            memory.Protect(kTiledFrame, kTiledStorageBytes,
+                           GuestMemoryProtection::kRead |
+                               GuestMemoryProtection::kWrite |
+                               GuestMemoryProtection::kGpuRead),
+        "tiled buffer protection setup failed");
+  SetArguments(context, {1, 3, 3, kBuffers + 0x60, 1, kTiledAttribute, 0, 0});
+  Check(registry.Dispatch("sceVideoOutRegisterBuffers2", context).handler_status ==
+                HleContextStatus::kOk && Result(context) == 3,
+        "tiled fixture registration failed");
+  submitted = {};
+  submitted_format = {};
+  present_calls = 0;
+  service.SetPresentationCallbacksForTesting({
+      [&submitted, &submitted_format, &present_calls](
+          const kajps5::gpu::GuestImageLayoutInput& input,
+          const kajps5::gpu::vulkan::VulkanImageFormat& format_override) {
+        submitted = input;
+        submitted_format = format_override;
+        ++present_calls;
+        return VulkanPresentationResult{VulkanPresentationStatus::kOk, 80, {}};
+      },
+      {}});
+  SetArguments(context, {1, 3, 1, 0x68});
+  Check(registry.Dispatch("sceVideoOutSubmitFlip", context).handler_status ==
+                HleContextStatus::kOk && Result(context) == 0 && present_calls == 1 &&
+            submitted.guest_address == kTiledFrame &&
+            submitted.format == kajps5::gpu::Prospero::GpuEnumValue(
+                                    kajps5::gpu::Prospero::BufferFormat::k8_8_8_8Srgb) &&
+            submitted.width == 17 && submitted.height == 9 &&
+            submitted.row_pitch_bytes == 0 && submitted.slice_pitch_bytes == 0 &&
+            submitted.tile_mode == kajps5::gpu::Prospero::TileMode::kRenderTarget &&
+            submitted.tightly_packed &&
+            submitted_format.format == VK_FORMAT_R8G8B8A8_SRGB &&
+            submitted_format.storage_class ==
+                kajps5::gpu::vulkan::VulkanImageStorageClass::kR8G8B8A8 &&
+            !submitted_format.sibling_format.has_value(),
+        "tiled SubmitFlip did not issue the exact render-target presentation input");
+  event = kernel_runtime.event_queues().Poll(queue.handle, 1);
+  Check(event && event.events.size() == 1 && event.events[0].data == 0x68,
+        "tiled flip did not trigger its event");
+
+  const auto tiled_state = SnapshotFlipState();
+  const auto tiled_presentation = service.last_presentation_result();
+  const auto CheckTiledRejection = [&](std::string_view message) {
+    const auto actual_state = SnapshotFlipState();
+    const auto actual_presentation = service.last_presentation_result();
+    Check(present_calls == 1 && actual_state.count == tiled_state.count &&
+              actual_state.flip_arg == tiled_state.flip_arg &&
+              actual_state.pending_count == tiled_state.pending_count &&
+              actual_state.current_buffer == tiled_state.current_buffer &&
+              actual_state.timeline == tiled_state.timeline &&
+              actual_presentation.status == tiled_presentation.status &&
+              actual_presentation.timeline == tiled_presentation.timeline &&
+              actual_presentation.diagnostics.size() == tiled_presentation.diagnostics.size() &&
+              std::equal(actual_presentation.diagnostics.begin(),
+                         actual_presentation.diagnostics.end(),
+                         tiled_presentation.diagnostics.begin(),
+                         [](const auto& actual, const auto& expected) {
+                           return actual.status == expected.status &&
+                                  actual.api_result == expected.api_result &&
+                                  actual.message == expected.message;
+                         }) &&
+              kernel_runtime.event_queues().Poll(queue.handle, 1).status ==
+                  kajps5::kernel::KernelStatus::kBusy,
+          message);
+  };
+  Check(memory.Protect(kTiledFrame, kTiledStorageBytes,
+                       GuestMemoryProtection::kRead | GuestMemoryProtection::kWrite) &&
+            memory.Protect(kTiledFrame, kTiledLinearBytes,
+                           GuestMemoryProtection::kRead |
+                               GuestMemoryProtection::kWrite |
+                               GuestMemoryProtection::kGpuRead),
+        "tiled padded-range protection setup failed");
+  SetArguments(context, {1, 3, 1, 0x69});
+  Check(registry.Dispatch("sceVideoOutSubmitFlip", context).handler_status ==
+                HleContextStatus::kOk &&
+            Result(context) == kajps5::gpu::kVideoOutErrorInvalidAddress,
+        "tiled SubmitFlip accepted a GPU-readable linear prefix without the padded storage");
+  CheckTiledRejection("tiled padded-range rejection changed flip state or fired an event");
+  Check(memory.Protect(kTiledFrame, kTiledStorageBytes,
+                       GuestMemoryProtection::kRead |
+                           GuestMemoryProtection::kWrite |
+                           GuestMemoryProtection::kGpuRead),
+        "tiled padded-range protection restore failed");
+
+  SetArguments(context, {1, 3});
+  Check(registry.Dispatch("sceVideoOutUnregisterBuffers", context).handler_status ==
+                HleContextStatus::kOk && Result(context) == 0,
+        "tiled fixture unregister before misalignment test failed");
+  Write64(tiled_buffer, 0x00, kTiledFrame + 4);
+  Check(memory.Write(kBuffers + 0x60, tiled_buffer),
+        "misaligned tiled buffer setup failed");
+  SetArguments(context, {1, 3, 3, kBuffers + 0x60, 1, kTiledAttribute, 0, 0});
+  Check(registry.Dispatch("sceVideoOutRegisterBuffers2", context).handler_status ==
+                HleContextStatus::kOk && Result(context) == 3,
+        "misaligned tiled fixture registration failed");
+  SetArguments(context, {1, 3, 1, 0x6a});
+  Check(registry.Dispatch("sceVideoOutSubmitFlip", context).handler_status ==
+                HleContextStatus::kOk &&
+            Result(context) == kajps5::gpu::kVideoOutErrorInvalidAddress,
+        "misaligned tiled data address did not reject the flip");
+  CheckTiledRejection("misaligned tiled data address changed flip state or fired an event");
+  SetArguments(context, {1, 3});
+  Check(registry.Dispatch("sceVideoOutUnregisterBuffers", context).handler_status ==
+                HleContextStatus::kOk && Result(context) == 0,
+        "misaligned tiled fixture unregister failed");
+
+  Check(memory.Read(kTiledAttribute, attribute),
+        "tiled pitch fixture attribute read failed");
+  Write32(attribute, 0x14, 1);
+  Write64(tiled_buffer, 0x00, kTiledFrame);
+  Check(memory.Write(kTiledAttribute, attribute) && memory.Write(kBuffers + 0x60, tiled_buffer),
+        "tiled pitch fixture setup failed");
+  SetArguments(context, {1, 3, 3, kBuffers + 0x60, 1, kTiledAttribute, 0, 0});
+  Check(registry.Dispatch("sceVideoOutRegisterBuffers2", context).handler_status ==
+                HleContextStatus::kOk && Result(context) == 3,
+        "tiled nonzero-pitch fixture registration failed");
+  SetArguments(context, {1, 3, 1, 0x6b});
+  Check(registry.Dispatch("sceVideoOutSubmitFlip", context).handler_status ==
+                HleContextStatus::kOk &&
+            Result(context) == kajps5::gpu::kVideoOutErrorInvalidValue,
+        "tiled nonzero pitch did not reject the flip");
+  CheckTiledRejection("tiled nonzero pitch changed flip state or fired an event");
+  SetArguments(context, {1, 3});
+  Check(registry.Dispatch("sceVideoOutUnregisterBuffers", context).handler_status ==
+                HleContextStatus::kOk && Result(context) == 0,
+        "tiled nonzero-pitch fixture unregister failed");
 
   SetArguments(context, {queue.handle, 1});
   Check(registry.Dispatch("sceVideoOutDeleteFlipEvent", context).handler_status ==

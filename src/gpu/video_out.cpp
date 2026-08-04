@@ -20,23 +20,16 @@ namespace {
 
 constexpr std::uint32_t kVideoOutCategoryUncompressed = 0;
 constexpr std::uint32_t kVideoOutCategoryCompressed = 1;
+constexpr std::uint32_t kVideoOutTilingModeRenderTarget = 0;
 constexpr std::uint32_t kVideoOutTilingModeLinear = 1;
+constexpr std::uint64_t kVideoOutRenderTargetAlignment = 64 * 1024ULL;
 
-constexpr std::uint64_t kPixelFormatA8R8G8B8Srgb = 0x80000000ULL;
-constexpr std::uint64_t kPixelFormatA8B8G8R8Srgb = 0x80002200ULL;
 constexpr std::uint64_t kPixelFormat2R8G8B8A8Srgb = 0x8000000022000000ULL;
 constexpr std::uint64_t kPixelFormat2B8G8R8A8Srgb = 0x8000000000000000ULL;
-constexpr std::uint64_t kPixelFormatA2R10G10B10 = 0x88060000ULL;
-constexpr std::uint64_t kPixelFormatA2R10G10B10Srgb = 0x88000000ULL;
-constexpr std::uint64_t kPixelFormatA2R10G10B10Bt2020Pq = 0x88740000ULL;
-constexpr std::uint64_t kPixelFormat2R10G10B10A2 = 0x8100000622000000ULL;
-constexpr std::uint64_t kPixelFormat2B10G10R10A2 = 0x8100000600000000ULL;
-constexpr std::uint64_t kPixelFormat2R10G10B10A2Srgb = 0x8100000022000000ULL;
-constexpr std::uint64_t kPixelFormat2B10G10R10A2Srgb = 0x8100000000000000ULL;
-constexpr std::uint64_t kPixelFormat2R10G10B10A2Bt2100Pq =
-    0x8100070422000000ULL;
-constexpr std::uint64_t kPixelFormat2B10G10R10A2Bt2100Pq =
-    0x8100070400000000ULL;
+constexpr std::uint64_t kPixelFormat2R10G10B10A2UNorm =
+    0x8100000022000000ULL;
+constexpr std::uint64_t kPixelFormat2B10G10R10A2UNorm =
+    0x8100000000000000ULL;
 
 }  // namespace
 
@@ -252,24 +245,28 @@ std::int32_t VideoOutService::DeleteFlipEvent(kernel::KernelHandle queue,
 }
 
 bool VideoOutService::IsSupportedFormat(std::uint64_t pixel_format,
-                                        std::uint32_t& format) noexcept {
+                                        std::uint32_t& guest_format,
+                                        vulkan::VulkanImageFormat& format_override) noexcept {
   switch (pixel_format) {
-  case kPixelFormatA8R8G8B8Srgb:
-  case kPixelFormatA8B8G8R8Srgb:
   case kPixelFormat2R8G8B8A8Srgb:
-  case kPixelFormat2B8G8R8A8Srgb:
-    format = 56;
+    guest_format = Prospero::GpuEnumValue(Prospero::BufferFormat::k8_8_8_8Srgb);
+    format_override = {VK_FORMAT_R8G8B8A8_SRGB,
+                       vulkan::VulkanImageStorageClass::kR8G8B8A8};
     return true;
-  case kPixelFormatA2R10G10B10:
-  case kPixelFormatA2R10G10B10Srgb:
-  case kPixelFormatA2R10G10B10Bt2020Pq:
-  case kPixelFormat2R10G10B10A2:
-  case kPixelFormat2B10G10R10A2:
-  case kPixelFormat2R10G10B10A2Srgb:
-  case kPixelFormat2B10G10R10A2Srgb:
-  case kPixelFormat2R10G10B10A2Bt2100Pq:
-  case kPixelFormat2B10G10R10A2Bt2100Pq:
-    format = 9;
+  case kPixelFormat2B8G8R8A8Srgb:
+    guest_format = Prospero::GpuEnumValue(Prospero::BufferFormat::k8_8_8_8Srgb);
+    format_override = {VK_FORMAT_B8G8R8A8_SRGB,
+                       vulkan::VulkanImageStorageClass::kR8G8B8A8};
+    return true;
+  case kPixelFormat2R10G10B10A2UNorm:
+    guest_format = Prospero::GpuEnumValue(Prospero::BufferFormat::k10_10_10_2UNorm);
+    format_override = {VK_FORMAT_A2B10G10R10_UNORM_PACK32,
+                       vulkan::VulkanImageStorageClass::kA2B10G10R10};
+    return true;
+  case kPixelFormat2B10G10R10A2UNorm:
+    guest_format = Prospero::GpuEnumValue(Prospero::BufferFormat::k10_10_10_2UNorm);
+    format_override = {VK_FORMAT_A2R10G10B10_UNORM_PACK32,
+                       vulkan::VulkanImageStorageClass::kA2B10G10R10};
     return true;
   default:
     return false;
@@ -278,6 +275,10 @@ bool VideoOutService::IsSupportedFormat(std::uint64_t pixel_format,
 
 bool VideoOutService::IsSupportedTileMode(std::uint32_t raw,
                                           Prospero::TileMode& mode) noexcept {
+  if (raw == kVideoOutTilingModeRenderTarget) {
+    mode = Prospero::TileMode::kRenderTarget;
+    return true;
+  }
   if (raw == kVideoOutTilingModeLinear) {
     mode = Prospero::TileMode::kLinear;
     return true;
@@ -335,6 +336,7 @@ std::int32_t VideoOutService::SubmitFlip(std::int32_t handle,
     return kVideoOutErrorInvalidValue;
   }
   GuestImageLayoutInput input;
+  vulkan::VulkanImageFormat format_override;
   PresentationCallbacks callbacks;
   std::int32_t group_index = -1;
   VideoOutBufferEntry entry;
@@ -353,51 +355,61 @@ std::int32_t VideoOutService::SubmitFlip(std::int32_t handle,
       return kVideoOutErrorInvalidIndex;
     }
     const auto& group = groups_[slot.group_index];
-    std::uint32_t format = 0;
+    std::uint32_t guest_format = 0;
     Prospero::TileMode tile_mode{};
-    if (!group.occupied || !IsSupportedFormat(group.attribute.pixel_format, format) ||
+    if (!group.occupied ||
+        !IsSupportedFormat(group.attribute.pixel_format, guest_format, format_override) ||
         !IsSupportedTileMode(group.attribute.tiling_mode, tile_mode)) {
       return kVideoOutErrorInvalidValue;
     }
-    const auto pitch = group.attribute.pitch_in_pixels == 0
-                           ? group.attribute.width
-                           : group.attribute.pitch_in_pixels;
-    if (pitch < group.attribute.width ||
-        pitch > std::numeric_limits<std::uint64_t>::max() / 4U) {
-      return kVideoOutErrorInvalidValue;
+    if (tile_mode == Prospero::TileMode::kRenderTarget) {
+      if (group.attribute.pitch_in_pixels != 0) {
+        return kVideoOutErrorInvalidValue;
+      }
+      if ((slot.entry.data_address & (kVideoOutRenderTargetAlignment - 1U)) != 0) {
+        return kVideoOutErrorInvalidAddress;
+      }
+      input = {slot.entry.data_address, guest_format, group.attribute.width,
+               group.attribute.height, 1, 1, 1,
+               0, 0, Prospero::ImageType::kColor2D, tile_mode, true};
+    } else {
+      const auto pitch = group.attribute.pitch_in_pixels == 0
+                             ? group.attribute.width
+                             : group.attribute.pitch_in_pixels;
+      if (pitch < group.attribute.width ||
+          pitch > std::numeric_limits<std::uint64_t>::max() / 4U) {
+        return kVideoOutErrorInvalidValue;
+      }
+      const auto row_pitch_bytes = static_cast<std::uint64_t>(pitch) * 4U;
+      if (row_pitch_bytes >
+          std::numeric_limits<std::uint64_t>::max() / group.attribute.height) {
+        return kVideoOutErrorInvalidValue;
+      }
+      const auto slice_pitch_bytes = row_pitch_bytes * group.attribute.height;
+      input = {slot.entry.data_address, guest_format, group.attribute.width,
+               group.attribute.height, 1, 1, 1,
+               row_pitch_bytes, slice_pitch_bytes,
+               Prospero::ImageType::kColor2D, tile_mode, false};
     }
-    const auto row_pitch_bytes = static_cast<std::uint64_t>(pitch) * 4U;
-    if (row_pitch_bytes >
-        std::numeric_limits<std::uint64_t>::max() / group.attribute.height) {
-      return kVideoOutErrorInvalidValue;
-    }
-    const auto slice_pitch_bytes = row_pitch_bytes * group.attribute.height;
-    input = {slot.entry.data_address, format, group.attribute.width,
-             group.attribute.height, 1, 1, 1,
-             row_pitch_bytes, slice_pitch_bytes,
-             Prospero::ImageType::kColor2D, tile_mode, false};
     group_index = slot.group_index;
     entry = slot.entry;
     attribute = group.attribute;
     category = group.category;
     callbacks = callbacks_;
   }
-  const auto complete_bytes = input.row_pitch_bytes * input.height;
-  if (input.guest_address >
-      std::numeric_limits<std::uint64_t>::max() - complete_bytes) {
-    return kVideoOutErrorInvalidAddress;
+  const auto layout = CalculateGuestImageLayout(input);
+  if (!layout.ok()) {
+    return kVideoOutErrorInvalidValue;
   }
-  // VideoOut format tags are ABI-facing values, not generic BufferFormat
-  // values (the 10-bit presentation tag is 9). All supported VideoOut
-  // formats occupy four bytes per pixel, so use the checked concrete range
-  // above instead of passing those tags to the generic image-layout decoder.
-  if (!memory_.CanAccess(input.guest_address, complete_bytes,
+  if (!memory_.CanAccess(layout.storage_key.guest_address, layout.guest_storage_bytes,
                          memory::GuestMemoryProtection::kRead |
                              memory::GuestMemoryProtection::kGpuRead)) {
     return kVideoOutErrorInvalidAddress;
   }
-  const auto result = callbacks.present ? callbacks.present(input)
-                                        : gpu_runtime_.PresentVulkanGuestFrame(input);
+  const auto result = callbacks.present
+                          ? callbacks.present(input, format_override)
+                          : gpu_runtime_.PresentVulkanGuestFrame(
+                                input, 50'000'000ULL, format_override);
   std::lock_guard lock(mutex_);
   if (!IsOpenLocked(handle)) {
     return kVideoOutErrorInvalidHandle;

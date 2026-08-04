@@ -78,7 +78,7 @@ class VideoOutService final {
  public:
   struct PresentationCallbacks {
     std::function<vulkan::VulkanPresentationResult(
-        const GuestImageLayoutInput&)> present;
+        const GuestImageLayoutInput&, const vulkan::VulkanImageFormat&)> present;
     std::function<vulkan::VulkanPresentationResult()> poll;
   };
 
@@ -136,7 +136,8 @@ class VideoOutService final {
       const VideoOutBufferAttribute& attribute, std::uint32_t category);
   [[nodiscard]] bool PollPending();
   [[nodiscard]] static bool IsSupportedFormat(std::uint64_t pixel_format,
-                                              std::uint32_t& format) noexcept;
+                                              std::uint32_t& guest_format,
+                                              vulkan::VulkanImageFormat& format_override) noexcept;
   [[nodiscard]] static bool IsSupportedTileMode(std::uint32_t raw,
                                                 Prospero::TileMode& mode) noexcept;
   [[nodiscard]] bool IsOpenLocked(std::int32_t handle) const noexcept;
