@@ -14,6 +14,7 @@
 #include "core/memory/guest_memory.h"
 #include "gpu/command_processor.h"
 #include "gpu/runtime.h"
+#include "gpu/vulkan/device.h"
 
 namespace {
 
@@ -62,12 +63,45 @@ void Write64(std::span<std::byte> bytes, std::size_t offset,
   }
 }
 
-bool VulkanUnavailable(
-    const kajps5::gpu::vulkan::VulkanInitializationResult &result) {
-  using Status = kajps5::gpu::vulkan::VulkanContextStatus;
-  return result.status == Status::kLoaderUnavailable ||
-         result.status == Status::kLoaderApiVersionUnsupported ||
-         result.status == Status::kNoSuitableDevice;
+namespace vk = kajps5::gpu::vulkan;
+
+bool HasDiagnostic(const vk::VulkanInitializationResult& initialization,
+                   vk::VulkanDiagnosticCode code,
+                   std::int32_t api_result = VK_SUCCESS,
+                   const char* message = nullptr) {
+  return std::any_of(initialization.diagnostics.begin(), initialization.diagnostics.end(),
+                     [&](const vk::VulkanDiagnostic& diagnostic) {
+                       return diagnostic.code == code && diagnostic.api_result == api_result &&
+                              (message == nullptr || diagnostic.message == message);
+                     });
+}
+
+bool IsUnavailableOrUnsupportedHost(const vk::VulkanInitializationResult& initialization) {
+  switch (initialization.status) {
+    case vk::VulkanContextStatus::kLoaderUnavailable:
+    case vk::VulkanContextStatus::kLoaderApiVersionUnsupported:
+      return true;
+    case vk::VulkanContextStatus::kInstanceCreationFailed:
+      return HasDiagnostic(initialization, vk::VulkanDiagnosticCode::kInstanceCreationFailed,
+                           static_cast<std::int32_t>(VK_ERROR_INCOMPATIBLE_DRIVER));
+    case vk::VulkanContextStatus::kPhysicalDeviceEnumerationFailed:
+      return HasDiagnostic(initialization,
+                           vk::VulkanDiagnosticCode::kPhysicalDeviceEnumerationFailed,
+                           VK_SUCCESS, "Vulkan instance reported no physical devices");
+    case vk::VulkanContextStatus::kNoSuitableDevice:
+      return HasDiagnostic(initialization, vk::VulkanDiagnosticCode::kNoSuitableDevice,
+                           VK_SUCCESS, "no Vulkan physical device passed the required gates");
+    default:
+      return false;
+  }
+}
+
+void PrintInitializationDiagnostics(const vk::VulkanInitializationResult& initialization,
+                                    std::ostream& output) {
+  for (const auto& diagnostic : initialization.diagnostics) {
+    output << "  " << vk::VulkanDiagnosticCodeName(diagnostic.code) << ": "
+           << diagnostic.message << '\n';
+  }
 }
 
 void ConfigureMinimalComputeShader(kajps5::memory::GuestMemory &memory,
@@ -233,9 +267,13 @@ int main() {
   Check(static_cast<bool>(compute), "compute shader registration failed");
   const auto initialized = runtime.InitializeVulkan();
   if (!initialized) {
-    if (VulkanUnavailable(initialized))
-      return 77;
-    Check(false, "Vulkan initialization failed for PM4 compute bridge smoke");
+    const bool unavailable_or_unsupported = IsUnavailableOrUnsupportedHost(initialized);
+    std::ostream& output = unavailable_or_unsupported ? std::cout : std::cerr;
+    output << (unavailable_or_unsupported ? "SKIP" : "FAIL")
+           << ": Vulkan action bridge initialization status="
+           << vk::VulkanContextStatusName(initialized.status) << '\n';
+    PrintInitializationDiagnostics(initialized, output);
+    return unavailable_or_unsupported ? 77 : 1;
   }
   // v5 is VertexIndex. The VOP1/VOP2 sequences make the three full-screen
   // vertices (-1,-1), (3,-1), (-1,3); the PS exports solid RGBA red.
