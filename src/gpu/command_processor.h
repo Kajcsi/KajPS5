@@ -37,6 +37,61 @@ enum class GpuCommandStatus {
   kResourceLimit,
 };
 
+// A render action contains only data copied while the command decoder owns its
+// register maps.  It deliberately does not retain a register-map pointer: an
+// action can therefore be queued, blocked, and resumed after later PM4 writes
+// without changing the work that it denotes.
+enum class GpuRenderSnapshotStatus : std::uint8_t {
+  kNotRequested,
+  kReady,
+  kUnsupported,
+};
+
+struct GpuRenderSnapshot {
+  GpuRenderSnapshotStatus status = GpuRenderSnapshotStatus::kNotRequested;
+  // The first state element that made this action unavailable.  Zero means
+  // that no register was needed (the direct-compute subset).
+  std::uint32_t first_register = 0;
+  std::uint32_t first_value = 0;
+  // Direct dispatch dimensions and the first supported draw scalar subset.
+  // Keeping this bounded also keeps GpuAction safe for the submission ring.
+  std::uint32_t group_count_x = 0;
+  std::uint32_t group_count_y = 0;
+  std::uint32_t group_count_z = 0;
+  std::uint32_t vertex_count = 0;
+  std::uint32_t instance_count = 0;
+  // Kyty hardwareContext/pm4 register snapshot for the first graphics path.
+  // Every field is a scalar decoded before the action leaves the decoder.
+  std::uint64_t color_base = 0;
+  std::uint64_t color_row_pitch_bytes = 0;
+  std::uint32_t color_width = 0;
+  std::uint32_t color_height = 0;
+  std::uint32_t color_format = 0;
+  std::uint32_t color_write_mask = 0;
+  std::uint32_t primitive_type = 0;
+  std::uint32_t cull_mode = 0;
+  bool front_face_clockwise = false;
+  bool blend_enable = false;
+  std::uint32_t blend_control = 0;
+  std::uint32_t viewport_x_scale_bits = 0;
+  std::uint32_t viewport_x_offset_bits = 0;
+  std::uint32_t viewport_y_scale_bits = 0;
+  std::uint32_t viewport_y_offset_bits = 0;
+  std::uint32_t viewport_z_min_bits = 0;
+  std::uint32_t viewport_z_max_bits = 0;
+  std::int32_t scissor_left = 0;
+  std::int32_t scissor_top = 0;
+  std::int32_t scissor_right = 0;
+  std::int32_t scissor_bottom = 0;
+  bool depth_enabled = false;
+  bool depth_write_enabled = false;
+  std::uint32_t depth_compare = 0;
+  std::uint64_t depth_base = 0;
+  std::uint64_t depth_row_pitch_bytes = 0;
+  std::uint32_t depth_width = 0;
+  std::uint32_t depth_height = 0;
+};
+
 enum class GpuRegisterSpace : std::uint8_t {
   kContext,
   kShader,
@@ -108,6 +163,7 @@ struct GpuAction {
   std::array<GpuShaderBinding, kMaximumGpuActionShaderBindings>
       shader_bindings{};
   std::size_t shader_binding_count = 0;
+  GpuRenderSnapshot render{};
 };
 
 class GpuSubmissionSink {

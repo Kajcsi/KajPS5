@@ -456,6 +456,15 @@ kajps5_deploy_msvc_asan_runtime(kajps5_gpu_submission_queue_test)
 add_test(NAME kajps5_gpu_submission_queue
          COMMAND kajps5_gpu_submission_queue_test)
 
+add_executable(kajps5_gpu_vulkan_action_bridge_test
+               gpu_vulkan_action_bridge_test.cpp)
+target_link_libraries(kajps5_gpu_vulkan_action_bridge_test PRIVATE kajps5_core)
+kajps5_deploy_msvc_asan_runtime(kajps5_gpu_vulkan_action_bridge_test)
+add_test(NAME kajps5_gpu_vulkan_action_bridge
+         COMMAND kajps5_gpu_vulkan_action_bridge_test)
+set_tests_properties(kajps5_gpu_vulkan_action_bridge
+                     PROPERTIES SKIP_RETURN_CODE 77)
+
 add_executable(kajps5_gpu_shader_runtime_test gpu_shader_runtime_test.cpp)
 target_link_libraries(kajps5_gpu_shader_runtime_test PRIVATE kajps5_core)
 kajps5_deploy_msvc_asan_runtime(kajps5_gpu_shader_runtime_test)

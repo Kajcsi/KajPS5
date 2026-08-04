@@ -917,6 +917,18 @@ GPL-2.0-or-later. The combined guidance is distributed under GPL-2.0-only.
 
 ## New adaptations
 
+The opt-in PM4 Vulkan action bridge in
+`src/gpu/{command_processor,runtime,vulkan_action_bridge}.*` adapts the
+state-snapshot and submission ordering architecture from KytyPS5
+`src/graphics/guest_gpu/{hardwareContext,graphicsRun}.cpp` at commit
+`fb5ecec455cf6c67154134429485ffccbfc34203`. Its bounded diagnostics,
+finite-fence retention, and terminal device-loss behavior independently
+re-express SharpEmu's Vulkan presenter execution behavior at commit
+`9e10d7c44a2821cfd5ccd3417c09c0cf269285a4`. KytyPS5 is GPL-2.0-only and
+SharpEmu is GPL-2.0-or-later; no upstream source was copied verbatim. The
+bridge remains in KajPS5's sole C++ runtime and forwards non-render actions to
+the pre-existing memory/event/history sink chain.
+
 The descriptor-free Vulkan graphics executor in
 `src/gpu/vulkan/graphics_execution.*`, its runtime boundary, and focused
 tests adapt architectural observations from KytyPS5

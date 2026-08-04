@@ -25,6 +25,7 @@
 #include "gpu/vulkan/graphics_execution.h"
 #include "gpu/vulkan/image_cache.h"
 #include "gpu/vulkan/presentation.h"
+#include "gpu/vulkan_action_bridge.h"
 
 namespace kajps5::memory {
 class GuestMemory;
@@ -155,6 +156,12 @@ class GpuRuntime final {
   [[nodiscard]] const GpuActionRing& submission_history() const noexcept {
     return submission_history_;
   }
+  // PM4 action execution remains opt-in: decoding/headless users continue to
+  // receive traceable actions without initializing or probing Vulkan.
+  void EnableVulkanActionExecution(bool enabled) noexcept;
+  [[nodiscard]] bool vulkan_action_execution_enabled() const noexcept;
+  [[nodiscard]] const VulkanActionBridgeResult&
+  last_vulkan_action_result() const noexcept;
 
   // Vulkan stays opt-in so headless loading and existing GPU-core tests do
   // not probe host hardware. A successful context is retained for this
@@ -210,6 +217,11 @@ class GpuRuntime final {
   [[nodiscard]] vulkan::VulkanGraphicsResult PollVulkanGraphics();
 
 private:
+  friend class VulkanActionBridge;
+  [[nodiscard]] VulkanActionBridgeResult
+  ExecuteVulkanAction(const GpuAction& action);
+  [[nodiscard]] VulkanActionBridgeResult
+  PollVulkanActionExecution(const GpuAction& action);
   [[nodiscard]] GpuPacketResult AppendPacket(
       std::uint64_t command_buffer, std::span<const std::uint32_t> packet);
 
@@ -222,6 +234,7 @@ private:
   std::unordered_map<std::uint32_t, std::uint32_t> user_config_registers_;
   GpuSubmissionQueue submission_queue_;
   GpuActionRing submission_history_;
+  VulkanActionBridge vulkan_action_bridge_;
   GpuEventSubmissionSink event_effects_;
   GpuMemorySubmissionSink submission_effects_;
   GpuSubmissionSink* submission_sink_ = nullptr;

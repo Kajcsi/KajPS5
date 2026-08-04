@@ -165,8 +165,13 @@ int main() {
   Check(trace.actions()[9].type == GpuActionType::kDispatch &&
             trace.actions()[9].values[0] == 2U &&
             trace.actions()[9].values[1] == 3U &&
-            trace.actions()[9].values[2] == 4U,
-        "nested dispatch is incorrect");
+            trace.actions()[9].values[2] == 4U &&
+            trace.actions()[9].render.status ==
+                kajps5::gpu::GpuRenderSnapshotStatus::kReady &&
+            trace.actions()[9].render.group_count_x == 2U &&
+            trace.actions()[9].render.group_count_y == 3U &&
+            trace.actions()[9].render.group_count_z == 4U,
+        "nested dispatch or immutable execution snapshot is incorrect");
   Check(trace.actions()[11].type == GpuActionType::kWriteData &&
             trace.actions()[11].values[0] == kWriteDestination &&
             trace.actions()[11].values[2] == 2U &&
@@ -181,6 +186,21 @@ int main() {
             runtime.ReadRegister(GpuRegisterSpace::kShader, 0xc8) ==
                 0x00448582U,
         "parsed register state is incorrect");
+
+  // The action bridge is opt-in.  Once enabled, a command-buffer queue drain
+  // reports an explicit renderer-unavailable result instead of probing Vulkan
+  // or silently accepting a dispatch in a headless runtime.
+  runtime.EnableVulkanActionExecution(true);
+  const auto queued_headless = runtime.submissions().EnqueueGraphics(
+      kNested, static_cast<std::uint32_t>(nested.size()));
+  Check(static_cast<bool>(queued_headless),
+        "headless bridge submission was not queued");
+  const auto headless_drain = runtime.DrainSubmissions();
+  Check(headless_drain.failed_submissions == 1 &&
+            runtime.last_vulkan_action_result().status ==
+                kajps5::gpu::VulkanActionBridgeStatus::kRendererUnavailable,
+        "opt-in headless bridge did not report renderer unavailability");
+  runtime.EnableVulkanActionExecution(false);
 
   constexpr std::uint64_t kReleaseCommands = kBase + 0xa00;
   constexpr std::uint64_t kReleaseDestination = kWriteDestination + 0x20;

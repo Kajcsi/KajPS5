@@ -10,6 +10,8 @@
 #include <cmath>
 #include <algorithm>
 #include <array>
+#include <bit>
+#include <cmath>
 #include <initializer_list>
 #include <limits>
 #include <new>
@@ -59,6 +61,198 @@ bool HasValidGraphicsPreflight(
          viewport.scissor.extent.width != 0 && viewport.scissor.extent.height != 0 &&
          viewport.scissor.offset.x >= 0 && viewport.scissor.offset.y >= 0 &&
          topology_valid && cull_valid && front_face_valid && blend_valid;
+}
+
+std::optional<vulkan::VulkanGraphicsTopology>
+ActionTopology(std::uint32_t primitive_type) noexcept {
+  switch (primitive_type) {
+  case 1:
+    return vulkan::VulkanGraphicsTopology::kPointList;
+  case 2:
+    return vulkan::VulkanGraphicsTopology::kLineList;
+  case 3:
+    return vulkan::VulkanGraphicsTopology::kLineStrip;
+  case 4:
+    return vulkan::VulkanGraphicsTopology::kTriangleList;
+  case 6:
+    return vulkan::VulkanGraphicsTopology::kTriangleStrip;
+  default:
+    return std::nullopt;
+  }
+}
+
+std::optional<VkCompareOp> ActionDepthCompare(std::uint32_t compare) noexcept {
+  switch (compare) {
+  case 0:
+    return VK_COMPARE_OP_NEVER;
+  case 1:
+    return VK_COMPARE_OP_LESS;
+  case 2:
+    return VK_COMPARE_OP_EQUAL;
+  case 3:
+    return VK_COMPARE_OP_LESS_OR_EQUAL;
+  case 4:
+    return VK_COMPARE_OP_GREATER;
+  case 5:
+    return VK_COMPARE_OP_NOT_EQUAL;
+  case 6:
+    return VK_COMPARE_OP_GREATER_OR_EQUAL;
+  case 7:
+    return VK_COMPARE_OP_ALWAYS;
+  default:
+    return std::nullopt;
+  }
+}
+
+std::optional<VkBlendFactor> ActionBlendFactor(std::uint32_t factor) noexcept {
+  // CB_BLEND*_CONTROL uses the hardware encoding documented in Kyty's pm4.h.
+  // Keep the first bridge subset deliberately bounded to factors with a direct
+  // Vulkan equivalent; dual-source factors are not silently approximated.
+  switch (factor) {
+  case 0:
+    return VK_BLEND_FACTOR_ZERO;
+  case 1:
+    return VK_BLEND_FACTOR_ONE;
+  case 2:
+    return VK_BLEND_FACTOR_SRC_COLOR;
+  case 3:
+    return VK_BLEND_FACTOR_ONE_MINUS_SRC_COLOR;
+  case 4:
+    return VK_BLEND_FACTOR_SRC_ALPHA;
+  case 5:
+    return VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+  case 6:
+    return VK_BLEND_FACTOR_DST_ALPHA;
+  case 7:
+    return VK_BLEND_FACTOR_ONE_MINUS_DST_ALPHA;
+  case 8:
+    return VK_BLEND_FACTOR_DST_COLOR;
+  case 9:
+    return VK_BLEND_FACTOR_ONE_MINUS_DST_COLOR;
+  case 10:
+    return VK_BLEND_FACTOR_SRC_ALPHA_SATURATE;
+  default:
+    return std::nullopt;
+  }
+}
+
+std::optional<VkBlendOp> ActionBlendOp(std::uint32_t operation) noexcept {
+  switch (operation) {
+  case 0:
+    return VK_BLEND_OP_ADD;
+  case 1:
+    return VK_BLEND_OP_SUBTRACT;
+  case 2:
+    return VK_BLEND_OP_REVERSE_SUBTRACT;
+  case 3:
+    return VK_BLEND_OP_MIN;
+  case 4:
+    return VK_BLEND_OP_MAX;
+  default:
+    return std::nullopt;
+  }
+}
+
+std::optional<vulkan::VulkanTranslatedDrawRequest>
+MakeActionDrawRequest(const GpuRenderSnapshot& state,
+                      const shader::recompiler::CompileResult& vertex,
+                      const shader::recompiler::CompileResult& pixel) {
+  const auto topology = ActionTopology(state.primitive_type);
+  const auto depth_compare = ActionDepthCompare(state.depth_compare);
+  const auto source_color = ActionBlendFactor(state.blend_control & 0x1fU);
+  const auto color_op = ActionBlendOp((state.blend_control >> 5U) & 7U);
+  const auto destination_color =
+      ActionBlendFactor((state.blend_control >> 8U) & 0x1fU);
+  const auto source_alpha =
+      ActionBlendFactor((state.blend_control >> 16U) & 0x1fU);
+  const auto alpha_op = ActionBlendOp((state.blend_control >> 21U) & 7U);
+  const auto destination_alpha =
+      ActionBlendFactor((state.blend_control >> 24U) & 0x1fU);
+  if (!topology.has_value() || !depth_compare.has_value() ||
+      !source_color.has_value() || !color_op.has_value() ||
+      !destination_color.has_value() || !source_alpha.has_value() ||
+      !alpha_op.has_value() || !destination_alpha.has_value()) {
+    return std::nullopt;
+  }
+  const float xscale = std::bit_cast<float>(state.viewport_x_scale_bits);
+  const float xoffset = std::bit_cast<float>(state.viewport_x_offset_bits);
+  const float yscale = std::bit_cast<float>(state.viewport_y_scale_bits);
+  const float yoffset = std::bit_cast<float>(state.viewport_y_offset_bits);
+  const float zmin = std::bit_cast<float>(state.viewport_z_min_bits);
+  const float zmax = std::bit_cast<float>(state.viewport_z_max_bits);
+  if (!std::isfinite(xscale) || !std::isfinite(xoffset) ||
+      !std::isfinite(yscale) || !std::isfinite(yoffset) ||
+      !std::isfinite(zmin) || !std::isfinite(zmax) || xscale <= 0.0f ||
+      yscale <= 0.0f || zmin < 0.0f || zmax > 1.0f || zmin > zmax) {
+    return std::nullopt;
+  }
+  vulkan::VulkanTranslatedDrawRequest request;
+  request.vertex = &vertex;
+  request.pixel = &pixel;
+  request.color_target = {state.color_base,
+                          state.color_format,
+                          state.color_width,
+                          state.color_height,
+                          1,
+                          1,
+                          1,
+                          0,
+                          0,
+                          Prospero::ImageType::kColor2D,
+                          Prospero::TileMode::kLinear,
+                          false};
+  request.color_target.row_pitch_bytes = state.color_row_pitch_bytes;
+  request.color_target.slice_pitch_bytes =
+      state.color_row_pitch_bytes * state.color_height;
+  request.topology = *topology;
+  request.cull_mode =
+      state.cull_mode == 0   ? vulkan::VulkanGraphicsCullMode::kNone
+      : state.cull_mode == 1 ? vulkan::VulkanGraphicsCullMode::kFront
+                             : vulkan::VulkanGraphicsCullMode::kBack;
+  request.front_face = state.front_face_clockwise
+                           ? vulkan::VulkanGraphicsFrontFace::kClockwise
+                           : vulkan::VulkanGraphicsFrontFace::kCounterClockwise;
+  request.blend.enabled = state.blend_enable;
+  request.blend.source_color = *source_color;
+  request.blend.destination_color = *destination_color;
+  request.blend.color_op = *color_op;
+  request.blend.source_alpha = *source_alpha;
+  request.blend.destination_alpha = *destination_alpha;
+  request.blend.alpha_op = *alpha_op;
+  request.blend.write_mask = 0;
+  if ((state.color_write_mask & 1U) != 0)
+    request.blend.write_mask |= VK_COLOR_COMPONENT_R_BIT;
+  if ((state.color_write_mask & 2U) != 0)
+    request.blend.write_mask |= VK_COLOR_COMPONENT_G_BIT;
+  if ((state.color_write_mask & 4U) != 0)
+    request.blend.write_mask |= VK_COLOR_COMPONENT_B_BIT;
+  if ((state.color_write_mask & 8U) != 0)
+    request.blend.write_mask |= VK_COLOR_COMPONENT_A_BIT;
+  request.viewport = {
+      xoffset - xscale,
+      yoffset - yscale,
+      xscale * 2.0f,
+      yscale * 2.0f,
+      zmin,
+      zmax,
+      {{state.scissor_left, state.scissor_top},
+       {static_cast<std::uint32_t>(state.scissor_right - state.scissor_left),
+        static_cast<std::uint32_t>(state.scissor_bottom - state.scissor_top)}}};
+  request.vertex_count = state.vertex_count;
+  request.instance_count = state.instance_count;
+  if (state.depth_enabled) {
+    request.depth_stencil_target = {state.depth_base,
+                                    Prospero::DepthFormat::kZ32F,
+                                    Prospero::StencilFormat::kInvalid,
+                                    state.depth_width,
+                                    state.depth_height,
+                                    state.depth_row_pitch_bytes,
+                                    VK_SAMPLE_COUNT_1_BIT};
+    request.depth_stencil.depth_test_enable = true;
+    request.depth_stencil.depth_write_enable = state.depth_write_enabled;
+    request.depth_stencil.depth_compare_op = *depth_compare;
+  }
+  return request;
 }
 
 std::optional<GuestImageLayout> PlannedDepthLayout(
@@ -200,13 +394,247 @@ GpuRuntime::GpuRuntime(memory::GuestMemory& memory,
     : memory_(memory),
       shader_runtime_(memory_),
       resource_coherence_(GpuResourceCoherence::Create(memory_)),
-      submission_queue_(*this),
-      submission_history_(4096),
-      event_effects_(event_queues,
-                     submission_sink != nullptr ? *submission_sink
-                                                : submission_history_),
+      submission_queue_(*this), submission_history_(4096),
+      vulkan_action_bridge_(*this, submission_sink != nullptr
+                                       ? *submission_sink
+                                       : submission_history_),
+      event_effects_(event_queues, vulkan_action_bridge_),
       submission_effects_(memory, event_effects_),
       submission_sink_(&submission_effects_) {}
+
+void GpuRuntime::EnableVulkanActionExecution(bool enabled) noexcept {
+  vulkan_action_bridge_.Enable(enabled);
+}
+
+bool GpuRuntime::vulkan_action_execution_enabled() const noexcept {
+  return vulkan_action_bridge_.enabled();
+}
+
+const VulkanActionBridgeResult&
+GpuRuntime::last_vulkan_action_result() const noexcept {
+  return vulkan_action_bridge_.last_result();
+}
+
+VulkanActionBridgeResult
+GpuRuntime::ExecuteVulkanAction(const GpuAction& action) {
+  VulkanActionBridgeResult result;
+  result.packet_address = action.packet_address;
+  result.opcode = action.opcode;
+  result.first_register = action.render.first_register;
+  result.first_value = action.render.first_value;
+  if (!has_vulkan_context()) {
+    result.status = VulkanActionBridgeStatus::kRendererUnavailable;
+    result.message =
+        "Vulkan action execution was enabled without InitializeVulkan";
+    return result;
+  }
+  if (action.render.status != GpuRenderSnapshotStatus::kReady) {
+    result.status = VulkanActionBridgeStatus::kUnsupportedState;
+    result.message = "PM4 action is outside the immutable Vulkan bridge subset";
+    return result;
+  }
+  if (action.type == GpuActionType::kDraw) {
+    const GpuShaderBinding *vertex_binding = nullptr;
+    const GpuShaderBinding *pixel_binding = nullptr;
+    for (std::size_t index = 0; index < action.shader_binding_count; ++index) {
+      const auto& binding = action.shader_bindings[index];
+      if (binding.stage == GpuShaderStage::kExport) {
+        vertex_binding = &binding;
+      } else if (binding.stage == GpuShaderStage::kPixel) {
+        pixel_binding = &binding;
+      } else if (binding.program_address != 0) {
+        result.status = VulkanActionBridgeStatus::kUnsupportedState;
+        result.stage = binding.stage;
+        result.message = "PM4 draw uses geometry, hull, or local shader state "
+                         "outside the bridge subset";
+        return result;
+      }
+    }
+    if (vertex_binding == nullptr || pixel_binding == nullptr ||
+        vertex_binding->status != GpuShaderBindingStatus::kRegistered ||
+        pixel_binding->status != GpuShaderBindingStatus::kRegistered ||
+        vertex_binding->code_address == 0 || pixel_binding->code_address == 0) {
+      result.status = VulkanActionBridgeStatus::kShaderUnavailable;
+      result.stage = vertex_binding == nullptr ? GpuShaderStage::kExport
+                                               : GpuShaderStage::kPixel;
+      result.message = "DrawIndexAuto requires registered export/vertex and "
+                       "pixel shader bindings";
+      return result;
+    }
+
+    shader::recompiler::CompileOptions vertex_options;
+    vertex_options.stage = ShaderType::Vertex;
+    vertex_options.shader_base = vertex_binding->program_address;
+    vertex_options.shader_hash = vertex_binding->program_address;
+    vertex_options.dump_ir = false;
+    shader::recompiler::CompileResult vertex;
+    const auto vertex_compile = RecompileRegisteredShader(
+        vertex_binding->code_address, vertex_options, vertex);
+    if (!vertex_compile) {
+      result.status = VulkanActionBridgeStatus::kCompilationFailed;
+      result.stage = GpuShaderStage::kExport;
+      result.message = vertex_compile.error.empty()
+                           ? "registered export shader compilation failed"
+                           : vertex_compile.error;
+      return result;
+    }
+
+    shader::recompiler::CompileOptions pixel_options;
+    pixel_options.stage = ShaderType::Pixel;
+    // Graphics bindings reserve set 0 for the vertex stage and set 1 for the
+    // pixel stage. ShaderRuntime preserves this checked specialization while
+    // it supplies the registered program base.
+    pixel_options.descriptor_set = 1;
+    pixel_options.shader_base = pixel_binding->program_address;
+    pixel_options.shader_hash = pixel_binding->program_address;
+    pixel_options.dump_ir = false;
+    shader::recompiler::CompileResult pixel;
+    const auto pixel_compile = RecompileRegisteredShader(
+        pixel_binding->code_address, pixel_options, pixel);
+    if (!pixel_compile) {
+      result.status = VulkanActionBridgeStatus::kCompilationFailed;
+      result.stage = GpuShaderStage::kPixel;
+      result.message = pixel_compile.error.empty()
+                           ? "registered pixel shader compilation failed"
+                           : pixel_compile.error;
+      return result;
+    }
+    const auto request = MakeActionDrawRequest(action.render, vertex, pixel);
+    if (!request.has_value()) {
+      result.status = VulkanActionBridgeStatus::kUnsupportedState;
+      result.stage = GpuShaderStage::kPixel;
+      result.message = "PM4 draw snapshot contains an unsupported topology, "
+                       "blend, depth, or viewport state";
+      return result;
+    }
+    const auto execution = SubmitVulkanTranslatedDraw(*request);
+    result.timeline = execution.timeline;
+    result.stage = GpuShaderStage::kPixel;
+    if (execution.status == vulkan::VulkanGraphicsStatus::kOk) {
+      result.status = VulkanActionBridgeStatus::kCompleted;
+      result.message = "translated DrawIndexAuto completed";
+    } else if (execution.status ==
+                   vulkan::VulkanGraphicsStatus::kFenceWaitTimedOut ||
+               execution.status ==
+                   vulkan::VulkanGraphicsStatus::kRetainedWorkPending) {
+      result.status = VulkanActionBridgeStatus::kBlocked;
+      result.message = "translated DrawIndexAuto retained work; action will "
+                       "resume by polling";
+    } else if (execution.status == vulkan::VulkanGraphicsStatus::kDeviceLost) {
+      result.status = VulkanActionBridgeStatus::kDeviceLost;
+      result.message =
+          "Vulkan device lost while executing translated DrawIndexAuto";
+    } else {
+      result.status = VulkanActionBridgeStatus::kExecutionFailed;
+      result.message = execution.diagnostics.empty()
+                           ? "translated DrawIndexAuto execution failed"
+                           : execution.diagnostics.front().message;
+    }
+    return result;
+  }
+
+  if (action.type != GpuActionType::kDispatch ||
+      action.shader_binding_count != 1 ||
+      action.shader_bindings[0].stage != GpuShaderStage::kCompute ||
+      action.shader_bindings[0].status != GpuShaderBindingStatus::kRegistered ||
+      action.shader_bindings[0].code_address == 0) {
+    result.status = VulkanActionBridgeStatus::kShaderUnavailable;
+    result.stage = GpuShaderStage::kCompute;
+    result.message =
+        "direct compute requires exactly one registered CS program binding";
+    return result;
+  }
+  shader::recompiler::CompileOptions options;
+  options.stage = ShaderType::Compute;
+  options.shader_base = action.shader_bindings[0].program_address;
+  options.shader_hash = action.shader_bindings[0].program_address;
+  options.dump_ir = false;
+  shader::recompiler::CompileResult compile;
+  const auto compile_result = RecompileRegisteredShader(
+      action.shader_bindings[0].code_address, options, compile);
+  if (!compile_result) {
+    result.status = VulkanActionBridgeStatus::kCompilationFailed;
+    result.stage = GpuShaderStage::kCompute;
+    result.message = compile_result.error.empty()
+                         ? "registered compute shader compilation failed"
+                         : compile_result.error;
+    return result;
+  }
+  const auto execution = SubmitVulkanTranslatedCompute(
+      compile, action.render.group_count_x, action.render.group_count_y,
+      action.render.group_count_z, 50'000'000ULL);
+  result.timeline = execution.timeline;
+  result.stage = GpuShaderStage::kCompute;
+  if (execution.status == vulkan::VulkanComputeStatus::kOk) {
+    result.status = VulkanActionBridgeStatus::kCompleted;
+    result.message = "direct compute completed";
+  } else if (execution.status ==
+             vulkan::VulkanComputeStatus::kFenceWaitTimedOut) {
+    result.status = VulkanActionBridgeStatus::kBlocked;
+    result.message =
+        "direct compute fence timed out; action retained for polling";
+  } else if (execution.status == vulkan::VulkanComputeStatus::kDeviceLost) {
+    result.status = VulkanActionBridgeStatus::kDeviceLost;
+    result.message = "Vulkan device lost while executing direct compute";
+  } else {
+    result.status = VulkanActionBridgeStatus::kExecutionFailed;
+    result.message = execution.diagnostics.empty()
+                         ? "direct compute execution failed"
+                         : execution.diagnostics.front().message;
+  }
+  return result;
+}
+
+VulkanActionBridgeResult
+GpuRuntime::PollVulkanActionExecution(const GpuAction& action) {
+  VulkanActionBridgeResult result;
+  result.packet_address = action.packet_address;
+  result.opcode = action.opcode;
+  result.stage = action.type == GpuActionType::kDraw ? GpuShaderStage::kPixel
+                                                     : GpuShaderStage::kCompute;
+  result.first_register = action.render.first_register;
+  result.first_value = action.render.first_value;
+  if (action.type == GpuActionType::kDraw) {
+    const auto execution = PollVulkanGraphics();
+    result.timeline = execution.completed_timeline;
+    if (execution.status == vulkan::VulkanGraphicsStatus::kDeviceLost) {
+      result.status = VulkanActionBridgeStatus::kDeviceLost;
+      result.message =
+          "Vulkan device lost while polling retained translated DrawIndexAuto";
+    } else if (execution.status != vulkan::VulkanGraphicsStatus::kOk) {
+      result.status = VulkanActionBridgeStatus::kExecutionFailed;
+      result.message = execution.diagnostics.empty()
+                           ? "translated DrawIndexAuto polling failed"
+                           : execution.diagnostics.front().message;
+    } else if (execution.retained_submission_count != 0) {
+      result.status = VulkanActionBridgeStatus::kBlocked;
+      result.message =
+          "translated DrawIndexAuto remains retained by an unsignalled fence";
+    } else {
+      result.status = VulkanActionBridgeStatus::kCompleted;
+      result.message = "retained translated DrawIndexAuto completed";
+    }
+    return result;
+  }
+  const auto execution = PollVulkanCompute();
+  result.timeline = execution.completed_timeline;
+  if (execution.status == vulkan::VulkanComputeStatus::kDeviceLost) {
+    result.status = VulkanActionBridgeStatus::kDeviceLost;
+    result.message = "Vulkan device lost while polling retained direct compute";
+  } else if (execution.status != vulkan::VulkanComputeStatus::kOk) {
+    result.status = VulkanActionBridgeStatus::kExecutionFailed;
+    result.message = execution.diagnostics.empty()
+                         ? "direct compute polling failed"
+                         : execution.diagnostics.front().message;
+  } else if (execution.retained_submission_count != 0) {
+    result.status = VulkanActionBridgeStatus::kBlocked;
+    result.message = "direct compute remains retained by an unsignalled fence";
+  } else {
+    result.status = VulkanActionBridgeStatus::kCompleted;
+    result.message = "retained direct compute completed";
+  }
+  return result;
+}
 
 vulkan::VulkanInitializationResult GpuRuntime::InitializeVulkan(
     const vulkan::VulkanContextOptions& options) {

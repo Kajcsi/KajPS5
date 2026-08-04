@@ -16,6 +16,7 @@ add_library(kajps5_core STATIC
   gpu/format.cpp
   gpu/image_layout.cpp
   gpu/runtime.cpp
+  gpu/vulkan_action_bridge.cpp
   gpu/shader_runtime.cpp
   gpu/vulkan/device.cpp
   gpu/vulkan/buffer_cache.cpp

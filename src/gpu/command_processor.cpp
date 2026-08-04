@@ -100,6 +100,33 @@ constexpr std::array kGraphicsShaderProgramPairs = {
 };
 constexpr ShaderProgramPair kComputeShaderProgramPair{
     GpuShaderStage::kCompute, 0x20cU, 0x20dU};
+constexpr std::uint32_t kSyntheticDrawInstanceCount = 0xfffffff0U;
+
+// KytyPS5 pm4.h context/user-config offsets at fb5ecec.  The bridge keeps
+// these local rather than exposing a second mutable hardware context.
+constexpr std::uint32_t kCbTargetMask = 0x08eU;
+constexpr std::uint32_t kVportScissorTl = 0x094U;
+constexpr std::uint32_t kVportScissorBr = 0x095U;
+constexpr std::uint32_t kVportZMin = 0x0b4U;
+constexpr std::uint32_t kVportZMax = 0x0b5U;
+constexpr std::uint32_t kVportXScale = 0x10fU;
+constexpr std::uint32_t kCbBlend0Control = 0x1e0U;
+constexpr std::uint32_t kDbDepthControl = 0x200U;
+constexpr std::uint32_t kPaSuScModeControl = 0x205U;
+constexpr std::uint32_t kCbColor0Base = 0x318U;
+constexpr std::uint32_t kCbColor0Pitch = 0x319U;
+constexpr std::uint32_t kCbColor0Slice = 0x31aU;
+constexpr std::uint32_t kCbColor0View = 0x31bU;
+constexpr std::uint32_t kCbColor0Info = 0x31cU;
+constexpr std::uint32_t kCbColor0Attrib = 0x31dU;
+constexpr std::uint32_t kCbColor0Attrib2 = 0x3b0U;
+constexpr std::uint32_t kCbColor0Attrib3 = 0x3b8U;
+constexpr std::uint32_t kDbDepthSizeXy = 0x007U;
+constexpr std::uint32_t kDbZInfo = 0x010U;
+constexpr std::uint32_t kDbZWriteBase = 0x014U;
+constexpr std::uint32_t kDbDepthSize = 0x016U;
+constexpr std::uint32_t kDbZWriteBaseHi = 0x01cU;
+constexpr std::uint32_t kVgtPrimitiveType = 0x242U;
 
 std::uint32_t Read32(std::span<const std::byte> bytes,
                      std::size_t offset = 0) noexcept {
@@ -212,6 +239,217 @@ void SnapshotProgramBindings(const DecodeContext& context,
   }
 }
 
+void SnapshotRenderState(const DecodeContext& context, const GpuAction& action,
+                         GpuAction& enriched) noexcept {
+  // The bounded bridge executes DISPATCH_DIRECT and the validated
+  // DrawIndexAuto graphics subset. Their packet scalars and register state are
+  // copied here with shader bindings; unrepresented draw state is never
+  // guessed from an incomplete context register set.
+  enriched.render = {};
+  if (action.type == GpuActionType::kDispatch &&
+      action.opcode == kPm4DispatchDirect && action.value_count >= 3 &&
+      action.values[0] != 0 && action.values[1] != 0 && action.values[2] != 0 &&
+      action.values[0] <= std::numeric_limits<std::uint32_t>::max() &&
+      action.values[1] <= std::numeric_limits<std::uint32_t>::max() &&
+      action.values[2] <= std::numeric_limits<std::uint32_t>::max()) {
+    enriched.render.status = GpuRenderSnapshotStatus::kReady;
+    enriched.render.group_count_x =
+        static_cast<std::uint32_t>(action.values[0]);
+    enriched.render.group_count_y =
+        static_cast<std::uint32_t>(action.values[1]);
+    enriched.render.group_count_z =
+        static_cast<std::uint32_t>(action.values[2]);
+    return;
+  }
+  enriched.render.status = GpuRenderSnapshotStatus::kUnsupported;
+  enriched.render.first_register =
+      action.type == GpuActionType::kDraw ? kCbColor0Base : 0;
+  enriched.render.first_value = action.opcode;
+  if (action.type != GpuActionType::kDraw ||
+      action.opcode != kPm4DrawIndexAuto || action.value_count < 2 ||
+      action.values[0] == 0 ||
+      action.values[0] > std::numeric_limits<std::uint32_t>::max()) {
+    return;
+  }
+
+  const auto missing = [&enriched](std::uint32_t reg) {
+    enriched.render.first_register = reg;
+    enriched.render.first_value = 0;
+  };
+  const auto unsupported = [&enriched](std::uint32_t reg, std::uint32_t value) {
+    enriched.render.first_register = reg;
+    enriched.render.first_value = value;
+  };
+  const auto read_context = [&context, &missing](std::uint32_t reg,
+                                                 std::uint32_t& value) {
+    const auto found = context.context_registers.find(reg);
+    if (found == context.context_registers.end()) {
+      missing(reg);
+      return false;
+    }
+    value = found->second;
+    return true;
+  };
+  const auto read_user = [&context, &missing](std::uint32_t reg,
+                                              std::uint32_t& value) {
+    const auto found = context.user_config_registers.find(reg);
+    if (found == context.user_config_registers.end()) {
+      missing(reg);
+      return false;
+    }
+    value = found->second;
+    return true;
+  };
+  std::uint32_t base = 0, pitch = 0, slice = 0, view = 0, info = 0, attrib = 0,
+                attrib2 = 0, attrib3 = 0, target_mask = 0, blend = 0, mode = 0,
+                primitive = 0, scissor_tl = 0, scissor_br = 0, xscale = 0,
+                xoffset = 0, yscale = 0, yoffset = 0, zmin = 0, zmax = 0,
+                instances = 0, depth_control = 0;
+  if (!read_context(kCbColor0Base, base) ||
+      !read_context(kCbColor0Pitch, pitch) ||
+      !read_context(kCbColor0Slice, slice) ||
+      !read_context(kCbColor0View, view) ||
+      !read_context(kCbColor0Info, info) ||
+      !read_context(kCbColor0Attrib, attrib) ||
+      !read_context(kCbColor0Attrib2, attrib2) ||
+      !read_context(kCbColor0Attrib3, attrib3) ||
+      !read_context(kCbTargetMask, target_mask) ||
+      !read_context(kCbBlend0Control, blend) ||
+      !read_context(kPaSuScModeControl, mode) ||
+      !read_context(kVportScissorTl, scissor_tl) ||
+      !read_context(kVportScissorBr, scissor_br) ||
+      !read_context(kVportXScale, xscale) ||
+      !read_context(kVportXScale + 1U, xoffset) ||
+      !read_context(kVportXScale + 2U, yscale) ||
+      !read_context(kVportXScale + 3U, yoffset) ||
+      !read_context(kVportZMin, zmin) || !read_context(kVportZMax, zmax) ||
+      !read_context(kDbDepthControl, depth_control) ||
+      !read_user(kVgtPrimitiveType, primitive) ||
+      !read_user(kSyntheticDrawInstanceCount, instances))
+    return;
+
+  // Slot 0 only; a nonzero slot-1 base or any target-mask bit beyond RGBA is
+  // MRT.
+  if ((target_mask & ~0xfU) != 0) {
+    unsupported(kCbTargetMask, target_mask);
+    return;
+  }
+  const auto second_target =
+      context.context_registers.find(kCbColor0Base + 15U);
+  if (second_target != context.context_registers.end() &&
+      second_target->second != 0) {
+    unsupported(kCbColor0Base + 15U, second_target->second);
+    return;
+  }
+  // Linear, one-sample, 2D RGBA8 UNORM only.  These are the exact fields used
+  // by Kyty HwCtxSetRenderTarget: FORMAT[6:2], TILE_MODE_INDEX[4:0], samples.
+  if (((info >> 2U) & 0x1fU) != 10U || ((info >> 8U) & 7U) != 0 ||
+      ((info >> 11U) & 3U) != 0 ||
+      (info & ((1U << 14U) | (1U << 28U) | (1U << 31U))) != 0) {
+    unsupported(kCbColor0Info, info);
+    return;
+  }
+  if ((attrib & 0x1fU) != 0 || ((attrib >> 12U) & 7U) != 0 ||
+      ((attrib >> 15U) & 3U) != 0 || attrib3 != 0 || slice != 0 || view != 0) {
+    unsupported((attrib3 != 0) ? kCbColor0Attrib3 : kCbColor0Attrib,
+                attrib3 != 0 ? attrib3 : attrib);
+    return;
+  }
+  if ((mode & 3U) == 3U ||
+      (mode & ((1U << 11U) | (1U << 12U) | (1U << 16U))) != 0) {
+    unsupported(kPaSuScModeControl, mode);
+    return;
+  }
+  // Basic Vulkan-compatible blend factors/operations. Dual-source and
+  // hardware-only encodings remain an explicit bridge rejection.
+  const auto blend_basic =
+      (blend & 0x1fU) <= 10U && ((blend >> 5U) & 7U) <= 4U &&
+      ((blend >> 8U) & 0x1fU) <= 10U && ((blend >> 16U) & 0x1fU) <= 10U &&
+      ((blend >> 21U) & 7U) <= 4U && ((blend >> 24U) & 0x1fU) <= 10U;
+  if (!blend_basic) {
+    unsupported(kCbBlend0Control, blend);
+    return;
+  }
+  const auto primitive_type = primitive & 0x3fU;
+  if (primitive_type < 1U || primitive_type > 6U || primitive_type == 5U) {
+    unsupported(kVgtPrimitiveType, primitive);
+    return;
+  }
+  const auto width = ((attrib2 >> 14U) & 0x3fffU) + 1U;
+  const auto height = (attrib2 & 0x3fffU) + 1U;
+  const auto row_pitch = (static_cast<std::uint64_t>(pitch & 0x7ffU) + 1U) * 8U;
+  if (base == 0 || width == 0 || height == 0 ||
+      row_pitch < static_cast<std::uint64_t>(width) * 4U || instances == 0 ||
+      (scissor_tl >> 31U) != 0) {
+    unsupported(kCbColor0Base, base);
+    return;
+  }
+
+  enriched.render.status = GpuRenderSnapshotStatus::kReady;
+  enriched.render.vertex_count = static_cast<std::uint32_t>(action.values[0]);
+  enriched.render.instance_count = instances;
+  enriched.render.color_base = static_cast<std::uint64_t>(base) << 8U;
+  enriched.render.color_row_pitch_bytes = row_pitch;
+  enriched.render.color_width = width;
+  enriched.render.color_height = height;
+  enriched.render.color_format = 56U; // Prospero::BufferFormat::k8_8_8_8UNorm
+  enriched.render.color_write_mask = target_mask & 0xfU;
+  enriched.render.primitive_type = primitive_type;
+  enriched.render.cull_mode = mode & 3U;
+  enriched.render.front_face_clockwise = (mode & (1U << 2U)) != 0;
+  enriched.render.blend_enable = (blend & (1U << 30U)) != 0;
+  enriched.render.blend_control = blend;
+  enriched.render.viewport_x_scale_bits = xscale;
+  enriched.render.viewport_x_offset_bits = xoffset;
+  enriched.render.viewport_y_scale_bits = yscale;
+  enriched.render.viewport_y_offset_bits = yoffset;
+  enriched.render.viewport_z_min_bits = zmin;
+  enriched.render.viewport_z_max_bits = zmax;
+  enriched.render.scissor_left =
+      static_cast<std::int32_t>(scissor_tl & 0x7fffU);
+  enriched.render.scissor_top =
+      static_cast<std::int32_t>((scissor_tl >> 16U) & 0x7fffU);
+  enriched.render.scissor_right =
+      static_cast<std::int32_t>(scissor_br & 0x7fffU);
+  enriched.render.scissor_bottom =
+      static_cast<std::int32_t>((scissor_br >> 16U) & 0x7fffU);
+  if (enriched.render.scissor_right <= enriched.render.scissor_left ||
+      enriched.render.scissor_bottom <= enriched.render.scissor_top) {
+    unsupported(kVportScissorBr, scissor_br);
+    enriched.render.status = GpuRenderSnapshotStatus::kUnsupported;
+    return;
+  }
+  enriched.render.depth_enabled = (depth_control & (1U << 1U)) != 0;
+  enriched.render.depth_write_enabled = (depth_control & (1U << 2U)) != 0;
+  enriched.render.depth_compare = (depth_control >> 4U) & 7U;
+  if (!enriched.render.depth_enabled)
+    return;
+  std::uint32_t zinfo = 0, zbase = 0, zbase_hi = 0, zsize_xy = 0, zsize = 0;
+  if (!read_context(kDbZInfo, zinfo) || !read_context(kDbZWriteBase, zbase) ||
+      !read_context(kDbZWriteBaseHi, zbase_hi) ||
+      !read_context(kDbDepthSizeXy, zsize_xy) ||
+      !read_context(kDbDepthSize, zsize))
+    return;
+  if ((zinfo & 3U) != 3U || ((zinfo >> 2U) & 3U) != 0 ||
+      ((zinfo >> 20U) & 7U) != 0 || (zinfo & (1U << 29U)) != 0 || zbase == 0) {
+    unsupported(kDbZInfo, zinfo);
+    enriched.render.status = GpuRenderSnapshotStatus::kUnsupported;
+    return;
+  }
+  enriched.render.depth_base =
+      (static_cast<std::uint64_t>(zbase) << 8U) |
+      ((static_cast<std::uint64_t>(zbase_hi) & 0xffU) << 40U);
+  enriched.render.depth_width = (zsize_xy & 0x3fffU) + 1U;
+  enriched.render.depth_height = ((zsize_xy >> 16U) & 0x3fffU) + 1U;
+  enriched.render.depth_row_pitch_bytes =
+      (static_cast<std::uint64_t>(zsize & 0x7ffU) + 1U) * 8U;
+  if (enriched.render.depth_row_pitch_bytes <
+      static_cast<std::uint64_t>(enriched.render.depth_width) * 4U) {
+    unsupported(kDbDepthSize, zsize);
+    enriched.render.status = GpuRenderSnapshotStatus::kUnsupported;
+  }
+}
+
 GpuCommandStatus Stop(DecodeContext& context, GpuCommandStatus status,
                       std::uint64_t packet_address,
                       std::uint32_t opcode = 0) noexcept {
@@ -236,6 +474,7 @@ GpuCommandStatus Emit(DecodeContext& context,
       // scalar action fields unchanged.
       GpuAction enriched = action;
       SnapshotProgramBindings(context, enriched);
+      SnapshotRenderState(context, action, enriched);
       const auto binding_status = context.shader_runtime.ResolveProgramBindings(
           std::span<GpuShaderBinding>(enriched.shader_bindings.data(),
                                       enriched.shader_binding_count));
@@ -772,6 +1011,10 @@ GpuCommandStatus ProcessFrames(DecodeContext& context) {
         return Stop(context, GpuCommandStatus::kMalformedPacket,
                     packet_address, opcode);
       }
+      // DrawIndexAuto consumes this retained scalar.  Keep it in the
+      // decoder-owned state map so the ensuing action snapshots it exactly.
+      context.user_config_registers[kSyntheticDrawInstanceCount] =
+          std::max(packet[1], 1U);
       status = Emit(context, MakeAction(
           GpuActionType::kSetNumInstances, packet_address, packet_dwords,
           opcode, packet_register, {std::max(packet[1], 1U)}));
