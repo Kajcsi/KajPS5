@@ -181,6 +181,7 @@ struct FakeVulkanState {
   std::uint32_t descriptor_binding = 0;
   std::uint32_t flush_calls = 0;
   std::uint32_t invalidate_calls = 0;
+  std::optional<std::uint32_t> fail_invalidate_on_call;
   VkMappedMemoryRange flush_range{};
   VkMappedMemoryRange invalidate_range{};
   std::uint32_t buffers_created = 0, buffers_destroyed = 0;
@@ -491,7 +492,9 @@ VKAPI_ATTR VkResult VKAPI_CALL
 FakeInvalidate(VkDevice, std::uint32_t, const VkMappedMemoryRange *range) {
   ++g_fake.invalidate_calls;
   g_fake.invalidate_range = *range;
-  return ShouldFail(FailurePoint::kInvalidateMappedMemoryRanges)
+  return (g_fake.fail_invalidate_on_call.has_value() &&
+          g_fake.invalidate_calls == *g_fake.fail_invalidate_on_call) ||
+                 ShouldFail(FailurePoint::kInvalidateMappedMemoryRanges)
              ? VK_ERROR_OUT_OF_HOST_MEMORY
              : VK_SUCCESS;
 }
@@ -2587,6 +2590,37 @@ void TestTranslatedImageReadbackRetry() {
         "retry did not publish and reclaim the image readback lease");
 }
 
+void TestTranslatedMixedReadbackRetrySkipsCompletedResources() {
+  g_fake = {};
+  using Protection = kajps5::memory::GuestMemoryProtection;
+  kajps5::memory::GuestMemory memory(
+      0x700000, 0x1000, Protection::kRead | Protection::kWrite |
+                            Protection::kGpuRead | Protection::kGpuWrite);
+  const std::array<std::byte, 16> initial{};
+  Check(memory.Initialize(0x700000, initial) && memory.Initialize(0x700200, initial),
+        "mixed retry fixture guest initialization failed");
+  kajps5::gpu::GpuRuntime runtime(memory);
+  Check(static_cast<bool>(runtime.InitializeVulkan(FakeLoader())),
+        "mixed retry fixture Vulkan initialization failed");
+  g_fake.wait_results = {VK_TIMEOUT};
+  const auto timed_out = runtime.SubmitVulkanTranslatedCompute(
+      MakeImageLeaseCompile(true, true), 1, 1, 1, 0);
+  Check(timed_out.status == vk::VulkanComputeStatus::kFenceWaitTimedOut &&
+            timed_out.retained_submission_count == 1,
+        "mixed retry fixture did not retain its submission");
+  SignalFence(g_fake.submitted_fences.front());
+  g_fake.fail_invalidate_on_call = 2;
+  const auto failed = runtime.PollVulkanCompute();
+  Check(failed.status == vk::VulkanComputeStatus::kReadbackFailed &&
+            failed.retained_submission_count == 1 && g_fake.invalidate_calls == 2,
+        "mixed completion did not fail after its first writable resource");
+  g_fake.fail_invalidate_on_call.reset();
+  const auto retried = runtime.PollVulkanCompute();
+  Check(retried && retried.reclaimed_submission_count == 1 &&
+            retried.retained_submission_count == 0 && g_fake.invalidate_calls == 3,
+        "mixed completion retry repeated an already-completed resource");
+}
+
 void TestTranslatedImageDeviceLossPaths() {
   using Protection = kajps5::memory::GuestMemoryProtection;
   const auto initialize_writable = [](kajps5::memory::GuestMemory& memory) {
@@ -2868,6 +2902,7 @@ int main() {
   TestTranslatedPreparedDescriptorMismatchRollback();
   TestTranslatedImageLeaseTimeoutAndPoll();
   TestTranslatedImageReadbackRetry();
+  TestTranslatedMixedReadbackRetrySkipsCompletedResources();
   TestTranslatedImageDeviceLossPaths();
   TestTranslatedDescriptorLimits();
   TestTranslatedImageSamplerTransactionalRollback();

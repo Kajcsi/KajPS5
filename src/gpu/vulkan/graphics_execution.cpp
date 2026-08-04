@@ -286,6 +286,12 @@ bool EqualDepthStencil(const VulkanGraphicsDepthStencilState& left,
 }  // namespace
 
 struct VulkanGraphicsExecution::Impl {
+  enum class RetainedResourceLifecycle : std::uint8_t {
+    kAbandoned,
+    kPendingCompletion,
+    kCompleted,
+  };
+
   struct Pipeline {
     std::vector<std::uint32_t> vertex_spirv;
     std::vector<std::uint32_t> pixel_spirv;
@@ -312,16 +318,67 @@ struct VulkanGraphicsExecution::Impl {
     VulkanGuestBufferCache* buffer_cache = nullptr;
     std::optional<VulkanGuestBufferPreparation> vertex_buffers;
     std::optional<VulkanGuestBufferPreparation> pixel_buffers;
+    RetainedResourceLifecycle vertex_buffers_lifecycle =
+        RetainedResourceLifecycle::kAbandoned;
+    RetainedResourceLifecycle pixel_buffers_lifecycle =
+        RetainedResourceLifecycle::kAbandoned;
     VulkanGuestImageCache* image_cache = nullptr;
     std::optional<VulkanGuestImageSetPreparation> vertex_images;
     std::optional<VulkanGuestImageSetPreparation> pixel_images;
     std::optional<VulkanGuestImagePreparation> target;
     std::optional<VulkanGuestImagePreparation> depth_target;
+    std::vector<RetainedResourceLifecycle> vertex_image_lifecycles;
+    std::vector<RetainedResourceLifecycle> pixel_image_lifecycles;
+    RetainedResourceLifecycle target_lifecycle = RetainedResourceLifecycle::kAbandoned;
+    RetainedResourceLifecycle depth_target_lifecycle =
+        RetainedResourceLifecycle::kAbandoned;
     VulkanGraphicsBindingPlan plan;
     std::uint64_t timeline = 0;
   };
 
   explicit Impl(VulkanDeviceContext& device_context) : context(device_context) {}
+
+  bool CompleteSubmissionResources(Submission& submission) noexcept {
+    const auto complete_buffer = [&](std::optional<VulkanGuestBufferPreparation>& preparation,
+                                     RetainedResourceLifecycle& lifecycle) {
+      if (lifecycle != RetainedResourceLifecycle::kPendingCompletion) return true;
+      if (submission.buffer_cache == nullptr || !preparation.has_value() ||
+          !submission.buffer_cache->Complete(*preparation)) return false;
+      lifecycle = RetainedResourceLifecycle::kCompleted;
+      return true;
+    };
+    const auto complete_images = [&](std::optional<VulkanGuestImageSetPreparation>& preparation,
+                                     std::vector<RetainedResourceLifecycle>& lifecycles) {
+      if (!preparation.has_value()) return lifecycles.empty();
+      if (submission.image_cache == nullptr ||
+          lifecycles.size() != preparation->images.size()) return false;
+      for (std::size_t index = 0; index < preparation->images.size(); ++index) {
+        if (lifecycles[index] != RetainedResourceLifecycle::kPendingCompletion) continue;
+        if (!submission.image_cache->Complete(preparation->images[index])) return false;
+        lifecycles[index] = RetainedResourceLifecycle::kCompleted;
+      }
+      return true;
+    };
+    const auto complete_image = [&](std::optional<VulkanGuestImagePreparation>& preparation,
+                                    RetainedResourceLifecycle& lifecycle) {
+      if (lifecycle != RetainedResourceLifecycle::kPendingCompletion) return true;
+      if (submission.image_cache == nullptr || !preparation.has_value() ||
+          !submission.image_cache->Complete(*preparation)) return false;
+      lifecycle = RetainedResourceLifecycle::kCompleted;
+      return true;
+    };
+    return complete_buffer(submission.vertex_buffers,
+                           submission.vertex_buffers_lifecycle) &&
+           complete_buffer(submission.pixel_buffers,
+                           submission.pixel_buffers_lifecycle) &&
+           complete_images(submission.vertex_images,
+                           submission.vertex_image_lifecycles) &&
+           complete_images(submission.pixel_images,
+                           submission.pixel_image_lifecycles) &&
+           complete_image(submission.target, submission.target_lifecycle) &&
+           complete_image(submission.depth_target,
+                          submission.depth_target_lifecycle);
+  }
 
   void DestroySubmission(Submission& submission) noexcept {
     if (submission.fence != VK_NULL_HANDLE) {
@@ -492,21 +549,7 @@ VulkanGraphicsResult VulkanGraphicsExecution::PollCompleted() {
       continue;
     }
     if (status == VK_SUCCESS) {
-      const bool vertex_buffers_complete =
-          it->buffer_cache->Complete(*it->vertex_buffers);
-      const bool pixel_buffers_complete =
-          it->buffer_cache->Complete(*it->pixel_buffers);
-      bool vertex_images_complete = true;
-      for (auto& image : it->vertex_images->images)
-        vertex_images_complete = it->image_cache->Complete(image) && vertex_images_complete;
-      bool pixel_images_complete = true;
-      for (auto& image : it->pixel_images->images)
-        pixel_images_complete = it->image_cache->Complete(image) && pixel_images_complete;
-      if (!vertex_buffers_complete || !pixel_buffers_complete ||
-          !vertex_images_complete || !pixel_images_complete ||
-          !it->image_cache->Complete(*it->target) ||
-          (it->depth_target.has_value() &&
-           !it->image_cache->Complete(*it->depth_target))) {
+      if (!impl_->CompleteSubmissionResources(*it)) {
         result.status = VulkanGraphicsStatus::kReadbackFailed;
         Add(result, VulkanGraphicsDiagnosticSeverity::kError,
             VulkanGraphicsDiagnosticCode::kReadbackFailed,
@@ -1169,6 +1212,12 @@ VulkanGraphicsResult VulkanGraphicsExecution::Submit(
                            VulkanGraphicsDiagnosticCode::kReadbackFailed,
                            "depth-target readback recording", VK_SUCCESS);
   }
+  submission.vertex_image_lifecycles.assign(
+      submission.vertex_images->images.size(),
+      Impl::RetainedResourceLifecycle::kAbandoned);
+  submission.pixel_image_lifecycles.assign(
+      submission.pixel_images->images.size(),
+      Impl::RetainedResourceLifecycle::kAbandoned);
   api = impl_->dispatch.end_command_buffer(submission.command_buffer);
   if (api != VK_SUCCESS) return fail_submission(VulkanGraphicsStatus::kFenceWaitFailed,
                                                  VulkanGraphicsDiagnosticCode::kInputRejected,
@@ -1187,14 +1236,41 @@ VulkanGraphicsResult VulkanGraphicsExecution::Submit(
                                                  VulkanGraphicsDiagnosticCode::kInputRejected,
                                                  "vkQueueSubmit", api);
   bool marked = buffer_cache.MarkSubmitted(*submission.vertex_buffers);
-  marked = buffer_cache.MarkSubmitted(*submission.pixel_buffers) && marked;
-  for (auto& image : submission.vertex_images->images)
-    marked = image_cache.MarkSubmitted(image) && marked;
-  for (auto& image : submission.pixel_images->images)
-    marked = image_cache.MarkSubmitted(image) && marked;
-  marked = image_cache.MarkSubmitted(*submission.target) && marked;
-  if (submission.depth_target.has_value()) {
-    marked = image_cache.MarkSubmitted(*submission.depth_target) && marked;
+  if (marked) {
+    submission.vertex_buffers_lifecycle = Impl::RetainedResourceLifecycle::kPendingCompletion;
+    marked = buffer_cache.MarkSubmitted(*submission.pixel_buffers);
+  }
+  if (marked) {
+    submission.pixel_buffers_lifecycle = Impl::RetainedResourceLifecycle::kPendingCompletion;
+  }
+  for (std::size_t index = 0; marked && index < submission.vertex_images->images.size();
+       ++index) {
+    marked = image_cache.MarkSubmitted(submission.vertex_images->images[index]);
+    if (marked) {
+      submission.vertex_image_lifecycles[index] =
+          Impl::RetainedResourceLifecycle::kPendingCompletion;
+    }
+  }
+  for (std::size_t index = 0; marked && index < submission.pixel_images->images.size();
+       ++index) {
+    marked = image_cache.MarkSubmitted(submission.pixel_images->images[index]);
+    if (marked) {
+      submission.pixel_image_lifecycles[index] =
+          Impl::RetainedResourceLifecycle::kPendingCompletion;
+    }
+  }
+  if (marked) {
+    marked = image_cache.MarkSubmitted(*submission.target);
+    if (marked) {
+      submission.target_lifecycle = Impl::RetainedResourceLifecycle::kPendingCompletion;
+    }
+  }
+  if (marked && submission.depth_target.has_value()) {
+    marked = image_cache.MarkSubmitted(*submission.depth_target);
+    if (marked) {
+      submission.depth_target_lifecycle =
+          Impl::RetainedResourceLifecycle::kPendingCompletion;
+    }
   }
   if (!marked) {
     result.status = VulkanGraphicsStatus::kReadbackFailed;
@@ -1210,20 +1286,7 @@ VulkanGraphicsResult VulkanGraphicsExecution::Submit(
   const VkFence fence = submission.fence;
   api = impl_->dispatch.wait_for_fences(device, 1, &fence, VK_TRUE, request.timeout_ns);
   if (api == VK_SUCCESS) {
-    const bool vertex_buffers_complete =
-        buffer_cache.Complete(*submission.vertex_buffers);
-    const bool pixel_buffers_complete = buffer_cache.Complete(*submission.pixel_buffers);
-    bool vertex_images_complete = true;
-    for (auto& image : submission.vertex_images->images)
-      vertex_images_complete = image_cache.Complete(image) && vertex_images_complete;
-    bool pixel_images_complete = true;
-    for (auto& image : submission.pixel_images->images)
-      pixel_images_complete = image_cache.Complete(image) && pixel_images_complete;
-    if (!vertex_buffers_complete || !pixel_buffers_complete ||
-        !vertex_images_complete || !pixel_images_complete ||
-        !image_cache.Complete(*submission.target) ||
-        (submission.depth_target.has_value() &&
-         !image_cache.Complete(*submission.depth_target))) {
+    if (!impl_->CompleteSubmissionResources(submission)) {
       result.status = VulkanGraphicsStatus::kReadbackFailed;
       Add(result, VulkanGraphicsDiagnosticSeverity::kError,
           VulkanGraphicsDiagnosticCode::kReadbackFailed,

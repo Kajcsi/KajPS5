@@ -51,6 +51,12 @@ struct ComputeDispatch {
   PFN_vkCmdPushConstants cmd_push_constants = nullptr;
 };
 
+enum class RetainedResourceLifecycle : std::uint8_t {
+  kAbandoned,
+  kPendingCompletion,
+  kCompleted,
+};
+
 struct Submission {
   VkCommandPool command_pool = VK_NULL_HANDLE;
   VkCommandBuffer command_buffer = VK_NULL_HANDLE;
@@ -65,6 +71,8 @@ struct Submission {
   std::optional<VulkanGuestBufferPreparation> guest_preparation;
   VulkanGuestImageCache *image_cache = nullptr;
   std::optional<VulkanGuestImageSetPreparation> image_preparation;
+  RetainedResourceLifecycle guest_lifecycle = RetainedResourceLifecycle::kAbandoned;
+  std::vector<RetainedResourceLifecycle> image_lifecycles;
   std::uint64_t timeline = 0;
 };
 
@@ -133,6 +141,32 @@ void DestroySubmission(const ComputeDispatch& dispatch,
     submission.command_pool = VK_NULL_HANDLE;
     submission.command_buffer = VK_NULL_HANDLE;
   }
+}
+
+bool CompleteRetainedResources(Submission& submission) noexcept {
+  if (submission.guest_lifecycle == RetainedResourceLifecycle::kPendingCompletion) {
+    if (submission.guest_cache == nullptr || !submission.guest_preparation.has_value() ||
+        !submission.guest_cache->Complete(*submission.guest_preparation)) {
+      return false;
+    }
+    submission.guest_lifecycle = RetainedResourceLifecycle::kCompleted;
+  }
+  if (submission.image_preparation.has_value()) {
+    if (submission.image_cache == nullptr ||
+        submission.image_lifecycles.size() != submission.image_preparation->images.size()) {
+      return false;
+    }
+    for (std::size_t index = 0; index < submission.image_preparation->images.size(); ++index) {
+      if (submission.image_lifecycles[index] != RetainedResourceLifecycle::kPendingCompletion) {
+        continue;
+      }
+      if (!submission.image_cache->Complete(submission.image_preparation->images[index])) {
+        return false;
+      }
+      submission.image_lifecycles[index] = RetainedResourceLifecycle::kCompleted;
+    }
+  }
+  return true;
 }
 
 // Owns only handles returned by successful Vulkan calls. Keeping this guard
@@ -412,33 +446,14 @@ bool ReclaimCompletedLocked(ExecutionImpl& impl,
       continue;
     }
     if (status == VK_SUCCESS) {
-      if (retained_submission->guest_preparation.has_value() &&
-          retained_submission->guest_cache != nullptr &&
-          !retained_submission->guest_cache->Complete(
-              *retained_submission->guest_preparation)) {
+      if (!CompleteRetainedResources(*retained_submission)) {
         result.status = VulkanComputeStatus::kReadbackFailed;
-        AddDiagnostic(
-            result, VulkanDiagnosticSeverity::kError,
-            VulkanComputeDiagnosticCode::kReadbackFailed,
-            "Vulkan guest-buffer completion could not publish readback",
-            retained_submission->timeline);
+        AddDiagnostic(result, VulkanDiagnosticSeverity::kError,
+                      VulkanComputeDiagnosticCode::kReadbackFailed,
+                      "Vulkan retained compute completion could not publish readback",
+                      retained_submission->timeline);
         SnapshotExecutionState(impl, result);
         return false;
-      }
-      if (retained_submission->image_preparation.has_value() &&
-          retained_submission->image_cache != nullptr) {
-        for (VulkanGuestImagePreparation& image :
-             retained_submission->image_preparation->images) {
-          if (!retained_submission->image_cache->Complete(image)) {
-            result.status = VulkanComputeStatus::kReadbackFailed;
-            AddDiagnostic(result, VulkanDiagnosticSeverity::kError,
-                          VulkanComputeDiagnosticCode::kReadbackFailed,
-                          "Vulkan guest-image completion could not publish readback",
-                          retained_submission->timeline);
-            SnapshotExecutionState(impl, result);
-            return false;
-          }
-        }
       }
       impl.completed_timeline =
           std::max(impl.completed_timeline, retained_submission->timeline);
@@ -1349,6 +1364,11 @@ VulkanComputeResult VulkanComputeExecution::SubmitTranslatedPrepared(
         submission.command_buffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
         VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &barrier, 0, nullptr, 0, nullptr);
   }
+  if (submission.image_preparation.has_value()) {
+    submission.image_lifecycles.assign(
+        submission.image_preparation->images.size(),
+        RetainedResourceLifecycle::kAbandoned);
+  }
   api = impl_->dispatch.end_command_buffer(submission.command_buffer);
   if (api != VK_SUCCESS)
     return fail(VulkanComputeStatus::kCommandBufferEndFailed,
@@ -1380,9 +1400,12 @@ VulkanComputeResult VulkanComputeExecution::SubmitTranslatedPrepared(
     SnapshotExecutionState(*impl_, result);
     return result;
   }
+  submitted.guest_lifecycle = RetainedResourceLifecycle::kPendingCompletion;
   if (submitted.image_preparation.has_value()) {
-    for (auto& image : submitted.image_preparation->images) {
-      if (!submitted.image_cache->MarkSubmitted(image)) {
+    for (std::size_t index = 0;
+         index < submitted.image_preparation->images.size(); ++index) {
+      if (!submitted.image_cache->MarkSubmitted(
+              submitted.image_preparation->images[index])) {
         result.status = VulkanComputeStatus::kReadbackFailed;
         AddDiagnostic(result, VulkanDiagnosticSeverity::kError,
                       VulkanComputeDiagnosticCode::kReadbackFailed,
@@ -1391,34 +1414,21 @@ VulkanComputeResult VulkanComputeExecution::SubmitTranslatedPrepared(
         SnapshotExecutionState(*impl_, result);
         return result;
       }
+      submitted.image_lifecycles[index] = RetainedResourceLifecycle::kPendingCompletion;
     }
   }
   const VkFence submitted_fence = submitted.fence;
   api = impl_->dispatch.wait_for_fences(device, 1, &submitted_fence, VK_TRUE,
                                         timeout_ns);
   if (api == VK_SUCCESS) {
-    if (!submitted.guest_cache->Complete(*submitted.guest_preparation)) {
+    if (!CompleteRetainedResources(submitted)) {
       result.status = VulkanComputeStatus::kReadbackFailed;
       AddDiagnostic(result, VulkanDiagnosticSeverity::kError,
                     VulkanComputeDiagnosticCode::kReadbackFailed,
-                    "signalled Vulkan guest-buffer submission retained after "
-                    "readback failure",
+                    "signalled Vulkan compute submission retained after readback failure",
                     submitted.timeline);
       SnapshotExecutionState(*impl_, result);
       return result;
-    }
-    if (submitted.image_preparation.has_value()) {
-      for (auto& image : submitted.image_preparation->images) {
-        if (!submitted.image_cache->Complete(image)) {
-          result.status = VulkanComputeStatus::kReadbackFailed;
-          AddDiagnostic(result, VulkanDiagnosticSeverity::kError,
-                        VulkanComputeDiagnosticCode::kReadbackFailed,
-                        "signalled Vulkan guest-image submission retained after readback failure",
-                        submitted.timeline);
-          SnapshotExecutionState(*impl_, result);
-          return result;
-        }
-      }
     }
     impl_->completed_timeline =
         std::max(impl_->completed_timeline, submitted.timeline);

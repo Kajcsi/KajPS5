@@ -11,6 +11,34 @@ namespace {
 
 using kajps5::gpu::ShaderType;
 
+std::optional<std::uint32_t> g_graphics_fail_invalidate_on_call;
+
+VKAPI_ATTR VkResult VKAPI_CALL GraphicsFakeInvalidateMappedMemoryRanges(
+    VkDevice, std::uint32_t, const VkMappedMemoryRange*) {
+  ++g.invalidates;
+  return g_graphics_fail_invalidate_on_call.has_value() &&
+                 g.invalidates == *g_graphics_fail_invalidate_on_call
+             ? VK_ERROR_OUT_OF_HOST_MEMORY
+             : VK_SUCCESS;
+}
+
+VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL GraphicsFakeGetDeviceProcAddr(
+    VkDevice device, const char* name) {
+  if (std::strcmp(name, "vkInvalidateMappedMemoryRanges") == 0) {
+    return reinterpret_cast<PFN_vkVoidFunction>(
+        GraphicsFakeInvalidateMappedMemoryRanges);
+  }
+  return FakeGetDeviceProcAddr(device, name);
+}
+
+VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL GraphicsFakeGetInstanceProcAddr(
+    VkInstance instance, const char* name) {
+  if (std::strcmp(name, "vkGetDeviceProcAddr") == 0) {
+    return reinterpret_cast<PFN_vkVoidFunction>(GraphicsFakeGetDeviceProcAddr);
+  }
+  return FakeGetInstanceProcAddr(instance, name);
+}
+
 kajps5::gpu::shader::recompiler::CompileResult Program(ShaderType stage) {
   kajps5::gpu::shader::recompiler::CompileResult result;
   result.spirv = {0x07230203U, 0x00010600U, 0x0008000bU, 1U, 0U};
@@ -88,7 +116,7 @@ std::unique_ptr<kajps5::gpu::GpuRuntime> Runtime(
     kajps5::memory::GuestMemory& memory) {
   auto runtime = std::make_unique<kajps5::gpu::GpuRuntime>(memory);
   const auto initialized = runtime->InitializeVulkan(
-      vk::VulkanLoader::FromGetInstanceProcAddr(FakeGetInstanceProcAddr));
+      vk::VulkanLoader::FromGetInstanceProcAddr(GraphicsFakeGetInstanceProcAddr));
   Check(static_cast<bool>(initialized),
         "injected graphics runtime did not initialize");
   return runtime;
@@ -331,6 +359,38 @@ void TestResourcefulGraphicsRuntimePath() {
         "resourceful graphics draw did not record stage upload and readback barriers");
 }
 
+void TestRetainedResourceCompletionRetrySkipsCompletedResources() {
+  Reset();
+  g_graphics_fail_invalidate_on_call.reset();
+  using Protection = kajps5::memory::GuestMemoryProtection;
+  kajps5::memory::GuestMemory memory(
+      0x1000, 0x1000, Protection::kRead | Protection::kWrite |
+                         Protection::kGpuRead | Protection::kGpuWrite);
+  Check(memory.InitializeFill(0x1000, 0x900, std::byte{0x2a}),
+        "graphics retry fixture initialization failed");
+  auto runtime = Runtime(memory);
+  const auto vertex = ResourceProgram(ShaderType::Vertex, true, 0x1600, 0x1000);
+  const auto pixel = ResourceProgram(ShaderType::Pixel, true, 0x1700, 0x1400);
+  auto request = Draw(vertex, pixel);
+  request.color_target.guest_address = 0x1800;
+  g.graphics_wait_result = VK_TIMEOUT;
+  const auto timed_out = runtime->SubmitVulkanTranslatedDraw(request);
+  Check(timed_out.status == vk::VulkanGraphicsStatus::kFenceWaitTimedOut &&
+            timed_out.retained_submission_count == 1,
+        "graphics retry fixture did not retain its submission");
+  g.graphics_wait_result = VK_SUCCESS;
+  g_graphics_fail_invalidate_on_call = 2;
+  const auto failed = runtime->PollVulkanGraphics();
+  Check(failed.status == vk::VulkanGraphicsStatus::kReadbackFailed &&
+            failed.retained_submission_count == 1 && g.invalidates == 2,
+        "graphics completion did not fail after its first writable resource");
+  g_graphics_fail_invalidate_on_call.reset();
+  const auto retried = runtime->PollVulkanGraphics();
+  Check(retried && retried.reclaimed_submission_count == 1 &&
+            retried.retained_submission_count == 0 && g.invalidates == 6,
+        "graphics completion retry repeated an already-completed resource");
+}
+
 void TestReadOnlyAttachmentSnapshotAliases() {
   Reset();
   using Protection = kajps5::memory::GuestMemoryProtection;
@@ -411,6 +471,7 @@ int main() {
   TestEarlyRejectionAndRetention();
   TestDepthTargetPath();
   TestResourcefulGraphicsRuntimePath();
+  TestRetainedResourceCompletionRetrySkipsCompletedResources();
   TestReadOnlyAttachmentSnapshotAliases();
   TestDepthAttachmentSnapshotAliases();
   return 0;
