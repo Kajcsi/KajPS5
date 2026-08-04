@@ -14,6 +14,7 @@ add_library(kajps5_core STATIC
   gpu/shader/bindings.cpp
   gpu/shader/recompiler/ShaderRecompiler.cpp
   gpu/format.cpp
+  gpu/detile.cpp
   gpu/image_layout.cpp
   gpu/tile_layout.cpp
   gpu/runtime.cpp

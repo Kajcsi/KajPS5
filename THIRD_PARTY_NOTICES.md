@@ -929,6 +929,12 @@ KytyPS5 `src/graphics/guest_gpu/tile.{h,cpp}` at commit
 preserved in `LICENSES/Kyty-MIT.txt`; KajPS5 distributes this adaptation under
 GPL-2.0-only.
 
+The RenderTarget64KB CPU detiler in `src/gpu/detile.{h,cpp}` adapts the tile
+addressing sequence from KytyPS5
+`tests/ShaderRecompilerComputeTests.cpp` lines 7297-7351 at commit
+`fb5ecec455cf6c67154134429485ffccbfc34203`. KajPS5 distributes this
+adaptation under GPL-2.0-only.
+
 The title-facing VideoOut core in `src/gpu/video_out.*`, its checked
 `libSceVideoOut` exports in `src/hle/video_out_exports.*`, TitleSession
 ownership, and filter -13 event integration adapt the buffer/flip state model
