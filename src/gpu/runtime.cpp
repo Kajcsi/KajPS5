@@ -693,7 +693,8 @@ vulkan::VulkanPresentationResult GpuRuntime::InitializeVulkanPresentation(
 }
 
 vulkan::VulkanPresentationResult GpuRuntime::PresentVulkanGuestFrame(
-    const GuestImageLayoutInput& input, std::uint64_t timeout_ns) {
+    const GuestImageLayoutInput& input, std::uint64_t timeout_ns,
+    std::optional<vulkan::VulkanImageFormat> format_override) {
   std::lock_guard lock(vulkan_mutex_);
   if (vulkan_presentation_ == nullptr) {
     vulkan::VulkanPresentationResult result;
@@ -702,7 +703,7 @@ vulkan::VulkanPresentationResult GpuRuntime::PresentVulkanGuestFrame(
         "InitializeVulkanPresentation must succeed before presenting a guest frame"});
     return result;
   }
-  return vulkan_presentation_->Present(input, timeout_ns);
+  return vulkan_presentation_->Present(input, timeout_ns, format_override);
 }
 
 vulkan::VulkanPresentationResult GpuRuntime::PollVulkanPresentation() {

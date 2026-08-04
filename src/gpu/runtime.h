@@ -179,7 +179,8 @@ class GpuRuntime final {
       const vulkan::VulkanContextOptions& options = {});
   [[nodiscard]] vulkan::VulkanPresentationResult PresentVulkanGuestFrame(
       const GuestImageLayoutInput& input,
-      std::uint64_t timeout_ns = 50'000'000ULL);
+      std::uint64_t timeout_ns = 50'000'000ULL,
+      std::optional<vulkan::VulkanImageFormat> format_override = std::nullopt);
   [[nodiscard]] vulkan::VulkanPresentationResult PollVulkanPresentation();
   [[nodiscard]] vulkan::VulkanPresentationResult ResizeVulkanPresentation(
       VkExtent2D extent);

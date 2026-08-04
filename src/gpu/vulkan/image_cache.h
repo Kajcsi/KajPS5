@@ -22,7 +22,7 @@ namespace kajps5::memory { class GuestMemory; }
 
 namespace kajps5::gpu::vulkan {
 
-enum class VulkanImageStorageClass : std::uint8_t { kR8, kR8G8, kR8G8B8A8, kR16, kR16G16, kR16G16B16A16, kR32, kR32G32, kR32G32B32A32, kBc1, kBc3, kBc4, kBc5, kBc6, kBc7, kD32 };
+enum class VulkanImageStorageClass : std::uint8_t { kR8, kR8G8, kR8G8B8A8, kA2B10G10R10, kR16, kR16G16, kR16G16B16A16, kR32, kR32G32, kR32G32B32A32, kBc1, kBc3, kBc4, kBc5, kBc6, kBc7, kD32 };
 struct VulkanImageFormat { VkFormat format = VK_FORMAT_UNDEFINED; VulkanImageStorageClass storage_class{}; std::optional<VkFormat> sibling_format; };
 [[nodiscard]] std::optional<VulkanImageFormat> MapGuestImageFormat(std::uint32_t format) noexcept;
 

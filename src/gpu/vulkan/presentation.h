@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -55,7 +56,7 @@ struct VulkanPresentationSwapchainPlan {
 // Narrow per-instance test seam.  It substitutes only external Vulkan/cache
 // effects; Present/Poll retain ownership, timeout, and recreation state.
 struct VulkanPresentationTestHooks {
-  std::function<VulkanGuestImagePreparation(const GuestImageLayoutInput&)> prepare;
+  std::function<VulkanGuestImagePreparation(const VulkanGuestImageRequest&)> prepare;
   std::function<void(VulkanGuestImagePreparation&)> discard;
   std::function<bool(VulkanGuestImagePreparation&)> complete;
   std::function<bool(VulkanGuestImagePreparation&)> mark_submitted;
@@ -86,7 +87,8 @@ class VulkanPresentation final {
   VulkanPresentation(const VulkanPresentation&) = delete;
   VulkanPresentation& operator=(const VulkanPresentation&) = delete;
   [[nodiscard]] VulkanPresentationResult Present(
-      const GuestImageLayoutInput& input, std::uint64_t timeout_ns);
+      const GuestImageLayoutInput& input, std::uint64_t timeout_ns,
+      std::optional<VulkanImageFormat> format_override = std::nullopt);
   [[nodiscard]] VulkanPresentationResult Poll();
   [[nodiscard]] VulkanPresentationResult RequestResize(VkExtent2D extent);
   [[nodiscard]] VkSurfaceFormatKHR surface_format() const noexcept;

@@ -359,6 +359,7 @@ std::optional<VulkanImageFormat> MapGuestImageFormat(std::uint32_t format) noexc
     case F::k8_8_8_8UNorm: return f(VK_FORMAT_R8G8B8A8_UNORM, VulkanImageStorageClass::kR8G8B8A8, VK_FORMAT_R8G8B8A8_SRGB);
     case F::k8_8_8_8Srgb: return f(VK_FORMAT_R8G8B8A8_SRGB, VulkanImageStorageClass::kR8G8B8A8, VK_FORMAT_R8G8B8A8_UNORM);
     case F::k8_8_8_8UInt: return f(VK_FORMAT_R8G8B8A8_UINT, VulkanImageStorageClass::kR8G8B8A8);
+    case F::k10_10_10_2UNorm: return f(VK_FORMAT_A2B10G10R10_UNORM_PACK32, VulkanImageStorageClass::kA2B10G10R10);
     case F::k16UNorm: return f(VK_FORMAT_R16_UNORM, VulkanImageStorageClass::kR16);
     case F::k16Float: return f(VK_FORMAT_R16_SFLOAT, VulkanImageStorageClass::kR16);
     case F::k16UInt: return f(VK_FORMAT_R16_UINT, VulkanImageStorageClass::kR16);

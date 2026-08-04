@@ -1804,6 +1804,12 @@ void TestMappings() {
   }
   Check(vk::MapGuestImageFormat(P::GpuEnumValue(P::BufferFormat::kBc6SFloat))->format == VK_FORMAT_BC6H_SFLOAT_BLOCK,
         "BC6 signed float mapping differs");
+  const auto packed = vk::MapGuestImageFormat(
+      P::GpuEnumValue(P::BufferFormat::k10_10_10_2UNorm));
+  Check(packed && packed->format == VK_FORMAT_A2B10G10R10_UNORM_PACK32 &&
+            packed->storage_class == vk::VulkanImageStorageClass::kA2B10G10R10 &&
+            !packed->sibling_format,
+        "packed 10:10:10:2 mapping differs");
   Check(!vk::MapGuestImageFormat(P::GpuEnumValue(P::BufferFormat::k32_32_32Float)),
         "unsupported three-component format was guessed");
 }

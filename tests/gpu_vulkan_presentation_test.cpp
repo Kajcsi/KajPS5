@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <deque>
 #include <iostream>
+#include <optional>
 #include <string_view>
 #include <vector>
 
@@ -57,14 +58,18 @@ void TestPresentQueueSelection() {
 
 struct Fixture {
   std::deque<VkResult> acquire{VK_SUCCESS}; std::deque<VkResult> present{VK_SUCCESS};
-  std::deque<VkResult> fence{VK_SUCCESS}; std::vector<VkSwapchainKHR> old_swapchains; int prepare=0, discard=0, complete=0, mark=0, submit=0, recreate=0;
+  std::deque<VkResult> fence{VK_SUCCESS}; std::vector<VkSwapchainKHR> old_swapchains;
+  kajps5::gpu::GuestImageLayoutInput prepared_input{};
+  VkImageUsageFlags prepared_usage = 0;
+  std::optional<vk::VulkanImageFormat> prepared_format_override;
+  int prepare=0, discard=0, complete=0, mark=0, submit=0, recreate=0;
   static VkResult Next(std::deque<VkResult>& scripted) {
     if (scripted.empty()) return VK_ERROR_INITIALIZATION_FAILED;
     const VkResult result = scripted.front(); scripted.pop_front(); return result;
   }
   vk::VulkanPresentationTestHooks Hooks() {
     return {
-      .prepare=[this](const auto& input) { ++prepare; vk::VulkanGuestImagePreparation p; if (input.width == 0 || input.height == 0 || input.depth == 0 || input.guest_address == 0) { p.status=vk::VulkanGuestImageStatus::kInvalidLayout; return p; } p.status=vk::VulkanGuestImageStatus::kOk; p.image=reinterpret_cast<VkImage>(static_cast<std::uintptr_t>(1)); return p; },
+      .prepare=[this](const vk::VulkanGuestImageRequest& request) { ++prepare; prepared_input=request.input; prepared_usage=request.usage; prepared_format_override=request.format_override; const auto& input=request.input; vk::VulkanGuestImagePreparation p; if (input.width == 0 || input.height == 0 || input.depth == 0 || input.guest_address == 0) { p.status=vk::VulkanGuestImageStatus::kInvalidLayout; return p; } p.status=vk::VulkanGuestImageStatus::kOk; p.image=reinterpret_cast<VkImage>(static_cast<std::uintptr_t>(1)); return p; },
       .discard=[this](auto&) { ++discard; }, .complete=[this](auto&) { ++complete; return true; },
       .mark_submitted=[this](auto&) { ++mark; return true; },
       .acquire=[this](std::uint64_t, std::uint32_t* index) { *index=0; return Next(acquire); },
@@ -84,6 +89,41 @@ void TestInjectedStateMachine() {
   Check(presenter->Poll()&&f.complete==1&&f.discard==2,"completion did not reclaim exactly once");
   Check(presenter->Present(ValidInput(),1)&&f.submit==2,"frame after completion did not proceed");
   (void)presenter->Poll();
+  Fixture override_fixture;
+  vk::VulkanPresentationResult override_result;
+  auto override_presenter=vk::VulkanPresentation::CreateForTesting(
+      override_fixture.Hooks(), override_result);
+  auto override_input=ValidInput();
+  override_input.format=0x1234; override_input.width=2; override_input.height=3;
+  override_input.depth=4; override_input.layers=5; override_input.mip_count=6;
+  override_input.row_pitch_bytes=64; override_input.slice_pitch_bytes=256;
+  override_input.image_type=kajps5::gpu::Prospero::ImageType::kColor2DArray;
+  override_input.tile_mode=kajps5::gpu::Prospero::TileMode::kLinear;
+  override_input.tightly_packed=false;
+  const vk::VulkanImageFormat format_override{
+      VK_FORMAT_A2R10G10B10_UNORM_PACK32,
+      vk::VulkanImageStorageClass::kA2B10G10R10, std::nullopt};
+  Check(override_presenter && override_result &&
+            override_presenter->Present(override_input, 1, format_override) &&
+            override_fixture.prepared_usage == VK_IMAGE_USAGE_TRANSFER_SRC_BIT &&
+            override_fixture.prepared_format_override &&
+            override_fixture.prepared_format_override->format == format_override.format &&
+            override_fixture.prepared_format_override->storage_class == format_override.storage_class &&
+            !override_fixture.prepared_format_override->sibling_format &&
+            override_fixture.prepared_input.guest_address == override_input.guest_address &&
+            override_fixture.prepared_input.format == override_input.format &&
+            override_fixture.prepared_input.width == override_input.width &&
+            override_fixture.prepared_input.height == override_input.height &&
+            override_fixture.prepared_input.depth == override_input.depth &&
+            override_fixture.prepared_input.layers == override_input.layers &&
+            override_fixture.prepared_input.mip_count == override_input.mip_count &&
+            override_fixture.prepared_input.row_pitch_bytes == override_input.row_pitch_bytes &&
+            override_fixture.prepared_input.slice_pitch_bytes == override_input.slice_pitch_bytes &&
+            override_fixture.prepared_input.image_type == override_input.image_type &&
+            override_fixture.prepared_input.tile_mode == override_input.tile_mode &&
+            override_fixture.prepared_input.tightly_packed == override_input.tightly_packed,
+        "presentation did not preserve the explicit guest image request");
+  (void)override_presenter->Poll();
   Fixture out; out.acquire={VK_ERROR_OUT_OF_DATE_KHR,VK_SUCCESS}; out.present={VK_SUBOPTIMAL_KHR}; out.fence={VK_SUCCESS};
   vk::VulkanPresentationResult result; auto p=vk::VulkanPresentation::CreateForTesting(out.Hooks(),result); Check(static_cast<bool>(p),"outdate fixture create failed");
   Check(p->Present(ValidInput(),1).status==vk::VulkanPresentationStatus::kRecreateRequired&&out.submit==0,"acquire out-of-date state wrong");
