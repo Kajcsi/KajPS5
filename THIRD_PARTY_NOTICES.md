@@ -917,6 +917,12 @@ GPL-2.0-or-later. The combined guidance is distributed under GPL-2.0-only.
 
 ## New adaptations
 
+The checked guest tile-layout unit in `src/gpu/tile_layout.{h,cpp}` adapts
+KytyPS5 `src/graphics/guest_gpu/tile.{h,cpp}` at commit
+`fb5ecec455cf6c67154134429485ffccbfc34203`. The original Kyty MIT notice is
+preserved in `LICENSES/Kyty-MIT.txt`; KajPS5 distributes this adaptation under
+GPL-2.0-only.
+
 The title-facing VideoOut core in `src/gpu/video_out.*`, its checked
 `libSceVideoOut` exports in `src/hle/video_out_exports.*`, TitleSession
 ownership, and filter -13 event integration adapt the buffer/flip state model

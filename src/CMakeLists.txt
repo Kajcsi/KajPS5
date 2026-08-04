@@ -15,6 +15,7 @@ add_library(kajps5_core STATIC
   gpu/shader/recompiler/ShaderRecompiler.cpp
   gpu/format.cpp
   gpu/image_layout.cpp
+  gpu/tile_layout.cpp
   gpu/runtime.cpp
   gpu/video_out.cpp
   gpu/vulkan_action_bridge.cpp
