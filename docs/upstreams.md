@@ -44,6 +44,27 @@ adapted paths change.
 
 ## Refresh record
 
+### 2026-08-04
+
+- Final M8 presentation and title-run refresh retained the current KytyPS5 pin
+  `fb5ecec455cf6c67154134429485ffccbfc34203` after reviewing its Vulkan,
+  shader, resource, tile, and presentation/window architecture. SharpEmu
+  remained pinned at `9e10d7c44a2821cfd5ccd3417c09c0cf269285a4` for
+  fail-closed VideoOut behavior and retry/recovery/merge/coherence regressions.
+  KajPS5
+  keeps one C++ runtime, guest-memory owner, image cache, Vulkan context, and
+  presentation owner: it supports checked linear and RenderTarget64KB tiled
+  frames, bounded Vulkan action/presentation work, and one visible Windows
+  title window with message, resize, and retained-work polling. Explicit
+  headless mode skips host graphics and does not complete VideoOut flips
+  without a presentation context. No upstream source was copied verbatim and
+  this remains research infrastructure, not a game-compatibility claim.
+
+- Final M8 validation at KajPS5 `57aff2a` recorded 94 configured tests passing
+  in Debug and Release, focused AddressSanitizer coverage, and live/repeated
+  presentation smoke on an NVIDIA GeForce RTX 4090. GitHub Actions run
+  `30935269714` recorded the corresponding CI evidence.
+
 ### 2026-08-03
 
 - M8 translated offscreen draw execution reviewed KytyPS5

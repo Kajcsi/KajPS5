@@ -56,13 +56,17 @@ The current core includes:
   later waits. Counter writes use a stable, increasing GPU timeline until a
   renderer supplies native GPU timestamps. `EVENT_WRITE` packets deliver the
   hardware event type to registered graphics queues while preserving the guest
-  event ID and user data. A bounded action history is the current test sink;
-  Vulkan execution is not implemented yet.
+  event ID and user data. Supported actions can execute through the singular,
+  bounded Vulkan action path after that runtime has initialized its own context;
+  retained work, retries, recovery, and merge/coherence correctness remain
+  checked.
 - The shader path includes KytyPS5's complete Gen5 instruction decoder, CFG
   construction, IR lowering, and tested SPIR-V emission. The existing GPU
   runtime also owns checked AGC shader-image registration and passes exact
-  registered guest dwords to the recompiler. Live Vulkan execution remains
-  incomplete.
+  registered guest dwords to the recompiler. Its Kyty-derived Vulkan resource
+  and presentation architecture accepts checked linear and RenderTarget64KB
+  tiled images; SharpEmu-derived regressions keep no-context VideoOut flips
+  fail-closed and cover recovery and coherence behavior.
 - Typed kernel handles and one cooperative scheduler for ready, running,
   blocked, and exited guest threads. Initial pthread support includes guest
   attributes, bounded thread-local keys, per-thread values, identity, equality,
@@ -114,9 +118,9 @@ The current core includes:
   x86-64 programs used only by tests.
 
 KajPS5 still lacks complete guest instruction compatibility, executable static
-TLS setup, SELF decryption, Vulkan rendering, audio, and game compatibility. The
-repository contains no games, firmware, keys, proprietary modules, or
-encrypted executables.
+TLS setup, SELF decryption, complete graphics coverage, audio, and game
+compatibility. The repository contains no games, firmware, keys, proprietary
+modules, or encrypted executables.
 
 ## Build
 

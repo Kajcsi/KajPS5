@@ -46,6 +46,13 @@ execution. The GPU owner now decodes and schedules checked command buffers.
 The shader compiler has Gen5 decoding, structured control flow, IR lowering,
 and a tested public `ShaderRecompiler` unit that emits Kyty-derived SPIR-V.
 The same GPU runtime now owns checked registered AGC shader images and uses
-that registry to feed exact guest dwords to the recompiler. Live GPU/Vulkan
-execution, presentation, audio, input, and the user interface remain
-incomplete.
+that registry to feed exact guest dwords to the recompiler. Its bounded
+Kyty-derived Vulkan action, resource, and presentation path runs supported
+work through that one owner, including checked linear and RenderTarget64KB
+tiled image presentation. SharpEmu-derived fail-closed, recovery, and
+coherence regressions constrain no-context VideoOut flips and retained work.
+For Windows title runs, the app owns one visible Vulkan window, pumps messages,
+forwards client-size changes, polls presentation, and runs bounded guest
+chunks. `--headless` deliberately skips host graphics; it is not a successful
+VideoOut fallback. Audio, input, the broader user interface, and complete GPU
+and guest compatibility remain incomplete.
