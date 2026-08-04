@@ -5,12 +5,17 @@
 #include <array>
 #include <cstring>
 #include <cstdlib>
+#include <cstdint>
 #include <iostream>
+#include <span>
 #include <string_view>
 #include <vector>
 
 #include "core/memory/guest_memory.h"
+#include "gpu/format.h"
+#include "gpu/image_layout.h"
 #include "gpu/runtime.h"
+#include "gpu/tile_layout.h"
 #include "gpu/vulkan/buffer_cache.h"
 #include "gpu/vulkan/image_cache.h"
 #include "gpu/vulkan/loader.h"
@@ -616,6 +621,70 @@ vk::VulkanGuestImageRequest Request(P::ImageType type = P::ImageType::kColor2D) 
   return request;
 }
 
+vk::VulkanGuestImageRequest RenderTargetRequest() {
+  vk::VulkanGuestImageRequest request;
+  request.input.guest_address = 0x10000;
+  request.input.format = P::GpuEnumValue(P::BufferFormat::k8_8_8_8UNorm);
+  request.input.width = 17;
+  request.input.height = 9;
+  request.input.depth = 1;
+  request.input.image_type = P::ImageType::kColor2D;
+  request.input.tile_mode = P::TileMode::kRenderTarget;
+  request.request_sibling_view = false;
+  return request;
+}
+
+std::byte RenderTargetActiveByte(std::uint32_t x, std::uint32_t y,
+                                 std::uint32_t byte) {
+  return static_cast<std::byte>((x * 17u + y * 43u + byte * 71u) & 0xffu);
+}
+
+bool FillReferenceRenderTarget64KB(const kajps5::gpu::GuestImageLayout& layout,
+                                   std::span<const std::byte> expected_linear,
+                                   std::span<std::byte> tiled) {
+  const auto bytes_per_element = P::NumBytesPerElement(layout.view_format);
+  const auto& mip = layout.mips[0];
+  kajps5::gpu::TileBlockLayout block{};
+  if (!kajps5::gpu::TileGetBlockLayout(
+          kajps5::gpu::TileBlockFamily::RenderTarget64KB, bytes_per_element, block) ||
+      expected_linear.size() != layout.total_bytes || tiled.size() != layout.guest_storage_bytes ||
+      mip.row_bytes % bytes_per_element != 0) {
+    return false;
+  }
+
+  std::fill(tiled.begin(), tiled.end(), std::byte{0x5d});
+  const std::uint64_t pitch = mip.row_bytes / bytes_per_element;
+  const std::uint64_t columns = pitch / block.block_width +
+      (pitch % block.block_width == 0 ? 0 : 1);
+  for (std::uint32_t y = 0; y < mip.height; ++y) {
+    for (std::uint32_t x = 0; x < mip.width; ++x) {
+      const std::uint32_t block_x = x / block.block_width;
+      const std::uint32_t block_y = y / block.block_height;
+      const std::uint32_t local_x = x % block.block_width;
+      const std::uint32_t local_y = y % block.block_height;
+      std::uint32_t local_offset = 0;
+      std::uint32_t block_xor = 0;
+      if (!kajps5::gpu::TileGetBlockOffset(block, local_x, local_y, 0, local_offset) ||
+          !kajps5::gpu::TileGetBlockXor(block, block_x, block_y, 0, block_xor)) {
+        return false;
+      }
+      const std::uint64_t tiled_offset =
+          (static_cast<std::uint64_t>(block_y) * columns + block_x) * block.block_size +
+          (local_offset ^ block_xor);
+      const std::uint64_t linear_offset =
+          static_cast<std::uint64_t>(y) * mip.row_bytes + x * bytes_per_element;
+      if (tiled_offset + bytes_per_element > tiled.size() ||
+          linear_offset + bytes_per_element > expected_linear.size()) {
+        return false;
+      }
+      for (std::uint32_t byte = 0; byte < bytes_per_element; ++byte) {
+        tiled[tiled_offset + byte] = expected_linear[linear_offset + byte];
+      }
+    }
+  }
+  return true;
+}
+
 kajps5::gpu::shader::recompiler::CompileResult SampledImageCompile(
     bool storage = false, bool srgb = false) {
   kajps5::gpu::shader::recompiler::CompileResult compile;
@@ -726,6 +795,97 @@ void CheckExactCleanup(std::initializer_list<std::string_view> expected) {
         });
     Check(destroyed == 0, "cleanup adopted a poison value from a failed Vulkan call");
   }
+}
+
+void TestReadOnlyRenderTargetDetilePreparation() {
+  using Protection = kajps5::memory::GuestMemoryProtection;
+  constexpr auto protection = Protection::kRead | Protection::kWrite |
+      Protection::kGpuRead | Protection::kGpuWrite;
+
+  const auto request = RenderTargetRequest();
+  const auto layout = kajps5::gpu::CalculateGuestImageLayout(request.input);
+  Check(layout.ok() && layout.needs_detile && layout.guest_storage_bytes == 64 * 1024 &&
+            layout.total_bytes < layout.guest_storage_bytes,
+        "render-target fixture did not calculate a padded tiled layout");
+  const auto bytes_per_element = P::NumBytesPerElement(layout.view_format);
+  std::vector<std::byte> expected_linear(layout.total_bytes, std::byte{0});
+  for (std::uint32_t y = 0; y < layout.mips[0].height; ++y) {
+    for (std::uint32_t x = 0; x < layout.mips[0].width; ++x) {
+      const std::uint64_t offset = static_cast<std::uint64_t>(y) * layout.mips[0].row_bytes +
+          x * bytes_per_element;
+      for (std::uint32_t byte = 0; byte < bytes_per_element; ++byte) {
+        expected_linear[offset + byte] = RenderTargetActiveByte(x, y, byte);
+      }
+    }
+  }
+  std::vector<std::byte> tiled(layout.guest_storage_bytes);
+  Check(FillReferenceRenderTarget64KB(layout, expected_linear, tiled),
+        "reference RenderTarget64KB tiler rejected the fixture");
+
+  Reset();
+  auto context = Context();
+  kajps5::memory::GuestMemory memory(request.input.guest_address,
+      static_cast<std::size_t>(layout.guest_storage_bytes), protection);
+  Check(memory.Initialize(request.input.guest_address, tiled),
+        "tiled guest allocation initialization failed");
+  kajps5::gpu::GpuRuntime runtime(memory);
+  vk::VulkanGuestImageCache cache(*context, memory, runtime.resource_coherence());
+  auto prepared = cache.Prepare(request);
+  Check(prepared && prepared.layout.needs_detile &&
+            prepared.layout.guest_storage_bytes == 64 * 1024 &&
+            prepared.layout.total_bytes < prepared.layout.guest_storage_bytes &&
+            prepared.uploaded_bytes == expected_linear,
+        "read-only tiled image did not prepare the expected linear upload");
+  Check(g.mapped_bytes.size() >= expected_linear.size() &&
+            std::equal(expected_linear.begin(), expected_linear.end(), g.mapped_bytes.begin()),
+        "tiled image staging prefix differs from the expected linear bytes");
+  Check(prepared.copy_regions.size() == 1 &&
+            prepared.copy_regions[0].imageExtent.width == 17 &&
+            prepared.copy_regions[0].imageExtent.height == 9 &&
+            prepared.copy_regions[0].bufferRowLength ==
+                layout.mips[0].row_bytes / bytes_per_element,
+        "tiled image copy region does not retain the planned linear pitch");
+  const auto resource = prepared.resource;
+  const auto uploaded = runtime.resource_coherence().Query(resource);
+  Check(uploaded && uploaded->mapped && !uploaded->mapping_changed &&
+            !uploaded->needs_cpu_upload,
+        "tiled image resource was not fully mapped and upload acknowledged");
+
+  const std::array<std::byte, 1> tail = {std::byte{0xe2}};
+  Check(memory.Write(request.input.guest_address + layout.guest_storage_bytes - 1, tail),
+        "padded tiled allocation tail mutation failed");
+  const auto tail_dirty = runtime.resource_coherence().Query(resource);
+  Check(tail_dirty && tail_dirty->needs_cpu_upload,
+        "padded tiled allocation tail mutation did not invalidate the image upload");
+  cache.Discard(prepared);
+  Check(!runtime.resource_coherence().Query(resource),
+        "discard did not unregister the tiled image resource");
+
+  const std::size_t issued_before_writable = g.issued.size();
+  auto writable = request;
+  writable.writable = true;
+  const auto rejected_writable = cache.Prepare(writable);
+  Check(!rejected_writable &&
+            rejected_writable.status == vk::VulkanGuestImageStatus::kUnsupportedTopology &&
+            rejected_writable.resource == 0 && g.issued.size() == issued_before_writable &&
+            !runtime.resource_coherence().Query(resource + 1),
+        "tiled writable image published coherence or Vulkan resources");
+
+  Reset();
+  auto short_context = Context();
+  kajps5::memory::GuestMemory short_memory(request.input.guest_address,
+      static_cast<std::size_t>(layout.guest_storage_bytes), Protection::kNone);
+  Check(short_memory.Map(request.input.guest_address, layout.total_bytes, protection),
+        "short tiled fixture could not map the linear staging range");
+  kajps5::gpu::GpuRuntime short_runtime(short_memory);
+  vk::VulkanGuestImageCache short_cache(*short_context, short_memory,
+                                        short_runtime.resource_coherence());
+  const auto short_result = short_cache.Prepare(request);
+  Check(!short_result &&
+            short_result.status == vk::VulkanGuestImageStatus::kGuestMemoryProtection &&
+            short_result.resource == 0 && g.issued.empty() &&
+            !short_runtime.resource_coherence().Query(1),
+        "short tiled guest mapping reached coherence or Vulkan preparation");
 }
 
 void TestPreparationAndTopology() {
@@ -1690,6 +1850,7 @@ void TestDepthStencilPreparation() {
 int main() {
   TestMappings();
   TestDepthStencilPreparation();
+  TestReadOnlyRenderTargetDetilePreparation();
   TestPreparationAndTopology();
   TestCoherentAndRollback();
   TestTransferLeaseAndCoherence();

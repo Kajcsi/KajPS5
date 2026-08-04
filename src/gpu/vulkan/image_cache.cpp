@@ -12,6 +12,7 @@
 #include <unordered_map>
 
 #include "core/memory/guest_memory.h"
+#include "gpu/detile.h"
 #include "gpu/format.h"
 
 namespace kajps5::gpu::vulkan {
@@ -453,6 +454,11 @@ VulkanGuestImagePreparation VulkanGuestImageCache::Prepare(const VulkanGuestImag
   VulkanGuestImagePreparation p;
   p.layout = CalculateGuestImageLayout(request.input);
   if (!p.layout.ok()) { Fail(p, VulkanGuestImageStatus::kInvalidLayout, p.layout.diagnostic.data()); return p; }
+  if (p.layout.needs_detile && request.writable) {
+    Fail(p, VulkanGuestImageStatus::kUnsupportedTopology,
+         "tiled image writeback is unsupported");
+    return p;
+  }
   const auto format = request.format_override.has_value()
       ? request.format_override : MapGuestImageFormat(request.input.format);
   if (!format) { Fail(p, VulkanGuestImageStatus::kUnsupportedFormat, "guest image view format is unsupported by Vulkan"); return p; }
@@ -484,16 +490,31 @@ VulkanGuestImagePreparation VulkanGuestImageCache::Prepare(const VulkanGuestImag
   }
   const auto read = memory::GuestMemoryProtection::kRead | memory::GuestMemoryProtection::kGpuRead;
   const auto write = memory::GuestMemoryProtection::kWrite | memory::GuestMemoryProtection::kGpuWrite;
-  if (!memory_.CanAccess(request.input.guest_address, p.layout.total_bytes, read) ||
-      (request.writable && !memory_.CanAccess(request.input.guest_address, p.layout.total_bytes, write))) {
+  if (!memory_.CanAccess(p.layout.storage_key.guest_address, p.layout.guest_storage_bytes, read) ||
+      (request.writable && !memory_.CanAccess(p.layout.storage_key.guest_address,
+                                               p.layout.guest_storage_bytes, write))) {
     Fail(p, VulkanGuestImageStatus::kGuestMemoryProtection, "guest image is not mapped with required GPU access"); return p;
   }
-  const auto resource = coherence_.RegisterResource(request.input.guest_address, p.layout.total_bytes);
+  const auto resource = coherence_.RegisterResource(p.layout.storage_key.guest_address,
+                                                     p.layout.guest_storage_bytes);
   if (!resource) { Fail(p, VulkanGuestImageStatus::kGuestMemoryFault, "guest image could not be registered with resource coherence"); return p; }
   p.resource = *resource;
-  std::vector<std::byte> upload(static_cast<size_t>(p.layout.total_bytes));
-  if (!memory_.Read(request.input.guest_address, upload) || !context_.memory_properties()) {
+  std::vector<std::byte> guest_storage(static_cast<size_t>(p.layout.guest_storage_bytes));
+  if (!memory_.Read(p.layout.storage_key.guest_address, guest_storage) ||
+      !context_.memory_properties()) {
     Discard(p); Fail(p, VulkanGuestImageStatus::kGuestMemoryFault, "checked guest image upload or memory properties failed"); return p;
+  }
+  std::vector<std::byte> upload;
+  if (p.layout.needs_detile) {
+    upload.resize(static_cast<size_t>(p.layout.total_bytes));
+    const auto detile = DetileRenderTarget64KB(p.layout, guest_storage, upload);
+    if (!detile.ok()) {
+      Discard(p);
+      Fail(p, VulkanGuestImageStatus::kInvalidLayout, detile.diagnostic.data());
+      return p;
+    }
+  } else {
+    upload = std::move(guest_storage);
   }
   Dispatch d;
   if (!Load(context_, d)) { Discard(p); Fail(p, VulkanGuestImageStatus::kDeviceResourceFailure, "Vulkan image resource functions are unavailable"); return p; }
