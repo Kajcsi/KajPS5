@@ -236,11 +236,11 @@ int main(int argc, char** argv) {
 #if defined(_WIN32)
   const std::string command = "\"\"" + std::string(argv[1]) +
                               "\" --run-elf \"" + fixture_path.string() +
-                              "\" --module-dir \"" +
+                              "\" --headless --module-dir \"" +
                               module_directory.string() + "\"\"";
 #else
   const std::string command = '"' + std::string(argv[1]) + "\" --run-elf \"" +
-                              fixture_path.string() + "\" --module-dir \"" +
+                              fixture_path.string() + "\" --headless --module-dir \"" +
                               module_directory.string() + '"';
 #endif
   const auto cli_status = std::system(command.c_str());
