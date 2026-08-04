@@ -1,6 +1,7 @@
 // Copyright (C) 2026 KajPS5 contributors
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -8,6 +9,7 @@
 #include <fstream>
 #include <iostream>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -39,11 +41,17 @@
 #include "loader/static_tls_layout.h"
 #include "runtime/title_loader.h"
 
+#if defined(_WIN32)
+#include "platform/windows/vulkan_window.h"
+#endif
+
 namespace {
 
 constexpr std::uint64_t kMaximumExecutableFileSize = 512U * 1024U * 1024U;
 constexpr std::uint64_t kMaximumTraceMemorySize = 512U * 1024U * 1024U;
 constexpr std::size_t kMaximumTitleRunSlices = 1000000;
+constexpr std::size_t kTitleRunChunkSlices = 1024;
+constexpr std::size_t kMaximumTitleRunIterations = 1000000;
 constexpr std::size_t kMaximumModuleOverlayDirectories = 16;
 
 std::optional<std::uint64_t> AlignUp(std::uint64_t value,
@@ -310,7 +318,8 @@ int TraceExecutableFile(const char* path) {
 
 int RunExecutableFile(
     const char* path,
-    std::span<const std::string_view> module_overlay_directories) {
+    std::span<const std::string_view> module_overlay_directories,
+    bool headless) {
   std::string file_error;
   auto image = ReadExecutableFile(path, file_error);
   if (!image) {
@@ -397,6 +406,12 @@ int RunExecutableFile(
     return 3;
   }
 
+#if defined(_WIN32)
+  // This must outlive the prepared session so its Vulkan surface is destroyed
+  // before the HWND on every return path.
+  std::unique_ptr<kajps5::platform::windows::VulkanWindow> title_window;
+  VkExtent2D title_window_extent{};
+#endif
   auto prepared = kajps5::runtime::PrepareTitleImageWithModules(
       *image, process_image_name, std::move(adjacent));
   std::cout << "title.load.status="
@@ -470,6 +485,40 @@ int RunExecutableFile(
     }
   }
 
+#if defined(_WIN32)
+  if (!headless) {
+    title_window = kajps5::platform::windows::VulkanWindow::CreateVisible();
+    if (!title_window) {
+      std::cerr << "Title presentation failed: cannot create a visible Vulkan window\n";
+      return 4;
+    }
+    const auto presentation = prepared.session->gpu_runtime()
+                                  .InitializeVulkanPresentation(
+                                      title_window->surface_factory());
+    if (!presentation) {
+      std::cerr << "Title presentation initialization failed: "
+                << kajps5::gpu::vulkan::VulkanPresentationStatusName(
+                       presentation.status);
+      if (!presentation.diagnostics.empty() &&
+          !presentation.diagnostics.front().message.empty()) {
+        std::cerr << " (" << presentation.diagnostics.front().message << ')';
+      }
+      std::cerr << '\n';
+      return 4;
+    }
+    title_window_extent = title_window->client_extent();
+    prepared.session->gpu_runtime().EnableVulkanActionExecution(true);
+  } else {
+    prepared.session->gpu_runtime().EnableVulkanActionExecution(false);
+  }
+#else
+  if (!headless) {
+    std::cerr << "Visible title rendering is only available on Windows; use --headless\n";
+    return 4;
+  }
+  prepared.session->gpu_runtime().EnableVulkanActionExecution(false);
+#endif
+
   const auto started =
       prepared.session->Start(process_image_name, prepared.stack_search_start);
   std::cout << "title.start.status="
@@ -484,20 +533,76 @@ int RunExecutableFile(
     return 4;
   }
 
-  const auto completed = prepared.session->Run(kMaximumTitleRunSlices);
-  std::cout << "title.run.status="
-            << kajps5::runtime::TitleSessionStatusName(completed.status) << '\n'
-            << "title.run.phase="
-            << kajps5::runtime::TitleSessionPhaseName(completed.phase) << '\n'
-            << "title.run.slices=" << completed.slices << '\n'
-            << "title.run.exit_value=" << completed.exit_value << '\n';
-  if (!completed) {
+  std::size_t guest_slices = 0;
+  std::size_t iterations = 0;
+  while (guest_slices < kMaximumTitleRunSlices &&
+         iterations < kMaximumTitleRunIterations) {
+#if defined(_WIN32)
+    if (title_window) {
+      title_window->PumpMessages();
+      if (title_window->closed()) {
+        std::cout << "title.run.status=window-closed\n"
+                  << "title.run.phase="
+                  << kajps5::runtime::TitleSessionPhaseName(
+                         prepared.session->phase())
+                  << '\n'
+                  << "title.run.slices=" << guest_slices << '\n'
+                  << "title.run.exit_value=" << prepared.session->exit_value()
+                  << '\n';
+        std::cerr << "Title execution stopped: window closed\n";
+        return 5;
+      }
+      const auto extent = title_window->client_extent();
+      if (extent.width != title_window_extent.width ||
+          extent.height != title_window_extent.height) {
+        (void)prepared.session->gpu_runtime().ResizeVulkanPresentation(extent);
+        title_window_extent = extent;
+      }
+    }
+#endif
+    (void)prepared.session->video_out().PollPresentation();
+    const auto remaining_slices = kMaximumTitleRunSlices - guest_slices;
+    const auto completed = prepared.session->Run(
+        std::min(kTitleRunChunkSlices, remaining_slices));
+    guest_slices += completed.slices;
+    ++iterations;
+    if (completed.status == kajps5::runtime::TitleSessionStatus::kExited) {
+      std::cout << "title.run.status="
+                << kajps5::runtime::TitleSessionStatusName(completed.status)
+                << '\n'
+                << "title.run.phase="
+                << kajps5::runtime::TitleSessionPhaseName(completed.phase)
+                << '\n'
+                << "title.run.slices=" << guest_slices << '\n'
+                << "title.run.exit_value=" << completed.exit_value << '\n';
+      return 0;
+    }
+    if (completed.status == kajps5::runtime::TitleSessionStatus::kSliceLimitReached ||
+        completed.status == kajps5::runtime::TitleSessionStatus::kPending ||
+        completed.status == kajps5::runtime::TitleSessionStatus::kBlocked) {
+      continue;
+    }
+    std::cout << "title.run.status="
+              << kajps5::runtime::TitleSessionStatusName(completed.status)
+              << '\n'
+              << "title.run.phase="
+              << kajps5::runtime::TitleSessionPhaseName(completed.phase)
+              << '\n'
+              << "title.run.slices=" << guest_slices << '\n'
+              << "title.run.exit_value=" << completed.exit_value << '\n';
     std::cerr << "Title execution stopped: "
               << kajps5::runtime::TitleSessionStatusName(completed.status)
               << '\n';
     return 5;
   }
-  return 0;
+  std::cout << "title.run.status=run-budget-exhausted\n"
+            << "title.run.phase="
+            << kajps5::runtime::TitleSessionPhaseName(prepared.session->phase())
+            << '\n'
+            << "title.run.slices=" << guest_slices << '\n'
+            << "title.run.exit_value=" << prepared.session->exit_value() << '\n';
+  std::cerr << "Title execution stopped: run budget exhausted\n";
+  return 5;
 }
 
 }  // namespace
@@ -513,21 +618,26 @@ int main(int argc, char** argv) {
   }
   if (argc >= 3 && std::string_view(argv[1]) == "--run-elf") {
     std::vector<std::string_view> module_directories;
+    bool headless = false;
     for (int index = 3; index < argc;) {
-      if (std::string_view(argv[index]) != "--module-dir" ||
-          index + 1 >= argc) {
-        std::cerr << "Usage: kajps5 --run-elf <path> [--module-dir <path>]\n";
+      const std::string_view argument = argv[index];
+      if (argument == "--headless") {
+        headless = true;
+        ++index;
+      } else if (argument == "--module-dir" && index + 1 < argc) {
+        module_directories.emplace_back(argv[index + 1]);
+        index += 2;
+      } else {
+        std::cerr << "Usage: kajps5 --run-elf <path> [--headless] [--module-dir <path>]\n";
         return 1;
       }
-      module_directories.emplace_back(argv[index + 1]);
-      index += 2;
     }
-    return RunExecutableFile(argv[2], module_directories);
+    return RunExecutableFile(argv[2], module_directories, headless);
   }
 
   if (argc > 1) {
     std::cerr << "Usage: kajps5 [--version | --trace-elf <path> | --run-elf "
-                 "<path> [--module-dir <path>]]\n";
+                  "<path> [--headless] [--module-dir <path>]]\n";
     return 1;
   }
 

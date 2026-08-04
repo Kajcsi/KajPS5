@@ -225,25 +225,49 @@ int main() {
         "guest frame protection setup failed");
   SetArguments(context, {1, 0, 1, 0x55});
   Check(registry.Dispatch("sceVideoOutSubmitFlip", context).handler_status ==
-                HleContextStatus::kOk && Result(context) == 0 &&
-            service.last_presentation_result().status ==
-                VulkanPresentationStatus::kContextUnavailable,
-        "headless SubmitFlip did not retain context-unavailable presentation state");
+                HleContextStatus::kOk &&
+            Result(context) == kajps5::gpu::kVideoOutErrorResourceBusy,
+        "headless SubmitFlip did not fail closed without presentation context");
   auto event = kernel_runtime.event_queues().Poll(queue.handle, 1);
-  Check(event && event.events.size() == 1 && event.events[0].ident == 0x6 &&
-            event.events[0].filter == kajps5::kernel::kEventFilterVideoOut &&
-            event.events[0].data == 0x55 && event.events[0].user_data == 0x12345678ULL,
-        "headless flip did not trigger the generation-aware VideoOut event");
+  Check(event.status == kajps5::kernel::KernelStatus::kBusy,
+        "headless rejected flip triggered a VideoOut event");
   SetArguments(context, {1, kStatus});
   Check(registry.Dispatch("sceVideoOutGetFlipStatus", context).handler_status ==
                 HleContextStatus::kOk && Result(context) == 0,
         "GetFlipStatus failed");
   std::array<std::byte, 0x80> flip_status{};
+  Check(memory.Read(kStatus, flip_status) && Read64(flip_status, 0x00) == 0 &&
+            std::bit_cast<std::int64_t>(Read64(flip_status, 0x18)) == -1 &&
+            Read32(flip_status, 0x34) == 0 && Read32(flip_status, 0x38) == 0xffffffffU &&
+            Read64(flip_status, 0x40) == 0,
+        "headless rejected flip changed accepted flip state");
+
+  service.SetPresentationCallbacksForTesting({
+      [](const kajps5::gpu::GuestImageLayoutInput&,
+         const kajps5::gpu::vulkan::VulkanImageFormat&) {
+        return VulkanPresentationResult{VulkanPresentationStatus::kOk, 0, {}};
+      },
+      {}});
+  SetArguments(context, {1, 0, 1, 0x55});
+  Check(registry.Dispatch("sceVideoOutSubmitFlip", context).handler_status ==
+                HleContextStatus::kOk && Result(context) == 0 &&
+            service.last_presentation_result().status ==
+                VulkanPresentationStatus::kOk,
+        "configured presentation callback did not accept the flip");
+  event = kernel_runtime.event_queues().Poll(queue.handle, 1);
+  Check(event && event.events.size() == 1 && event.events[0].ident == 0x6 &&
+            event.events[0].filter == kajps5::kernel::kEventFilterVideoOut &&
+            event.events[0].data == 0x55 && event.events[0].user_data == 0x12345678ULL,
+        "accepted flip did not trigger the generation-aware VideoOut event");
+  SetArguments(context, {1, kStatus});
+  Check(registry.Dispatch("sceVideoOutGetFlipStatus", context).handler_status ==
+                HleContextStatus::kOk && Result(context) == 0,
+        "GetFlipStatus after accepted flip failed");
   Check(memory.Read(kStatus, flip_status) && Read64(flip_status, 0x00) == 1 &&
             std::bit_cast<std::int64_t>(Read64(flip_status, 0x18)) == 0x55 &&
             Read32(flip_status, 0x34) == 0 && Read32(flip_status, 0x38) == 0 &&
             Read64(flip_status, 0x40) == 0,
-        "headless flip status did not report deterministic completion");
+        "accepted flip status did not report deterministic completion");
 
   struct FlipState {
     std::uint64_t count;
@@ -394,10 +418,12 @@ int main() {
                 kajps5::gpu::vulkan::VulkanImageStorageClass::kR8G8B8A8 &&
             !submitted_format.sibling_format.has_value(),
         "SubmitFlip did not issue exactly one frame with the registered layout");
+  Check(service.PollPresentation() && poll_calls == 1,
+        "host presentation poll did not complete retained flip work");
   SetArguments(context, {1});
   Check(registry.Dispatch("sceVideoOutIsFlipPending", context).handler_status ==
                 HleContextStatus::kOk && Result(context) == 0 && poll_calls == 1,
-        "retained flip did not complete on the next service poll");
+        "retained flip did not remain complete after the host poll");
   event = kernel_runtime.event_queues().Poll(queue.handle, 1);
   Check(event && event.events.size() == 1 && event.events[0].data == 0x66,
         "retained flip did not trigger its event");

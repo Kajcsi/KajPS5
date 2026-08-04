@@ -116,6 +116,7 @@ class VideoOutService final {
   [[nodiscard]] std::int32_t GetFlipStatus(std::int32_t handle,
                                            VideoOutFlipStatus& status);
   [[nodiscard]] std::int32_t IsFlipPending(std::int32_t handle);
+  [[nodiscard]] bool PollPresentation();
   [[nodiscard]] vulkan::VulkanPresentationResult
   last_presentation_result() const;
 

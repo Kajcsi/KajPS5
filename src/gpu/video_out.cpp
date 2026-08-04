@@ -310,8 +310,7 @@ bool VideoOutService::PollPending() {
   if (!pending_) {
     return false;
   }
-  if (result.status == vulkan::VulkanPresentationStatus::kOk ||
-      result.status == vulkan::VulkanPresentationStatus::kContextUnavailable) {
+  if (result.status == vulkan::VulkanPresentationStatus::kOk) {
     last_presentation_ = result;
     flip_status_.timeline = result.timeline;
     CompleteLocked();
@@ -428,8 +427,7 @@ std::int32_t VideoOutService::SubmitFlip(std::int32_t handle,
       group.attribute.dcc_control != attribute.dcc_control) {
     return kVideoOutErrorInvalidIndex;
   }
-  if (result.status == vulkan::VulkanPresentationStatus::kOk ||
-      result.status == vulkan::VulkanPresentationStatus::kContextUnavailable) {
+  if (result.status == vulkan::VulkanPresentationStatus::kOk) {
     flip_status_.current_buffer = buffer_index;
     pending_flip_arg_ = flip_arg;
     last_presentation_ = result;
@@ -468,6 +466,8 @@ std::int32_t VideoOutService::IsFlipPending(std::int32_t handle) {
   return IsOpenLocked(handle) ? flip_status_.pending_count
                               : kVideoOutErrorInvalidHandle;
 }
+
+bool VideoOutService::PollPresentation() { return PollPending(); }
 
 vulkan::VulkanPresentationResult
 VideoOutService::last_presentation_result() const {

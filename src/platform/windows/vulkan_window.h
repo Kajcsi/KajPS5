@@ -11,6 +11,8 @@ class VulkanWindow final {
  public:
   [[nodiscard]] static std::unique_ptr<VulkanWindow> CreateHidden(
       std::uint32_t width = 640, std::uint32_t height = 480);
+  [[nodiscard]] static std::unique_ptr<VulkanWindow> CreateVisible(
+      std::uint32_t width = 640, std::uint32_t height = 480);
   ~VulkanWindow();
   VulkanWindow(const VulkanWindow&) = delete;
   VulkanWindow& operator=(const VulkanWindow&) = delete;

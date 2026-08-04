@@ -155,8 +155,9 @@ _Build\src\Release\kajps5.exe --run-elf R:\path\public-sample.elf
 This path mounts the input file's folder as `/app0` and includes adjacent
 `.prx` and `.sprx` files from `sce_module` and `sce_modules`. It rejects a
 partial module batch, unresolved required imports, and TLS titles that the
-runtime cannot start correctly. It is a controlled research path, not a claim
-of game compatibility.
+runtime cannot start correctly. On Windows it opens a visible Vulkan window by
+default and enables the unified GPU path only after presentation initialization
+succeeds. It is a controlled research path, not a claim of game compatibility.
 
 Add a separate, read-only module folder without copying it into the title:
 
@@ -166,6 +167,15 @@ _Build\src\Release\kajps5.exe --run-elf R:\path\public-sample.elf --module-dir R
 
 The option can be repeated. KajPS5 accepts at most 16 module folders and keeps
 each folder in a separate confined guest mount.
+
+Use `--headless` to skip host graphics explicitly:
+
+```powershell
+_Build\src\Release\kajps5.exe --run-elf R:\path\public-sample.elf --headless
+```
+
+Headless mode does not make VideoOut flips succeed. Visible title rendering is
+currently Windows-only; on other platforms, use `--headless`.
 
 ## Legal use
 
