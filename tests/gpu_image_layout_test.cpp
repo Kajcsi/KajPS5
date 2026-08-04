@@ -35,14 +35,16 @@ GuestImageLayoutInput Input(P::BufferFormat format, uint32_t width, uint32_t hei
 void CheckBytes(P::BufferFormat format, uint64_t expected) {
   const auto result = CalculateGuestImageLayout(Input(format, 1));
   Check(result.ok(), "ordinary texel format was rejected");
-  Check(result.total_bytes == expected, "ordinary texel byte count differs");
+  Check(result.total_bytes == expected && result.guest_storage_bytes == expected &&
+            result.storage_key.byte_count == expected,
+        "ordinary texel byte count differs");
 }
 
 void CheckFailure(const GuestImageLayoutInput& input, GuestImageLayoutStatus expected,
                   std::string_view message) {
   const auto result = CalculateGuestImageLayout(input);
   Check(result.status == expected, message);
-  Check(result.total_bytes == 0 && result.view_format == 0 &&
+  Check(result.total_bytes == 0 && result.guest_storage_bytes == 0 && result.view_format == 0 &&
             result.storage_key.byte_count == 0,
         "failed layout published partial state");
 }
@@ -138,6 +140,38 @@ int main() {
   Check(unorm_result.ok() && srgb_result.ok() && unorm_result.view_format != srgb_result.view_format &&
             unorm_result.storage_key == srgb_result.storage_key,
         "sRGB and UNORM views did not share a storage alias key");
+
+  for (const auto format : {P::BufferFormat::k8UNorm, P::BufferFormat::k16UNorm,
+                            P::BufferFormat::k32Float,
+                            P::BufferFormat::k16_16_16_16Float,
+                            P::BufferFormat::k32_32_32_32Float}) {
+    auto tiled = Input(format, 17, 9);
+    tiled.tile_mode = P::TileMode::kRenderTarget;
+    const auto result = CalculateGuestImageLayout(tiled);
+    Check(result.ok() && result.needs_detile && result.guest_storage_bytes == 65536 &&
+              result.total_bytes > 0 && result.total_bytes < 65536 &&
+              result.storage_key.byte_count == 65536 && result.mips[0].row_bytes > 0 &&
+              result.mips[0].slice_bytes == result.total_bytes &&
+              result.mips[0].layer_bytes == result.total_bytes &&
+              result.mips[0].byte_count == result.total_bytes && result.array_layers == 1 &&
+              !result.block_compressed,
+          "render-target tiled staging/storage layout failed");
+  }
+
+  auto tiled_invalid = Input(P::BufferFormat::k32Float, 17, 9);
+  tiled_invalid.tile_mode = P::TileMode::kRenderTarget;
+  tiled_invalid.mip_count = 2;
+  CheckFailure(tiled_invalid, GuestImageLayoutStatus::kNeedsDetile,
+               "render-target mip chain was accepted");
+  tiled_invalid = Input(P::BufferFormat::kBc1UNorm, 17, 9);
+  tiled_invalid.tile_mode = P::TileMode::kRenderTarget;
+  CheckFailure(tiled_invalid, GuestImageLayoutStatus::kNeedsDetile,
+               "compressed render-target was accepted");
+  tiled_invalid = Input(P::BufferFormat::k32Float, 17, 9);
+  tiled_invalid.tile_mode = P::TileMode::kRenderTarget;
+  tiled_invalid.guest_address = std::numeric_limits<uint64_t>::max() - 1;
+  CheckFailure(tiled_invalid, GuestImageLayoutStatus::kOverflow,
+               "render-target address end overflow was accepted");
 
   auto invalid = Input(P::BufferFormat::kInvalid, 1);
   CheckFailure(invalid, GuestImageLayoutStatus::kUnsupportedFormat, "invalid format was accepted");

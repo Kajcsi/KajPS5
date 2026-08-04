@@ -917,6 +917,12 @@ GPL-2.0-or-later. The combined guidance is distributed under GPL-2.0-only.
 
 ## New adaptations
 
+The RenderTarget64KB guest-image planner path in `src/gpu/image_layout.*`
+adapts KytyPS5 `src/graphics/presentation/videoOut.cpp` and
+`src/graphics/guest_gpu/tile.{h,cpp}` at commit
+`fb5ecec455cf6c67154134429485ffccbfc34203`. KajPS5 distributes this
+adaptation under GPL-2.0-only.
+
 The checked guest tile-layout unit in `src/gpu/tile_layout.{h,cpp}` adapts
 KytyPS5 `src/graphics/guest_gpu/tile.{h,cpp}` at commit
 `fb5ecec455cf6c67154134429485ffccbfc34203`. The original Kyty MIT notice is

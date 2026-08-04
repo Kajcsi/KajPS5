@@ -5,6 +5,7 @@
 #include "gpu/image_layout.h"
 
 #include "gpu/format.h"
+#include "gpu/tile_layout.h"
 
 #include <algorithm>
 #include <limits>
@@ -134,6 +135,53 @@ GuestImageLayout CalculateGuestImageLayout(const GuestImageLayoutInput& input) {
   }
 
   if (input.tile_mode != Prospero::TileMode::kLinear) {
+    if (input.tile_mode == Prospero::TileMode::kRenderTarget &&
+        input.image_type == ImageType::kColor2D && input.depth == 1 &&
+        input.layers == 1 && input.mip_count == 1 && input.tightly_packed &&
+        input.row_pitch_bytes == 0 && input.slice_pitch_bytes == 0 &&
+        bytes_per_block == 0 &&
+        (bytes_per_element == 1 || bytes_per_element == 2 ||
+         bytes_per_element == 4 || bytes_per_element == 8 ||
+         bytes_per_element == 16)) {
+      uint32_t pitch = 0;
+      const auto tile = Prospero::GpuEnumValue(Prospero::TileMode::kRenderTarget);
+      TileSizeAlign tiled_total {};
+      if (!TileGetTexturePitch(input.format, input.width, 1, tile, pitch) ||
+          !TileGetTextureTotalSize(input.format, input.width, input.height, 1, pitch,
+                                   1, tile, false, tiled_total) ||
+          tiled_total.size == 0 || tiled_total.align != 65536) {
+        return Failure(GuestImageLayoutStatus::kUnsupportedLayout,
+                       "render-target tiled guest layout is unsupported");
+      }
+      uint64_t row_bytes = 0;
+      uint64_t staging_bytes = 0;
+      if (!Multiply(pitch, bytes_per_element, &row_bytes) ||
+          !Multiply(row_bytes, input.height, &staging_bytes) ||
+          input.guest_address > kMax - staging_bytes ||
+          input.guest_address > kMax - tiled_total.size) {
+        return Failure(GuestImageLayoutStatus::kOverflow,
+                       "render-target guest layout size or address overflows");
+      }
+      if (staging_bytes > kMaxGuestImageLayoutBytes ||
+          tiled_total.size > kMaxGuestImageLayoutBytes) {
+        return Failure(GuestImageLayoutStatus::kUnsupportedLayout,
+                       "render-target guest layout exceeds the fixed bound");
+      }
+      GuestImageLayout result;
+      result.status = GuestImageLayoutStatus::kSuccess;
+      result.diagnostic = "render-target tiled guest layout calculated";
+      result.view_format = input.format;
+      result.storage_alias_format = storage_alias_format;
+      result.array_layers = 1;
+      result.needs_detile = true;
+      result.mips[0] = {input.width, input.height, 1, input.width, input.height, 1,
+                        row_bytes, staging_bytes, staging_bytes, 0, staging_bytes};
+      result.total_bytes = staging_bytes;
+      result.guest_storage_bytes = tiled_total.size;
+      result.storage_key = {input.guest_address, result.guest_storage_bytes,
+                            storage_alias_format};
+      return result;
+    }
     return Failure(GuestImageLayoutStatus::kNeedsDetile,
                    "tiled guest image needs a proven detile layout", true);
   }
@@ -197,7 +245,8 @@ GuestImageLayout CalculateGuestImageLayout(const GuestImageLayoutInput& input) {
     return Failure(GuestImageLayoutStatus::kOverflow, "guest image address end overflows");
   }
   result.total_bytes = total_bytes;
-  result.storage_key = {input.guest_address, total_bytes, storage_alias_format};
+  result.guest_storage_bytes = total_bytes;
+  result.storage_key = {input.guest_address, result.guest_storage_bytes, storage_alias_format};
   return result;
 }
 

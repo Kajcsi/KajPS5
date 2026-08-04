@@ -75,6 +75,7 @@ struct GuestImageLayout {
   bool needs_detile = false;
   std::array<GuestImageMipLayout, kMaxGuestImageMipLevels> mips {};
   uint64_t total_bytes = 0;
+  uint64_t guest_storage_bytes = 0;
   GuestImageStorageKey storage_key {};
 
   [[nodiscard]] bool ok() const { return status == GuestImageLayoutStatus::kSuccess; }
