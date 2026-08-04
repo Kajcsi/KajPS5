@@ -917,6 +917,21 @@ GPL-2.0-or-later. The combined guidance is distributed under GPL-2.0-only.
 
 ## New adaptations
 
+The title-facing VideoOut core in `src/gpu/video_out.*`, its checked
+`libSceVideoOut` exports in `src/hle/video_out_exports.*`, TitleSession
+ownership, and filter -13 event integration adapt the buffer/flip state model
+from KytyPS5 `src/libs/libVideoOut.cpp` and
+`src/graphics/presentation/videoOut.{h,cpp}` at commit
+`fb5ecec455cf6c67154134429485ffccbfc34203`. Checked guest-layout handling,
+port validation, event-registration behavior, and headless presentation
+semantics independently re-express SharpEmu
+`src/SharpEmu.Libs/VideoOut/VideoOutExports.cs` at commit
+`9e10d7c44a2821cfd5ccd3417c09c0cf269285a4`. KytyPS5 is GPL-2.0-only and
+SharpEmu is GPL-2.0-or-later; no upstream source was copied verbatim. KajPS5
+keeps one C++ runtime, GuestMemory owner, EventQueueService, GpuRuntime, image
+cache, and Vulkan presentation owner; VideoOut only translates checked guest
+buffer state into the existing `GpuRuntime::PresentVulkanGuestFrame` boundary.
+
 The opt-in PM4 Vulkan action bridge in
 `src/gpu/{command_processor,runtime,vulkan_action_bridge}.*` adapts the
 state-snapshot and submission ordering architecture from KytyPS5

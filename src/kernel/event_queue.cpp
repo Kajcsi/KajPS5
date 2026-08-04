@@ -287,6 +287,35 @@ std::size_t EventQueueService::TriggerGraphicsEvents(std::uint64_t data) {
   return triggered;
 }
 
+KernelStatus EventQueueService::AddVideoOutEvent(
+    KernelHandle handle, std::uint64_t ident, std::uint64_t user_data) {
+  std::lock_guard wait_lock(wait_mutex_);
+  const auto queue = Find(handle);
+  return queue ? queue->RegisterEvent(ident, kEventFilterVideoOut, 0, user_data)
+               .status
+               : KernelStatus::kNotFound;
+}
+
+KernelStatus EventQueueService::DeleteVideoOutEvent(KernelHandle handle,
+                                                     std::uint64_t ident) {
+  std::lock_guard wait_lock(wait_mutex_);
+  const auto queue = Find(handle);
+  return queue ? queue->DeleteEvent(ident, kEventFilterVideoOut)
+               : KernelStatus::kNotFound;
+}
+
+std::size_t EventQueueService::TriggerVideoOutEvents(std::uint64_t data) {
+  std::lock_guard wait_lock(wait_mutex_);
+  std::size_t triggered = 0;
+  for (const auto& [handle, queue] : queues_) {
+    if (queue->TriggerFirstByFilter(kEventFilterVideoOut, data)) {
+      ++triggered;
+      ReserveWaitingThreadsLocked(handle, queue);
+    }
+  }
+  return triggered;
+}
+
 EventQueuePollResult EventQueueService::Poll(KernelHandle handle,
                                              std::size_t maximum_count) {
   std::lock_guard wait_lock(wait_mutex_);

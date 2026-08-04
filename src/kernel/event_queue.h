@@ -26,6 +26,7 @@ class KernelClockService;
 
 inline constexpr std::size_t kMaximumEventQueueNameLength = 31;
 inline constexpr std::int16_t kEventFilterGraphics = -14;
+inline constexpr std::int16_t kEventFilterVideoOut = -13;
 inline constexpr std::int16_t kEventFilterUser = -11;
 inline constexpr std::uint16_t kEventAdd = 0x01;
 inline constexpr std::uint16_t kEventOneShot = 0x10;
@@ -135,6 +136,12 @@ public:
   [[nodiscard]] KernelStatus DeleteGraphicsEvent(KernelHandle handle,
                                                  std::uint64_t ident);
   [[nodiscard]] std::size_t TriggerGraphicsEvents(std::uint64_t data);
+  [[nodiscard]] KernelStatus AddVideoOutEvent(KernelHandle handle,
+                                              std::uint64_t ident,
+                                              std::uint64_t user_data);
+  [[nodiscard]] KernelStatus DeleteVideoOutEvent(KernelHandle handle,
+                                                 std::uint64_t ident);
+  [[nodiscard]] std::size_t TriggerVideoOutEvents(std::uint64_t data);
   [[nodiscard]] EventQueuePollResult Poll(KernelHandle handle,
                                           std::size_t maximum_count);
   [[nodiscard]] EventQueuePollResult Wait(KernelHandle handle,

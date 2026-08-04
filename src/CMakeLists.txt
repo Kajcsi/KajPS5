@@ -16,6 +16,7 @@ add_library(kajps5_core STATIC
   gpu/format.cpp
   gpu/image_layout.cpp
   gpu/runtime.cpp
+  gpu/video_out.cpp
   gpu/vulkan_action_bridge.cpp
   gpu/shader_runtime.cpp
   gpu/vulkan/device.cpp
@@ -61,6 +62,7 @@ add_library(kajps5_core STATIC
   gpu/shader/spirv_builder.cpp
   gpu/submission_queue.cpp
   hle/agc_exports.cpp
+  hle/video_out_exports.cpp
   hle/ampr_exports.cpp
   hle/call_context.cpp
   hle/data_symbols.cpp

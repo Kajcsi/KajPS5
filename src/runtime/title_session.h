@@ -18,6 +18,7 @@
 #include "cpu/native_guest_thread_runner.h"
 #include "cpu/native_hle_import_table.h"
 #include "gpu/runtime.h"
+#include "gpu/video_out.h"
 #include "hle/data_symbols.h"
 #include "hle/export_registry.h"
 #include "hle/import_registry.h"
@@ -76,6 +77,7 @@ enum class TitleHleSetupStatus {
   kJsonExportsFailed,
   kAmprExportsFailed,
   kAgcExportsFailed,
+  kVideoOutExportsFailed,
   kImportTableBuildFailed,
 };
 
@@ -127,6 +129,8 @@ class TitleSession final {
   [[nodiscard]] kernel::KernelHandle main_thread() const noexcept;
   [[nodiscard]] std::uint64_t exit_value() const noexcept;
   [[nodiscard]] memory::GuestMemory& memory() noexcept;
+  [[nodiscard]] gpu::GpuRuntime& gpu_runtime() noexcept;
+  [[nodiscard]] gpu::VideoOutService& video_out() noexcept;
   [[nodiscard]] kernel::KernelRuntime& kernel_runtime() noexcept;
   [[nodiscard]] cpu::NativeGuestExecutionContext& execution_context() noexcept;
   [[nodiscard]] cpu::NativeGuestThreadRunner& thread_runner() noexcept;
@@ -160,6 +164,7 @@ class TitleSession final {
   std::unique_ptr<memory::GuestMemory> memory_;
   kernel::KernelRuntime kernel_runtime_;
   gpu::GpuRuntime gpu_runtime_;
+  gpu::VideoOutService video_out_;
   loader::ExecutableLaunchMetadata launch_metadata_;
   loader::ExecutableLifecyclePlan lifecycle_plan_;
   cpu::NativeGuestExecutionContext execution_context_;

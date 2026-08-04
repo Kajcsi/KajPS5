@@ -107,6 +107,10 @@ int main() {
             hle_setup.imports.import_count == 0 &&
             hle_session->hle_data().size() == 4 &&
             hle_session->hle_exports().size() != 0 &&
+            hle_session->hle_exports().Lookup("sceVideoOutOpen").status ==
+                kajps5::hle::ExportRegistryStatus::kOk &&
+            &hle_session->gpu_runtime() != nullptr &&
+            &hle_session->video_out() != nullptr &&
             hle_session->hle_functions() != nullptr &&
             hle_session->hle_functions()->size() == 0,
         "title session did not own its default HLE runtime");

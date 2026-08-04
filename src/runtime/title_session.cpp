@@ -13,6 +13,7 @@
 #include "hle/kernel_exports.h"
 #include "hle/libc_exports.h"
 #include "hle/libc_thread_exports.h"
+#include "hle/video_out_exports.h"
 
 namespace kajps5::runtime {
 namespace {
@@ -50,6 +51,7 @@ std::unique_ptr<TitleSession> TitleSession::Create(
 TitleSession::TitleSession(std::unique_ptr<memory::GuestMemory> memory)
     : memory_(std::move(memory)),
       gpu_runtime_(*memory_, nullptr, &kernel_runtime_.event_queues()),
+      video_out_(*memory_, gpu_runtime_, kernel_runtime_.event_queues()),
       thread_runner_(*memory_, kernel_runtime_.scheduler(),
                      kernel_runtime_.pthreads(), execution_context_),
       process_launcher_(kernel_runtime_.pthreads(), thread_runner_) {}
@@ -140,6 +142,11 @@ TitleHleSetupResult TitleSession::PrepareHleBatch(
       hle_exports_, gpu_runtime_, kernel_runtime_.event_queues());
   if (result.export_status != hle::ExportRegistryStatus::kOk) {
     result.status = TitleHleSetupStatus::kAgcExportsFailed;
+    return result;
+  }
+  result.export_status = hle::RegisterVideoOutExports(hle_exports_, video_out_);
+  if (result.export_status != hle::ExportRegistryStatus::kOk) {
+    result.status = TitleHleSetupStatus::kVideoOutExportsFailed;
     return result;
   }
 
@@ -413,6 +420,10 @@ std::uint64_t TitleSession::exit_value() const noexcept { return exit_value_; }
 
 memory::GuestMemory& TitleSession::memory() noexcept { return *memory_; }
 
+gpu::GpuRuntime& TitleSession::gpu_runtime() noexcept { return gpu_runtime_; }
+
+gpu::VideoOutService& TitleSession::video_out() noexcept { return video_out_; }
+
 kernel::KernelRuntime& TitleSession::kernel_runtime() noexcept {
   return kernel_runtime_;
 }
@@ -507,6 +518,8 @@ std::string_view TitleHleSetupStatusName(TitleHleSetupStatus status) noexcept {
       return "ampr-exports-failed";
     case TitleHleSetupStatus::kAgcExportsFailed:
       return "agc-exports-failed";
+    case TitleHleSetupStatus::kVideoOutExportsFailed:
+      return "video-out-exports-failed";
     case TitleHleSetupStatus::kImportTableBuildFailed:
       return "import-table-build-failed";
   }

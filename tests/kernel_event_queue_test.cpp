@@ -234,6 +234,25 @@ void TestEventQueueService() {
                 KernelStatus::kOk,
         "graphics event payload or reset behavior is incorrect");
 
+  Check(queues.AddVideoOutEvent(created.handle, 0x6, 0xfeedfaceU) ==
+                KernelStatus::kOk &&
+            queues.TriggerVideoOutEvents(0x1234U) == 1,
+        "VideoOut event filter trigger failed");
+  Check(queues.DeleteVideoOutEvent(created.handle, 0x6) == KernelStatus::kOk &&
+            queues.AddVideoOutEvent(created.handle, 0x6, 0xfeedface1U) ==
+                KernelStatus::kOk &&
+            queues.Poll(created.handle, 1).status == KernelStatus::kBusy &&
+            queues.TriggerVideoOutEvents(0x1235U) == 1,
+        "stale VideoOut generation survived re-registration");
+  polled = queues.Poll(created.handle, 1);
+  Check(polled && polled.events.size() == 1 &&
+            polled.events[0].ident == 0x6 &&
+            polled.events[0].filter == kEventFilterVideoOut &&
+            polled.events[0].fflags == 1 && polled.events[0].data == 0x1235U &&
+            polled.events[0].user_data == 0xfeedface1U &&
+            queues.DeleteVideoOutEvent(created.handle, 0x6) == KernelStatus::kOk,
+        "VideoOut event payload or generation registration is incorrect");
+
   const auto generation_queue = queues.Create("generation");
   const auto generation_waiter =
       runtime.scheduler().CreateThread("generation-waiter", 0);
