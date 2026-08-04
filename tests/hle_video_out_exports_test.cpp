@@ -171,7 +171,7 @@ int main() {
             legacy_attribute == legacy_attribute_short,
         "legacy SetBufferAttribute accepted 0x20 writable bytes or partially wrote output");
 
-  constexpr std::array set_attribute = {
+  constexpr std::array<std::uint64_t, 8> set_attribute = {
       kAttribute, 0x8000000022000000ULL, 1ULL, 4ULL, 3ULL, 0ULL, 0ULL, 0ULL};
   SetArguments(context, set_attribute);
   Check(registry.Dispatch(kajps5::hle::kVideoOutSetBufferAttribute2Nid, context)
@@ -192,7 +192,7 @@ int main() {
   Write64(buffer, 0x00, kBase + 0x800);
   Write64(buffer, 0x08, kBase + 0xc00);
   Check(memory.Write(kBuffers, buffer), "buffer entry setup failed");
-  constexpr std::array register_buffers = {
+  constexpr std::array<std::uint64_t, 8> register_buffers = {
       1ULL, 0ULL, 0ULL, kBuffers, 1ULL, kAttribute, 0ULL, 0ULL};
   SetArguments(context, register_buffers);
   Check(registry.Dispatch("sceVideoOutRegisterBuffers2", context).handler_status ==

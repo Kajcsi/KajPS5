@@ -79,10 +79,10 @@ int main() {
         "zero descriptor footprint was not rejected before Vulkan work");
 
   auto topology = LegalBufferCompile();
-  topology.program.stage = ShaderType::Vertex;
+  topology.program.stage = ShaderType::Fetch;
   const auto topology_result = cache.Prepare(topology);
   Check(topology_result.status ==
             vk::VulkanGuestBufferStatus::kUnsupportedTopology,
-        "non-compute topology was not rejected before Vulkan work");
+        "unsupported fetch topology was not rejected before Vulkan work");
   return 0;
 }
