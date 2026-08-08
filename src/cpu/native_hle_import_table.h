@@ -67,6 +67,8 @@ class NativeHleImportTable final : public loader::ImportResolver {
   [[nodiscard]] const NativeHleTrampoline* Find(
       std::string_view symbol,
       std::span<const std::string> library_order) const;
+  [[nodiscard]] std::optional<NativeHleDispatchSnapshot> active_dispatch()
+      const;
   [[nodiscard]] std::size_t size() const noexcept;
 
  private:

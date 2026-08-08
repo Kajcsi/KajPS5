@@ -31,12 +31,18 @@ enum class NativeHleTrampolineStatus {
 };
 
 struct NativeHleDispatchSnapshot {
+  // This state is only true while the host is executing the matching HLE
+  // dispatch. The remaining fields identify that in-flight guest call.
+  bool active = false;
+  std::string symbol;
+  std::string library;
+  std::uint64_t guest_return_instruction_pointer = 0;
+  std::uint64_t guest_stack_pointer = 0;
   hle::ExportRegistryStatus lookup_status = hle::ExportRegistryStatus::kOk;
   hle::HleContextStatus handler_status = hle::HleContextStatus::kOk;
   bool return_written = false;
   std::array<bool, hle::kHleVectorReturnRegisterCount> vector_return_written{};
   bool host_exception = false;
-  std::string library;
 };
 
 class HostExecutableBuffer;
@@ -56,6 +62,7 @@ class NativeHleTrampoline final {
   [[nodiscard]] NativeHleTrampolineStatus status() const noexcept;
   [[nodiscard]] std::uint64_t address() const noexcept;
   [[nodiscard]] NativeHleDispatchSnapshot last_dispatch() const;
+  [[nodiscard]] NativeHleDispatchSnapshot active_dispatch() const;
 
  private:
   struct State;

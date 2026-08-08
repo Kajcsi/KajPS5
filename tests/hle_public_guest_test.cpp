@@ -3,10 +3,14 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <array>
+#include <chrono>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
+#include <mutex>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 #include "core/memory/guest_memory.h"
@@ -51,6 +55,24 @@ constexpr std::uint64_t kMetadataSize =
     kRelaOffset + kRelaEntrySize - kDynamicOffset;
 
 int failures = 0;
+
+struct ActiveDispatchGate {
+  void WaitIfHeld() {
+    std::unique_lock lock(mutex);
+    if (!hold) {
+      return;
+    }
+    entered = true;
+    condition.notify_all();
+    condition.wait(lock, [this] { return release; });
+  }
+
+  std::mutex mutex;
+  std::condition_variable condition;
+  bool hold = false;
+  bool entered = false;
+  bool release = false;
+};
 
 void Check(bool condition, const char* message) {
   if (!condition) {
@@ -252,9 +274,11 @@ int main() {
         "public HLE ELF metadata is incomplete");
 
   ExportRegistry exports;
+  ActiveDispatchGate active_dispatch_gate;
   Check(exports.Register(
             "libkajps5_test", "answer",
-            [](kajps5::hle::HleCallContext& context) {
+            [&active_dispatch_gate](kajps5::hle::HleCallContext& context) {
+              active_dispatch_gate.WaitIfHeld();
               const std::array expected = {10ULL, 20ULL, 30ULL, 40ULL,
                                            50ULL, 60ULL, 70ULL, 80ULL};
               std::uint64_t sum = 0;
@@ -416,6 +440,43 @@ int main() {
               host_dispatch.handler_status == HleContextStatus::kOk &&
               host_dispatch.return_written && !host_dispatch.host_exception,
           "host-mapped guest did not call the checked HLE runtime");
+
+    {
+      std::lock_guard lock(active_dispatch_gate.mutex);
+      active_dispatch_gate.hold = true;
+      active_dispatch_gate.entered = false;
+      active_dispatch_gate.release = false;
+    }
+    kajps5::cpu::NativeExecutionResult active_execution;
+    std::thread active_execution_thread([&] {
+      active_execution = executor.Execute(
+          *host_memory, host_loaded.metadata.entry_point + load_bias,
+          kProgramSize);
+    });
+    bool handler_entered = false;
+    {
+      std::unique_lock lock(active_dispatch_gate.mutex);
+      handler_entered = active_dispatch_gate.condition.wait_for(
+          lock, std::chrono::seconds(5),
+          [&active_dispatch_gate] { return active_dispatch_gate.entered; });
+    }
+    const auto active_snapshot = host_imports.active_dispatch();
+    Check(handler_entered && active_snapshot && active_snapshot->active &&
+              active_snapshot->symbol == "answer" &&
+              active_snapshot->library == "libkajps5_test" &&
+              active_snapshot->guest_return_instruction_pointer ==
+                  host_loaded.metadata.entry_point + load_bias + 76 &&
+              active_snapshot->guest_stack_pointer != 0,
+          "active HLE dispatch snapshot lost guest call identity");
+    {
+      std::lock_guard lock(active_dispatch_gate.mutex);
+      active_dispatch_gate.release = true;
+      active_dispatch_gate.hold = false;
+    }
+    active_dispatch_gate.condition.notify_all();
+    active_execution_thread.join();
+    Check(active_execution && !host_imports.active_dispatch(),
+          "active HLE dispatch snapshot did not clear after handler return");
   }
 
   auto copy_memory = GuestMemory::CreateHostMapped(0x10000);

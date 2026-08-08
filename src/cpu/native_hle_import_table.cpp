@@ -143,6 +143,18 @@ const NativeHleTrampoline* NativeHleImportTable::Find(
   return found == trampolines_.end() ? nullptr : found->second.get();
 }
 
+std::optional<NativeHleDispatchSnapshot>
+NativeHleImportTable::active_dispatch() const {
+  for (const auto& [key, trampoline] : trampolines_) {
+    (void)key;
+    const auto snapshot = trampoline->active_dispatch();
+    if (snapshot.active) {
+      return snapshot;
+    }
+  }
+  return std::nullopt;
+}
+
 std::size_t NativeHleImportTable::size() const noexcept {
   return trampolines_.size();
 }

@@ -59,6 +59,21 @@ constexpr std::size_t kMaximumTitleRunIterations = 1000000;
 constexpr std::size_t kMaximumModuleOverlayDirectories = 16;
 #if defined(_WIN32)
 constexpr std::uint32_t kMaximumGuestWatchdogMilliseconds = 4294967294U;
+constexpr std::size_t kMaximumGuestWatchdogMetadataBytes = 64;
+
+std::string EncodeGuestWatchdogMetadata(std::string_view value) {
+  constexpr char kHexDigits[] = "0123456789abcdef";
+  const auto size =
+      std::min(value.size(), kMaximumGuestWatchdogMetadataBytes);
+  std::string encoded;
+  encoded.reserve(size * 2);
+  for (std::size_t index = 0; index < size; ++index) {
+    const auto byte = static_cast<unsigned char>(value[index]);
+    encoded.push_back(kHexDigits[byte >> 4U]);
+    encoded.push_back(kHexDigits[byte & 0x0fU]);
+  }
+  return encoded;
+}
 
 std::optional<std::uint32_t> ParsePositiveMilliseconds(
     const std::string_view value) noexcept {
@@ -553,8 +568,38 @@ int RunExecutableFile(
                         << "title.guest_watchdog.rip=0x" << std::hex
                         << sample.instruction_pointer << std::dec << '\n'
                         << "title.guest_watchdog.in_guest_memory="
-                        << (in_guest_memory ? "true" : "false") << '\n'
-                        << std::flush;
+                        << (in_guest_memory ? "true" : "false") << '\n';
+              if (!in_guest_memory) {
+                const auto* const hle_functions = session.hle_functions();
+                const auto active_dispatch =
+                    hle_functions == nullptr
+                        ? std::optional<kajps5::cpu::NativeHleDispatchSnapshot>{}
+                        : hle_functions->active_dispatch();
+                const auto active = active_dispatch.has_value();
+                const auto guest_return_instruction_pointer =
+                    active ? active_dispatch->guest_return_instruction_pointer
+                           : 0;
+                const auto guest_stack_pointer =
+                    active ? active_dispatch->guest_stack_pointer : 0;
+                const auto symbol =
+                    active ? EncodeGuestWatchdogMetadata(active_dispatch->symbol)
+                           : std::string{};
+                const auto library =
+                    active ? EncodeGuestWatchdogMetadata(active_dispatch->library)
+                           : std::string{};
+                std::cerr << "title.guest_watchdog.hle_active="
+                          << (active ? "true" : "false") << '\n'
+                          << "title.guest_watchdog.hle_guest_rip=0x"
+                          << std::hex << guest_return_instruction_pointer
+                          << std::dec << '\n'
+                          << "title.guest_watchdog.hle_guest_rsp=0x"
+                          << std::hex << guest_stack_pointer << std::dec << '\n'
+                          << "title.guest_watchdog.hle_symbol_hex=" << symbol
+                          << '\n'
+                          << "title.guest_watchdog.hle_library_hex=" << library
+                          << '\n';
+              }
+              std::cerr << std::flush;
             });
     if (!guest_instruction_sampler) {
       std::cerr << "Guest watchdog unavailable: cannot start Windows sampler\n";

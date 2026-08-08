@@ -55,6 +55,7 @@ struct NativeHleTrampoline::State {
   NativeGuestExecutionContext* execution_context = nullptr;
   mutable std::mutex mutex;
   NativeHleDispatchSnapshot last_dispatch;
+  NativeHleDispatchSnapshot active_dispatch;
 };
 
 NativeHleTrampoline::NativeHleTrampoline(
@@ -90,6 +91,11 @@ NativeHleDispatchSnapshot NativeHleTrampoline::last_dispatch() const {
   return state_->last_dispatch;
 }
 
+NativeHleDispatchSnapshot NativeHleTrampoline::active_dispatch() const {
+  std::lock_guard lock(state_->mutex);
+  return state_->active_dispatch;
+}
+
 std::uint64_t NativeHleTrampoline::Dispatch(
     void* opaque_state, const std::uint64_t* arguments,
     std::byte* floating_state,
@@ -102,6 +108,16 @@ std::uint64_t NativeHleTrampoline::Dispatch(
   }
 
   try {
+    {
+      std::lock_guard lock(state->mutex);
+      state->active_dispatch = {};
+      state->active_dispatch.active = true;
+      state->active_dispatch.symbol = state->symbol;
+      state->active_dispatch.library = state->resolved_library;
+      state->active_dispatch.guest_return_instruction_pointer = arguments[6];
+      state->active_dispatch.guest_stack_pointer = static_cast<std::uint64_t>(
+          reinterpret_cast<std::uintptr_t>(arguments + 7));
+    }
     if (state->resolved_library == hle::kLibcName &&
         IsHotMemoryCopySymbol(state->symbol)) {
       const auto destination = arguments[0];
@@ -114,6 +130,7 @@ std::uint64_t NativeHleTrampoline::Dispatch(
         state->last_dispatch.handler_status = hle::HleContextStatus::kOk;
         state->last_dispatch.return_written = true;
         state->last_dispatch.library = state->resolved_library;
+        state->active_dispatch.active = false;
         return destination;
       }
     }
@@ -133,6 +150,7 @@ std::uint64_t NativeHleTrampoline::Dispatch(
           hle::ExportRegistryStatus::kInvalidArgument;
       state->last_dispatch.handler_status =
           hle::HleContextStatus::kInvalidArgument;
+      state->active_dispatch.active = false;
       return 0;
     }
     std::array<hle::HleVectorValue, hle::kHleVectorArgumentRegisterCount>
@@ -204,6 +222,7 @@ std::uint64_t NativeHleTrampoline::Dispatch(
             context.vector_return_written(index);
       }
       state->last_dispatch.library = result.library;
+      state->active_dispatch.active = false;
     }
     return return_value;
   } catch (...) {
@@ -218,6 +237,7 @@ std::uint64_t NativeHleTrampoline::Dispatch(
     std::lock_guard lock(state->mutex);
     state->last_dispatch = {};
     state->last_dispatch.host_exception = true;
+    state->active_dispatch.active = false;
     return 0;
   }
 }
