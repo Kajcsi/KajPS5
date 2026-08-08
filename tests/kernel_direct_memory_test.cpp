@@ -132,6 +132,42 @@ int main() {
                               std::numeric_limits<std::uint64_t>::max(), 8),
         "invalid direct-memory range changed service state");
 
+  const auto query_first =
+      memory.Allocate(0, kDirectMemorySize, 0x4000, 0x4000, 7);
+  const auto query_second =
+      memory.Allocate(0, kDirectMemorySize, 0x4000, 0x4000, 7);
+  const auto query_third =
+      memory.Allocate(0, kDirectMemorySize, 0x4000, 0x4000, 8);
+  const auto query_fourth =
+      memory.Allocate(0x10000, kDirectMemorySize, 0x4000, 0x4000, 9);
+  Check(query_first && query_first.address == 0 && query_second &&
+            query_second.address == 0x4000 && query_third &&
+            query_third.address == 0x8000 && query_fourth &&
+            query_fourth.address == 0x10000,
+        "direct-memory query allocation setup failed");
+  const auto containing = memory.Query(0x2000, 0);
+  Check(containing && containing.start == 0 && containing.end == 0x8000 &&
+            containing.memory_type == 7,
+        "direct-memory query did not merge a containing same-type range");
+  const auto find_next = memory.Query(0xc000, 1);
+  Check(find_next && find_next.start == 0x10000 &&
+            find_next.end == 0x14000 && find_next.memory_type == 9,
+        "direct-memory query did not find the next allocation");
+  const auto different_type = memory.Query(0, 0);
+  Check(different_type && different_type.end == 0x8000,
+        "direct-memory query merged different memory types");
+  const auto terminal = memory.Query(0x14000, 1);
+  Check(terminal && terminal.start == static_cast<std::int64_t>(kDirectMemorySize) &&
+            terminal.end == static_cast<std::int64_t>(kDirectMemorySize) &&
+            terminal.memory_type == 0,
+        "direct-memory query did not return the terminal range");
+  Check(memory.Query(0xc000, 0).status == KernelStatus::kPermissionDenied &&
+            memory.Query(static_cast<std::int64_t>(kDirectMemorySize), 1)
+                    .status == KernelStatus::kPermissionDenied &&
+            memory.Query(-1, 0).status == KernelStatus::kInvalidArgument &&
+            memory.Query(0, 2).status == KernelStatus::kInvalidArgument,
+        "direct-memory query accepted a missing or invalid lookup");
+
   std::cout << "kernel direct-memory tests passed\n";
   return 0;
 }

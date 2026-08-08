@@ -34,6 +34,9 @@ inline constexpr auto kKernelMapFlexibleMemoryInternalNid = "4h6F1LLbTiw";
 inline constexpr auto kKernelGetDirectMemorySizeName =
     "sceKernelGetDirectMemorySize";
 inline constexpr auto kKernelGetDirectMemorySizeNid = "pO96TwzOm5E";
+inline constexpr auto kKernelDirectMemoryQueryName =
+    "sceKernelDirectMemoryQuery";
+inline constexpr auto kKernelDirectMemoryQueryNid = "BHouLQzh0X0";
 inline constexpr auto kKernelAvailableDirectMemorySizeName =
     "sceKernelAvailableDirectMemorySize";
 inline constexpr auto kKernelAvailableDirectMemorySizeNid = "C0f7TJcbfac";

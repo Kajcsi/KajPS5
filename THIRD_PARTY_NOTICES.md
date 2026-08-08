@@ -102,6 +102,20 @@ that direct aliases share contents and retain them across unmap and remap. The
 protection query uses KytyPS5's exclusive range end. No memory-export,
 allocator, or backing-store source was copied.
 
+The `sceKernelDirectMemoryQuery` behavior reimplementation in
+`src/kernel/direct_memory.{h,cpp}`, `src/hle/kernel_memory_exports.{h,cpp}`,
+and their focused tests adapts the query ABI, containing-or-next selection,
+same-type contiguous merge, terminal range, and EACCES result from KytyPS5
+`src/kernel/memory.cpp` at commit
+`fb5ecec455cf6c67154134429485ffccbfc34203`. The public name and NID
+`BHouLQzh0X0`, plus checked guest-output behavior, were independently
+confirmed from SharpEmu
+`src/SharpEmu.Libs/Kernel/KernelMemoryCompatExports.cs` at commit
+`9e10d7c44a2821cfd5ccd3417c09c0cf269285a4`. This is a behavior
+reimplementation; no upstream source was copied. KytyPS5 is GPL-2.0-only.
+The SharpEmu reference states `Copyright (C) 2026 SharpEmu Emulator Project`
+and is GPL-2.0-or-later.
+
 ## Native execution, imports, and HLE
 
 The W^X native leaf-execution behavior in

@@ -111,6 +111,45 @@ DirectMemoryRangeResult DirectMemoryService::Allocate(
   return {KernelStatus::kNoResources, 0, 0};
 }
 
+DirectMemoryQueryResult DirectMemoryService::Query(std::int64_t offset,
+                                                    int flags) const {
+  if (offset < 0 || (flags != 0 && flags != 1)) {
+    return {KernelStatus::kInvalidArgument, 0, 0, 0};
+  }
+
+  const auto address = static_cast<std::uint64_t>(offset);
+  std::lock_guard lock(mutex_);
+  auto current = allocations_.upper_bound(address);
+  if (current != allocations_.begin()) {
+    const auto previous = std::prev(current);
+    if (address < previous->first + previous->second.size) {
+      current = previous;
+    }
+  }
+  if (current == allocations_.end() ||
+      (flags == 0 &&
+       (address < current->first ||
+        address >= current->first + current->second.size))) {
+    if (flags == 1 && address < kDirectMemorySize) {
+      const auto terminal = static_cast<std::int64_t>(kDirectMemorySize);
+      return {KernelStatus::kOk, terminal, terminal, 0};
+    }
+    return {KernelStatus::kPermissionDenied, 0, 0, 0};
+  }
+
+  const auto start = current->first;
+  const auto memory_type = current->second.memory_type;
+  auto end = start + current->second.size;
+  for (auto following = std::next(current);
+       following != allocations_.end() && following->first == end &&
+       following->second.memory_type == memory_type;
+       ++following) {
+    end += following->second.size;
+  }
+  return {KernelStatus::kOk, static_cast<std::int64_t>(start),
+          static_cast<std::int64_t>(end), memory_type};
+}
+
 KernelStatus DirectMemoryService::Release(std::uint64_t start,
                                           std::uint64_t length) {
   if (length == 0 || start >= kDirectMemorySize ||

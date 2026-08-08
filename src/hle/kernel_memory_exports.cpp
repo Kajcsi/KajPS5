@@ -4,6 +4,8 @@
 
 #include "hle/kernel_memory_exports.h"
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <optional>
@@ -23,6 +25,7 @@ constexpr std::uint32_t kKnownMapFlags =
     0x800 | 0x1000 | 0x8000 | 0x20000 | 0x400000;
 constexpr std::uint64_t kDefaultPs5MapBase = 0x200000000;
 constexpr std::size_t kMaximumMapNameBytes = 32;
+constexpr std::size_t kDirectMemoryQueryInfoSize = 24;
 
 void SetKernelResult(HleCallContext& context, std::int32_t result) noexcept {
   context.SetReturn(
@@ -225,6 +228,59 @@ HleContextStatus KernelMapUnnamedFlexibleMemory(HleCallContext& context) {
 HleContextStatus KernelGetDirectMemorySize(
     HleCallContext& context, kernel::DirectMemoryService& direct_memory) {
   context.SetReturn(direct_memory.size());
+  return HleContextStatus::kOk;
+}
+
+HleContextStatus KernelDirectMemoryQuery(
+    HleCallContext& context, kernel::DirectMemoryService& direct_memory) {
+  const auto offset_argument = context.Argument(0).value_or(0);
+  const auto flags_argument = context.Argument(1).value_or(0);
+  const auto info_address = context.Argument(2).value_or(0);
+  const auto info_size = context.Argument(3).value_or(0);
+  if (offset_argument > static_cast<std::uint64_t>(
+                            std::numeric_limits<std::int64_t>::max()) ||
+      (flags_argument != 0 && flags_argument != 1) || info_address == 0 ||
+      info_size != kDirectMemoryQueryInfoSize) {
+    SetKernelResult(context, kKernelHleErrorInvalidArgument);
+    return HleContextStatus::kOk;
+  }
+  const auto query = direct_memory.Query(
+      static_cast<std::int64_t>(offset_argument),
+      static_cast<int>(flags_argument));
+  if (!query) {
+    SetKernelResult(context, query.status == kernel::KernelStatus::kInvalidArgument
+                                 ? kKernelHleErrorInvalidArgument
+                                 : kKernelHleErrorPermissionDenied);
+    return HleContextStatus::kOk;
+  }
+  if (!context.CanWriteMemory(info_address, kDirectMemoryQueryInfoSize)) {
+    SetKernelResult(context, kKernelHleErrorFault);
+    return HleContextStatus::kOk;
+  }
+
+  std::array<std::byte, kDirectMemoryQueryInfoSize> info{};
+  const auto write_uint64 = [&info](std::size_t position,
+                                    std::uint64_t value) noexcept {
+    for (std::size_t index = 0; index < sizeof(value); ++index) {
+      info[position + index] =
+          static_cast<std::byte>((value >> (index * 8U)) & 0xffU);
+    }
+  };
+  const auto write_uint32 = [&info](std::size_t position,
+                                    std::uint32_t value) noexcept {
+    for (std::size_t index = 0; index < sizeof(value); ++index) {
+      info[position + index] =
+          static_cast<std::byte>((value >> (index * 8U)) & 0xffU);
+    }
+  };
+  write_uint64(0, static_cast<std::uint64_t>(query.start));
+  write_uint64(8, static_cast<std::uint64_t>(query.end));
+  write_uint32(16, static_cast<std::uint32_t>(query.memory_type));
+  SetKernelResult(context,
+                  context.WriteMemory(info_address, info) ==
+                          HleContextStatus::kOk
+                      ? 0
+                      : kKernelHleErrorFault);
   return HleContextStatus::kOk;
 }
 
@@ -533,7 +589,7 @@ HleContextStatus KernelQueryMemoryProtection(HleCallContext& context) {
 std::vector<HleExportDefinition> detail::MakeKernelMemoryExports(
     kernel::DirectMemoryService& direct_memory) {
   std::vector<HleExportDefinition> exports;
-  exports.reserve(36);
+  exports.reserve(38);
   exports.push_back({kLibKernelName, kKernelMprotectName, KernelMprotect});
   exports.push_back({kLibKernelName, kKernelMprotectNid, KernelMprotect});
   exports.push_back({kLibKernelName, kPosixMprotectName, KernelMprotect});
@@ -566,6 +622,16 @@ std::vector<HleExportDefinition> detail::MakeKernelMemoryExports(
       {kLibKernelName, kKernelGetDirectMemorySizeNid,
        [&direct_memory](HleCallContext& context) {
          return KernelGetDirectMemorySize(context, direct_memory);
+       }});
+  exports.push_back(
+      {kLibKernelName, kKernelDirectMemoryQueryName,
+       [&direct_memory](HleCallContext& context) {
+         return KernelDirectMemoryQuery(context, direct_memory);
+       }});
+  exports.push_back(
+      {kLibKernelName, kKernelDirectMemoryQueryNid,
+       [&direct_memory](HleCallContext& context) {
+         return KernelDirectMemoryQuery(context, direct_memory);
        }});
   exports.push_back(
       {kLibKernelName, kKernelAvailableDirectMemorySizeName,

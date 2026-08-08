@@ -31,6 +31,17 @@ struct DirectMemoryRangeResult {
   }
 };
 
+struct DirectMemoryQueryResult {
+  KernelStatus status = KernelStatus::kOk;
+  std::int64_t start = 0;
+  std::int64_t end = 0;
+  std::int32_t memory_type = 0;
+
+  [[nodiscard]] explicit operator bool() const noexcept {
+    return status == KernelStatus::kOk;
+  }
+};
+
 struct DirectMemoryMapping {
   std::uint64_t guest_address = 0;
   std::uint64_t physical_address = 0;
@@ -54,6 +65,8 @@ class DirectMemoryService final {
       std::uint64_t search_start, std::uint64_t search_end,
       std::uint64_t length, std::uint64_t alignment,
       std::int32_t memory_type);
+  [[nodiscard]] DirectMemoryQueryResult Query(std::int64_t offset,
+                                               int flags) const;
   [[nodiscard]] KernelStatus Release(std::uint64_t start,
                                      std::uint64_t length);
   [[nodiscard]] bool ContainsAllocatedRange(std::uint64_t start,

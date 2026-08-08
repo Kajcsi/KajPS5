@@ -56,7 +56,7 @@ int main() {
   ExportRegistry registry;
   Check(kajps5::hle::RegisterKernelMemoryExports(registry, direct_memory) ==
             ExportRegistryStatus::kOk &&
-            registry.size() == 36,
+            registry.size() == 38,
         "memory exports did not register atomically");
 
   HleCallContext page_size_context(memory);
@@ -122,6 +122,133 @@ int main() {
             direct_address == 0x8000 &&
             direct_memory.ContainsAllocatedRange(0x8000, 0x4000),
         "main direct-memory allocation did not use first fit");
+
+  HleCallContext direct_query_context(memory);
+  std::array<std::byte, 24> query_seed{};
+  query_seed.fill(std::byte{0xa5});
+  Check(direct_query_context.WriteMemory(0x4140, query_seed) ==
+                kajps5::hle::HleContextStatus::kOk &&
+            direct_query_context.SetRegister(HleRegister::kRdi, 0x1000) &&
+            direct_query_context.SetRegister(HleRegister::kRsi, 0) &&
+            direct_query_context.SetRegister(HleRegister::kRdx, 0x4140) &&
+            direct_query_context.SetRegister(HleRegister::kRcx, 24),
+        "direct-memory query setup failed");
+  std::uint64_t direct_query_start = 0;
+  std::uint64_t direct_query_end = 0;
+  std::uint32_t direct_query_type = 0;
+  std::array<std::byte, 24> query_record{};
+  std::array<std::byte, 24> expected_query_record{};
+  expected_query_record[9] = std::byte{0x80};
+  expected_query_record[16] = std::byte{42};
+  Check(Dispatch(registry, kajps5::hle::kKernelDirectMemoryQueryName,
+                 direct_query_context) == 0 &&
+            direct_query_context.ReadUInt64(0x4140, direct_query_start) ==
+                kajps5::hle::HleContextStatus::kOk &&
+            direct_query_context.ReadUInt64(0x4148, direct_query_end) ==
+                kajps5::hle::HleContextStatus::kOk &&
+            direct_query_context.ReadUInt32(0x4150, direct_query_type) ==
+                kajps5::hle::HleContextStatus::kOk &&
+            direct_query_context.ReadMemory(0x4140, query_record) ==
+                kajps5::hle::HleContextStatus::kOk &&
+            direct_query_start == 0 && direct_query_end == 0x8000 &&
+            direct_query_type == 42 &&
+            query_record == expected_query_record,
+        "named direct-memory query returned the wrong record");
+
+  HleCallContext negative_query_context(memory);
+  Check(negative_query_context.SetRegister(HleRegister::kRdi, UINT64_MAX) &&
+            negative_query_context.SetRegister(HleRegister::kRsi, 0) &&
+            negative_query_context.SetRegister(HleRegister::kRdx, 0x4160) &&
+            negative_query_context.SetRegister(HleRegister::kRcx, 24),
+        "negative direct-memory query setup failed");
+  Check(Dispatch(registry, kajps5::hle::kKernelDirectMemoryQueryNid,
+                 negative_query_context) ==
+            KernelResult(kajps5::hle::kKernelHleErrorInvalidArgument),
+        "negative direct-memory query did not return EINVAL");
+
+  HleCallContext invalid_flags_query_context(memory);
+  Check(invalid_flags_query_context.SetRegister(HleRegister::kRdi, 0) &&
+            invalid_flags_query_context.SetRegister(HleRegister::kRsi, 2) &&
+            invalid_flags_query_context.SetRegister(HleRegister::kRdx, 0x4160) &&
+            invalid_flags_query_context.SetRegister(HleRegister::kRcx, 24),
+        "invalid direct-memory query flags setup failed");
+  Check(Dispatch(registry, kajps5::hle::kKernelDirectMemoryQueryName,
+                 invalid_flags_query_context) ==
+            KernelResult(kajps5::hle::kKernelHleErrorInvalidArgument),
+        "invalid direct-memory query flags did not return EINVAL");
+
+  HleCallContext invalid_size_query_context(memory);
+  Check(invalid_size_query_context.SetRegister(HleRegister::kRdi, 0) &&
+            invalid_size_query_context.SetRegister(HleRegister::kRsi, 0) &&
+            invalid_size_query_context.SetRegister(HleRegister::kRdx, 0x4160) &&
+            invalid_size_query_context.SetRegister(HleRegister::kRcx, 16),
+        "invalid direct-memory query size setup failed");
+  Check(Dispatch(registry, kajps5::hle::kKernelDirectMemoryQueryNid,
+                 invalid_size_query_context) ==
+            KernelResult(kajps5::hle::kKernelHleErrorInvalidArgument),
+        "invalid direct-memory query size did not return EINVAL");
+
+  HleCallContext null_output_query_context(memory);
+  Check(null_output_query_context.SetRegister(HleRegister::kRdi, 0) &&
+            null_output_query_context.SetRegister(HleRegister::kRsi, 0) &&
+            null_output_query_context.SetRegister(HleRegister::kRcx, 24),
+        "null direct-memory query output setup failed");
+  Check(Dispatch(registry, kajps5::hle::kKernelDirectMemoryQueryNid,
+                 null_output_query_context) ==
+            KernelResult(kajps5::hle::kKernelHleErrorInvalidArgument),
+        "null direct-memory query output did not return EINVAL");
+
+  constexpr std::uint64_t kDirectQuerySentinel = 0x1122334455667788;
+  HleCallContext direct_query_fault_context(memory);
+  Check(direct_query_fault_context.WriteUInt64(0xfff0, kDirectQuerySentinel) ==
+                kajps5::hle::HleContextStatus::kOk &&
+            direct_query_fault_context.SetRegister(HleRegister::kRdi, 0) &&
+            direct_query_fault_context.SetRegister(HleRegister::kRsi, 0) &&
+            direct_query_fault_context.SetRegister(HleRegister::kRdx, 0xfff0) &&
+            direct_query_fault_context.SetRegister(HleRegister::kRcx, 24),
+        "faulting direct-memory query setup failed");
+  direct_query_start = 0;
+  Check(Dispatch(registry, kajps5::hle::kKernelDirectMemoryQueryName,
+                 direct_query_fault_context) ==
+            KernelResult(kajps5::hle::kKernelHleErrorFault) &&
+            direct_query_fault_context.ReadUInt64(0xfff0,
+                                                   direct_query_start) ==
+                kajps5::hle::HleContextStatus::kOk &&
+            direct_query_start == kDirectQuerySentinel,
+        "faulting direct-memory query partially updated its output");
+
+  HleCallContext direct_query_missing_context(memory);
+  Check(direct_query_missing_context.SetRegister(HleRegister::kRdi,
+                                                 direct_memory.size()) &&
+            direct_query_missing_context.SetRegister(HleRegister::kRsi, 0) &&
+            direct_query_missing_context.SetRegister(HleRegister::kRdx,
+                                                     0x4160) &&
+            direct_query_missing_context.SetRegister(HleRegister::kRcx, 24),
+        "missing direct-memory query setup failed");
+  Check(Dispatch(registry, kajps5::hle::kKernelDirectMemoryQueryNid,
+                 direct_query_missing_context) ==
+            KernelResult(kajps5::hle::kKernelHleErrorPermissionDenied),
+        "missing direct-memory query did not return EACCES");
+
+  HleCallContext direct_query_missing_fault_context(memory);
+  Check(direct_query_missing_fault_context.SetRegister(HleRegister::kRdi,
+                                                       direct_memory.size()) &&
+            direct_query_missing_fault_context.SetRegister(HleRegister::kRsi,
+                                                           0) &&
+            direct_query_missing_fault_context.SetRegister(HleRegister::kRdx,
+                                                           0xfff0) &&
+            direct_query_missing_fault_context.SetRegister(HleRegister::kRcx,
+                                                           24),
+        "missing faulting direct-memory query setup failed");
+  direct_query_start = 0;
+  Check(Dispatch(registry, kajps5::hle::kKernelDirectMemoryQueryNid,
+                 direct_query_missing_fault_context) ==
+            KernelResult(kajps5::hle::kKernelHleErrorPermissionDenied) &&
+            direct_query_missing_fault_context.ReadUInt64(0xfff0,
+                                                           direct_query_start) ==
+                kajps5::hle::HleContextStatus::kOk &&
+            direct_query_start == kDirectQuerySentinel,
+        "missing direct-memory query preferred EFAULT over EACCES");
 
   const auto allocations_before_fault = direct_memory.allocation_count();
   HleCallContext allocation_fault_context(memory);
@@ -734,7 +861,7 @@ int main() {
 
   Check(kajps5::hle::RegisterKernelMemoryExports(registry, direct_memory) ==
             ExportRegistryStatus::kAlreadyExists &&
-            registry.size() == 36,
+            registry.size() == 38,
         "duplicate memory export batch changed the registry");
   return failures == 0 ? 0 : 1;
 }
