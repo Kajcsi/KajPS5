@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <limits>
 #include <sstream>
+#include <vector>
 
 #include "hle/call_context.h"
 #include "loader/sce_symbol.h"
@@ -187,8 +188,16 @@ std::string FormatUnresolvedImportStubTrace(
       std::min(records.size(), kMaximumUnresolvedStubTraceRecords);
   trace << prefix << "_details=" << detail_count << '\n'
         << prefix << "_omitted=" << records.size() - detail_count << '\n';
+  std::vector<std::size_t> record_indices(records.size());
+  for (std::size_t index = 0; index < record_indices.size(); ++index) {
+    record_indices[index] = index;
+  }
+  std::stable_sort(record_indices.begin(), record_indices.end(),
+                   [&records](std::size_t left, std::size_t right) {
+                     return records[left].call_count > records[right].call_count;
+                   });
   for (std::size_t index = 0; index < detail_count; ++index) {
-    const auto& record = records[index];
+    const auto& record = records[record_indices[index]];
     trace << prefix << '[' << index << "].calls=" << record.call_count << '\n'
           << prefix << '[' << index << "].library_hex="
           << EncodeHex(record.library) << '\n'

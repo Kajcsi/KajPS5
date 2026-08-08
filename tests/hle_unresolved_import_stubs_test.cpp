@@ -201,6 +201,58 @@ std::size_t real_export_calls = 0;
             bounded_trace.find("module_omitted_bytes=80") != std::string::npos,
         "hostile module metadata produced an unbounded stub trace");
 
+  UnresolvedImportStubStore prioritized_store;
+  for (std::size_t index = 0; index < 35; ++index) {
+    Check(prioritized_store.Add("traceLibrary", "traceModule",
+                                "stub" + std::to_string(index)) == index,
+          "prioritized trace stub setup failed");
+  }
+  Check(context.SetRegister(HleRegister::kRdi, 0xaabbccddeeff0011) &&
+            context.SetRegister(HleRegister::kRsi, 0x2233445566778899),
+        "prioritized trace argument setup failed");
+  prioritized_store.RecordCall(32, context);
+  prioritized_store.RecordCall(33, context);
+  prioritized_store.RecordCall(34, context);
+  prioritized_store.RecordCall(34, context);
+  const auto prioritized_trace =
+      kajps5::hle::FormatUnresolvedImportStubTrace(prioritized_store);
+  const auto prioritized_records = prioritized_store.records();
+  Check(prioritized_store.total_calls() == 4 &&
+            prioritized_records.size() == 35 &&
+            prioritized_records[0].nid == "stub0" &&
+            prioritized_records[32].nid == "stub32" &&
+            prioritized_records[33].nid == "stub33" &&
+            prioritized_records[34].nid == "stub34" &&
+            prioritized_records[32].call_count == 1 &&
+            prioritized_records[33].call_count == 1 &&
+            prioritized_records[34].call_count == 2 &&
+            prioritized_trace.find("title.unresolved_import_stub_details=32\n") !=
+                std::string::npos &&
+            prioritized_trace.find("title.unresolved_import_stub_omitted=3\n") !=
+                std::string::npos &&
+            prioritized_trace.find(
+                "title.unresolved_import_stub[0].calls=2\n") !=
+                std::string::npos &&
+            prioritized_trace.find(
+                "title.unresolved_import_stub[0].nid_hex=737475623334\n") !=
+                std::string::npos &&
+            prioritized_trace.find(
+                "title.unresolved_import_stub[0].args_hex=1100ffeeddccbbaa"
+                "9988776655443322"
+                "0000000000000000"
+                "0000000000000000"
+                "0000000000000000"
+                "0000000000000000\n") != std::string::npos &&
+            prioritized_trace.find(
+                "title.unresolved_import_stub[1].nid_hex=737475623332\n") !=
+                std::string::npos &&
+            prioritized_trace.find(
+                "title.unresolved_import_stub[2].nid_hex=737475623333\n") !=
+                std::string::npos &&
+            prioritized_trace.find("title.unresolved_import_stub[32]") ==
+                std::string::npos,
+        "stub trace did not prioritize called records without mutating registration order");
+
   const auto trace = kajps5::hle::FormatUnresolvedImportStubTrace(store);
   Check(trace.find("title.unresolved_import_stubs=3\n") !=
                 std::string::npos &&
