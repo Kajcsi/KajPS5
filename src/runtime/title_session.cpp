@@ -150,6 +150,19 @@ TitleHleSetupResult TitleSession::PrepareHleBatch(
     return result;
   }
 
+  for (const auto* image_metadata : metadata) {
+    if (image_metadata == nullptr) {
+      result.status = TitleHleSetupStatus::kImportTableBuildFailed;
+      return result;
+    }
+    result.stub_status = hle::RegisterUnresolvedImportStubs(
+        *image_metadata, hle_exports_, hle_data_, unresolved_import_stubs_);
+    if (!result.stub_status) {
+      result.status = TitleHleSetupStatus::kImportTableBuildFailed;
+      return result;
+    }
+  }
+
   hle_functions_ = std::make_unique<cpu::NativeHleImportTable>(
       *memory_, hle_exports_, &execution_context_);
   result.imports = hle_functions_->BuildBatch(metadata, stack_argument_count);
@@ -165,6 +178,24 @@ TitleSessionResult TitleSession::Start(
     std::uint64_t exit_handler_address, std::uint64_t stack_size) {
   if (phase_ != TitleSessionPhase::kCreated || !configured_) {
     return {TitleSessionStatus::kInvalidState, phase_};
+  }
+  if (module_runtime_ != nullptr &&
+      module_runtime_->tls_layout().module_count() != 0) {
+    std::vector<loader::StaticTlsTemplateModule> tls_modules;
+    for (const auto& program : module_runtime_->programs()) {
+      if (!program.launch.tls.has_value()) {
+        continue;
+      }
+      tls_modules.push_back(
+          {program.module_id, program.launch.tls->image_address,
+           program.launch.tls->initial_size, program.launch.tls->memory_size,
+           program.tls.module.static_offset});
+    }
+    if (!thread_runner_.InstallStaticTlsTemplates(
+            module_runtime_->tls_layout(), std::move(tls_modules))) {
+      phase_ = TitleSessionPhase::kFailed;
+      return {TitleSessionStatus::kStartupFailed, phase_};
+    }
   }
   const auto startup = process_launcher_.BeginStartup(
       launch_metadata_, lifecycle_plan_, process_image_name, stack_search_start,
@@ -217,7 +248,12 @@ TitleSessionResult TitleSession::Run(std::size_t maximum_slices) {
       if (startup.status == cpu::NativeGuestProcessStartupStatus::kReady) {
         main_thread_ = startup.launch.thread;
         phase_ = TitleSessionPhase::kRunning;
-        continue;
+        return {TitleSessionStatus::kPending,
+                phase_,
+                main_thread_,
+                exit_value_,
+                slices,
+                startup};
       }
       if (startup.status == cpu::NativeGuestProcessStartupStatus::kBlocked) {
         return {TitleSessionStatus::kBlocked,
@@ -228,15 +264,12 @@ TitleSessionResult TitleSession::Run(std::size_t maximum_slices) {
                 startup};
       }
       if (startup.status == cpu::NativeGuestProcessStartupStatus::kPending) {
-        if (startup.slices == 0) {
-          return {TitleSessionStatus::kPending,
-                  phase_,
-                  startup.thread,
-                  exit_value_,
-                  slices,
-                  startup};
-        }
-        continue;
+        return {TitleSessionStatus::kPending,
+                phase_,
+                startup.thread,
+                exit_value_,
+                slices,
+                startup};
       }
       phase_ = TitleSessionPhase::kFailed;
       return {TitleSessionStatus::kStartupFailed,
@@ -446,6 +479,11 @@ const hle::ImportRegistry& TitleSession::hle_data() const noexcept {
 
 const cpu::NativeHleImportTable* TitleSession::hle_functions() const noexcept {
   return hle_functions_.get();
+}
+
+const hle::UnresolvedImportStubStore& TitleSession::unresolved_import_stubs()
+    const noexcept {
+  return unresolved_import_stubs_;
 }
 
 const ModuleRuntime* TitleSession::module_runtime() const noexcept {

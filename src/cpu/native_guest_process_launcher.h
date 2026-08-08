@@ -67,6 +67,7 @@ struct NativeGuestProcessStartupResult {
       NativeGuestProcessStartupStatus::kPending;
   loader::LifecycleCallKind lifecycle_kind = loader::LifecycleCallKind::kNone;
   std::size_t lifecycle_index = 0;
+  std::uint64_t lifecycle_address = 0;
   kernel::KernelHandle thread = kernel::kInvalidKernelHandle;
   kernel::KernelStatus kernel_status = kernel::KernelStatus::kOk;
   NativeGuestThreadRegistrationStatus registration_status =

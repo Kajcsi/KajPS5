@@ -12,6 +12,7 @@
 #include "core/memory/guest_memory.h"
 #include "hle/call_context.h"
 #include "hle/export_registry.h"
+#include "cpu/native_hle_trampoline.h"
 
 namespace {
 
@@ -94,6 +95,38 @@ int main() {
             ExportRegistryStatus::kInvalidArgument,
         "empty export batch was accepted");
 
+  std::size_t fallback_calls = 0;
+  std::size_t replacement_calls = 0;
+  Check(registry.RegisterFallback(
+            "compat", "late-export", [&fallback_calls](HleCallContext& call) {
+              ++fallback_calls;
+              call.SetReturn(7);
+              return HleContextStatus::kOk;
+            }) == ExportRegistryStatus::kOk,
+        "fallback registration failed");
+  kajps5::cpu::NativeHleTrampoline late_trampoline(
+      memory, registry, "late-export", std::vector<std::string>{"compat"});
+  Check(late_trampoline.status() == kajps5::cpu::NativeHleTrampolineStatus::kOk &&
+            reinterpret_cast<std::uint64_t (*)()>(
+                static_cast<std::uintptr_t>(late_trampoline.address()))() == 7 &&
+            fallback_calls == 1,
+        "fallback was not dispatched by the existing trampoline");
+  Check(registry.Register(
+            "compat", "late-export", [&replacement_calls](HleCallContext& call) {
+              ++replacement_calls;
+              call.SetReturn(11);
+              return HleContextStatus::kOk;
+            }) == ExportRegistryStatus::kOk &&
+            reinterpret_cast<std::uint64_t (*)()>(
+                static_cast<std::uintptr_t>(late_trampoline.address()))() == 11 &&
+            fallback_calls == 1 && replacement_calls == 1,
+        "normal registration did not replace the fallback for trampoline dispatch");
+  Check(registry.Register("compat", "real-export", length_handler) ==
+            ExportRegistryStatus::kOk &&
+            registry.RegisterFallback("compat", "real-export", length_handler) ==
+                ExportRegistryStatus::kAlreadyExists,
+        "fallback overwrote an installed export");
+
   const std::vector<std::string> kernel_first = {"libkernel", "compat"};
   const auto looked_up = registry.Lookup("length", kernel_first);
   Check(looked_up && looked_up.library == "libkernel" &&
@@ -151,5 +184,8 @@ int main() {
   Check(kajps5::hle::ExportRegistryStatusName(
             ExportRegistryStatus::kAmbiguous) == "ambiguous",
         "export registry status name is unstable");
+  if (failures == 0) {
+    std::cout << "hle export registry tests passed\n";
+  }
   return failures == 0 ? 0 : 1;
 }

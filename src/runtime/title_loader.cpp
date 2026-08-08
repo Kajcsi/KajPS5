@@ -299,10 +299,6 @@ TitleLoadResult PrepareTitleImageWithModules(
   result.tls = programs.front().tls;
   result.relocation = programs.front().relocation;
   result.lifecycle = programs.front().lifecycle;
-  if (module_runtime->tls_layout().module_count() != 0) {
-    result.status = TitleLoadStatus::kStaticTlsExecutionUnsupported;
-    return result;
-  }
 
   const auto main_launch = programs.front().launch;
   if (!session->AttachModuleRuntime(std::move(module_runtime)) ||

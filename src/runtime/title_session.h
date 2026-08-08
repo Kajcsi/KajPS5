@@ -22,6 +22,7 @@
 #include "hle/data_symbols.h"
 #include "hle/export_registry.h"
 #include "hle/import_registry.h"
+#include "hle/unresolved_import_stubs.h"
 #include "kernel/runtime.h"
 #include "loader/elf.h"
 #include "loader/launch_metadata.h"
@@ -85,6 +86,7 @@ struct TitleHleSetupResult {
   TitleHleSetupStatus status = TitleHleSetupStatus::kOk;
   hle::HleDataResult data;
   hle::ExportRegistryStatus export_status = hle::ExportRegistryStatus::kOk;
+  hle::UnresolvedImportStubRegistrationResult stub_status;
   cpu::NativeHleImportTableResult imports;
 
   [[nodiscard]] explicit operator bool() const noexcept {
@@ -137,6 +139,8 @@ class TitleSession final {
   [[nodiscard]] const hle::ExportRegistry& hle_exports() const noexcept;
   [[nodiscard]] const hle::ImportRegistry& hle_data() const noexcept;
   [[nodiscard]] const cpu::NativeHleImportTable* hle_functions() const noexcept;
+  [[nodiscard]] const hle::UnresolvedImportStubStore& unresolved_import_stubs()
+      const noexcept;
   [[nodiscard]] const ModuleRuntime* module_runtime() const noexcept;
 
  private:
@@ -170,6 +174,7 @@ class TitleSession final {
   cpu::NativeGuestExecutionContext execution_context_;
   hle::ExportRegistry hle_exports_;
   hle::ImportRegistry hle_data_;
+  hle::UnresolvedImportStubStore unresolved_import_stubs_;
   std::unique_ptr<cpu::NativeHleImportTable> hle_functions_;
   std::unique_ptr<ModuleRuntime> module_runtime_;
   cpu::NativeGuestThreadRunner thread_runner_;

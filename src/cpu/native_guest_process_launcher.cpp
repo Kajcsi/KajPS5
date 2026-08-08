@@ -134,7 +134,8 @@ NativeGuestProcessLauncher::StartNextInitializer() {
   if (!created) {
     const auto result = NativeGuestProcessStartupResult{
         NativeGuestProcessStartupStatus::kInitializerThreadCreateFailed,
-        call.kind, call.index, kernel::kInvalidKernelHandle, created.status};
+        call.kind, call.index, call.address, kernel::kInvalidKernelHandle,
+        created.status};
     startup_.reset();
     return result;
   }
@@ -151,6 +152,7 @@ NativeGuestProcessLauncher::StartNextInitializer() {
             : NativeGuestProcessStartupStatus::kInitializerThreadRollbackFailed,
         call.kind,
         call.index,
+        call.address,
         rollback_ok ? kernel::kInvalidKernelHandle : created.handle,
         kernel::KernelStatus::kOk,
         allocation.status};
@@ -160,7 +162,7 @@ NativeGuestProcessLauncher::StartNextInitializer() {
 
   startup_->active_initializer = created.handle;
   return {NativeGuestProcessStartupStatus::kPending, call.kind, call.index,
-          created.handle};
+          call.address, created.handle};
 }
 
 NativeGuestProcessStartupResult NativeGuestProcessLauncher::ContinueStartup() {
@@ -175,6 +177,7 @@ NativeGuestProcessStartupResult NativeGuestProcessLauncher::ContinueStartup() {
     return {NativeGuestProcessStartupStatus::kPending,
             call.kind,
             call.index,
+            call.address,
             active_initializer,
             kernel::KernelStatus::kOk,
             NativeGuestThreadRegistrationStatus::kOk,
@@ -184,6 +187,7 @@ NativeGuestProcessStartupResult NativeGuestProcessLauncher::ContinueStartup() {
     return {NativeGuestProcessStartupStatus::kBlocked,
             call.kind,
             call.index,
+            call.address,
             active_initializer,
             kernel::KernelStatus::kOk,
             NativeGuestThreadRegistrationStatus::kOk,
@@ -193,6 +197,7 @@ NativeGuestProcessStartupResult NativeGuestProcessLauncher::ContinueStartup() {
     return {NativeGuestProcessStartupStatus::kPending,
             call.kind,
             call.index,
+            call.address,
             active_initializer,
             kernel::KernelStatus::kOk,
             NativeGuestThreadRegistrationStatus::kOk,
@@ -204,6 +209,7 @@ NativeGuestProcessStartupResult NativeGuestProcessLauncher::ContinueStartup() {
     return {NativeGuestProcessStartupStatus::kBlocked,
             call.kind,
             call.index,
+            call.address,
             active_initializer,
             kernel::KernelStatus::kOk,
             NativeGuestThreadRegistrationStatus::kOk,
@@ -215,6 +221,7 @@ NativeGuestProcessStartupResult NativeGuestProcessLauncher::ContinueStartup() {
     return {NativeGuestProcessStartupStatus::kPending,
             call.kind,
             call.index,
+            call.address,
             active_initializer,
             kernel::KernelStatus::kOk,
             NativeGuestThreadRegistrationStatus::kOk,
@@ -228,6 +235,7 @@ NativeGuestProcessStartupResult NativeGuestProcessLauncher::ContinueStartup() {
         NativeGuestProcessStartupStatus::kInitializerExecutionFailed,
         call.kind,
         call.index,
+        call.address,
         active_initializer,
         kernel::KernelStatus::kOk,
         NativeGuestThreadRegistrationStatus::kOk,
@@ -242,6 +250,7 @@ NativeGuestProcessStartupResult NativeGuestProcessLauncher::ContinueStartup() {
         NativeGuestProcessStartupStatus::kInitializerRejected,
         call.kind,
         call.index,
+        call.address,
         active_initializer,
         kernel::KernelStatus::kOk,
         NativeGuestThreadRegistrationStatus::kOk,
@@ -298,6 +307,7 @@ NativeGuestProcessStartupResult NativeGuestProcessLauncher::FinishStartup() {
   return {launch ? NativeGuestProcessStartupStatus::kReady
                  : NativeGuestProcessStartupStatus::kMainLaunchFailed,
           loader::LifecycleCallKind::kNone,
+          0,
           0,
           launch.thread,
           launch.kernel_status,

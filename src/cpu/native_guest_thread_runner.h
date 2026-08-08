@@ -13,9 +13,12 @@
 #include <optional>
 #include <span>
 #include <string_view>
+#include <vector>
 
 #include "cpu/native_guest_executor.h"
 #include "kernel/handle_table.h"
+#include "loader/static_tls_instance.h"
+#include "loader/static_tls_layout.h"
 
 namespace kajps5::kernel {
 class GuestScheduler;
@@ -39,6 +42,7 @@ enum class NativeGuestThreadRegistrationStatus {
   kGuestStackAlreadyRegistered,
   kGuestParametersNotReadable,
   kGuestStackAllocationFailed,
+  kGuestTlsAllocationFailed,
 };
 
 struct NativeGuestThreadAllocationResult {
@@ -116,7 +120,11 @@ class NativeGuestThreadRunner final {
   [[nodiscard]] NativeGuestThreadRunResult RunNext();
   [[nodiscard]] NativeGuestThreadRunResult RunUntilIdle(
       std::size_t maximum_slices);
+  bool InstallStaticTlsTemplates(
+      const loader::StaticTlsLayout& layout,
+      std::vector<loader::StaticTlsTemplateModule> modules);
   [[nodiscard]] std::size_t registered_thread_count() const noexcept;
+  [[nodiscard]] std::uint64_t last_guest_instruction_pointer() const noexcept;
 
  private:
   static constexpr std::size_t kMaximumFunctionArguments = 6;
@@ -132,6 +140,7 @@ class NativeGuestThreadRunner final {
     std::uint64_t stack_size = 0;
     std::uint64_t parameters_address = 0;
     std::uint64_t exit_handler_address = 0;
+    std::uint64_t thread_pointer = 0;
     std::array<std::uint64_t, kMaximumFunctionArguments> arguments{};
     std::size_t argument_count = 0;
     EntryKind entry_kind = EntryKind::kPthread;
@@ -139,6 +148,9 @@ class NativeGuestThreadRunner final {
     bool owns_stack = false;
     std::uint64_t allocation_address = 0;
     std::uint64_t allocation_size = 0;
+    bool owns_tls = false;
+    std::uint64_t tls_allocation_address = 0;
+    std::uint64_t tls_allocation_size = 0;
     std::unique_ptr<NativeGuestContinuation> continuation;
   };
 
@@ -156,6 +168,10 @@ class NativeGuestThreadRunner final {
   kernel::PthreadService& pthreads_;
   NativeGuestExecutionContext& execution_context_;
   NativeGuestExecutor executor_;
+  loader::StaticTlsLayout tls_layout_;
+  std::vector<loader::StaticTlsTemplateModule> tls_modules_;
+  bool tls_templates_installed_ = false;
+  std::uint64_t last_guest_instruction_pointer_ = 0;
   std::map<kernel::KernelHandle, ThreadState> threads_;
 };
 

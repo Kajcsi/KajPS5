@@ -18,6 +18,10 @@ namespace kajps5::cpu {
 
 inline constexpr std::uint64_t kMinimumNativeGuestStackSize = 4096;
 
+// Windows exposes this only when both the CPU and operating system permit
+// RDFSBASE/WRFSBASE. Other hosts intentionally keep guest FS switching off.
+[[nodiscard]] bool NativeGuestFsBaseSwitchSupported() noexcept;
+
 class NativeHleTrampoline;
 
 class NativeGuestContinuation final {
@@ -150,23 +154,27 @@ class NativeGuestExecutor final {
       memory::GuestMemory& memory, std::uint64_t entry_point,
       std::uint64_t stack_address, std::uint64_t stack_size,
       std::uint64_t parameters_address, std::uint64_t exit_handler_address,
-      NativeGuestExecutionContext* execution_context = nullptr) const;
+      NativeGuestExecutionContext* execution_context = nullptr,
+      std::uint64_t thread_pointer = 0) const;
   [[nodiscard]] NativeGuestExecutionResult ExecuteThread(
       memory::GuestMemory& memory, std::uint64_t entry_point,
       std::uint64_t stack_address, std::uint64_t stack_size,
       std::uint64_t argument,
-      NativeGuestExecutionContext* execution_context = nullptr) const;
+      NativeGuestExecutionContext* execution_context = nullptr,
+      std::uint64_t thread_pointer = 0) const;
   [[nodiscard]] NativeGuestExecutionResult ExecuteFunction(
       memory::GuestMemory& memory, std::uint64_t entry_point,
       std::uint64_t stack_address, std::uint64_t stack_size,
       std::span<const std::uint64_t> arguments,
-      NativeGuestExecutionContext* execution_context = nullptr) const;
+      NativeGuestExecutionContext* execution_context = nullptr,
+      std::uint64_t thread_pointer = 0) const;
   [[nodiscard]] NativeGuestExecutionResult Resume(
-      memory::GuestMemory& memory,
-      NativeGuestExecutionContext& execution_context) const;
+      memory::GuestMemory& memory, NativeGuestExecutionContext& execution_context,
+      std::uint64_t thread_pointer = 0) const;
   [[nodiscard]] NativeGuestExecutionResult Resume(
       memory::GuestMemory& memory, NativeGuestContinuation& continuation,
-      NativeGuestExecutionContext& execution_context) const;
+      NativeGuestExecutionContext& execution_context,
+      std::uint64_t thread_pointer = 0) const;
   [[nodiscard]] bool TakeContinuation(
       NativeGuestExecutionContext& execution_context,
       NativeGuestContinuation& continuation) const noexcept;
@@ -177,16 +185,18 @@ class NativeGuestExecutor final {
       std::uint64_t stack_address, std::uint64_t stack_size,
       std::span<const std::uint64_t> arguments,
       std::uint64_t readable_first_argument_size,
-      NativeGuestExecutionContext* execution_context) const;
+      NativeGuestExecutionContext* execution_context,
+      std::uint64_t thread_pointer) const;
   [[nodiscard]] static NativeGuestExecutionResult RunGuestEntry(
       memory::GuestMemory& memory, std::uint64_t entry_point,
       std::uint64_t stack_top, std::uint64_t root_frame,
       const std::array<std::uint64_t, 6>& arguments,
-      NativeGuestExecutionContext& execution_context);
+      NativeGuestExecutionContext& execution_context,
+      std::uint64_t thread_pointer);
   [[nodiscard]] static NativeGuestExecutionResult RunGuestContinuation(
       memory::GuestMemory& memory,
       NativeGuestExecutionContext& execution_context,
-      std::uint64_t hle_return_value);
+      std::uint64_t hle_return_value, std::uint64_t thread_pointer);
   static void ResetExecutionContext(
       NativeGuestExecutionContext& execution_context) noexcept;
   static void ResetContinuation(NativeGuestContinuation& continuation) noexcept;

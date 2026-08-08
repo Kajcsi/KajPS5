@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "cpu/host_executable_buffer.h"
+#include "loader/static_tls_instance.h"
 
 #if defined(_WIN32)
 #ifndef NOMINMAX
@@ -139,7 +140,7 @@ NativeGuestExecutionResult RunGuestEntryBridge(
     std::uint64_t entry_point, std::uint64_t guest_memory_begin,
     std::uint64_t guest_memory_end, std::uint64_t stack_top,
     std::uint64_t root_frame, const std::array<std::uint64_t, 6>& arguments,
-    volatile std::uint64_t* host_stack_slot,
+    std::uint64_t thread_pointer, volatile std::uint64_t* host_stack_slot,
     volatile std::uint64_t* recovery_address,
     volatile std::uint64_t* control_request,
     hle::HleContextStatus* hle_status) {
@@ -158,6 +159,15 @@ NativeGuestExecutionResult RunGuestEntryBridge(
                         reinterpret_cast<std::uintptr_t>(host_stack_slot)));
   Emit(bridge, {0x4c, 0x89, 0x20});
 
+  if (thread_pointer != 0) {
+    // rdfsbase r11; mov [r12+0x200], r11; mov r11, tp; wrfsbase r11
+    // REX must be W+B (0x49) because the register lives in the ModRM rm field.
+    Emit(bridge, {0xf3, 0x49, 0x0f, 0xae, 0xc3});
+    Emit(bridge, {0x4d, 0x89, 0x9c, 0x24, 0x00, 0x02, 0x00, 0x00});
+    EmitMoveImmediate(bridge, {0x49, 0xbb}, thread_pointer);
+    Emit(bridge, {0xf3, 0x49, 0x0f, 0xae, 0xd3});
+  }
+
   EmitMoveImmediate(bridge, {0x48, 0xb8}, stack_top);
   Emit(bridge, {0x48, 0x89, 0xc4});
   EmitMoveImmediate(bridge, {0x48, 0xbd}, root_frame);
@@ -171,6 +181,12 @@ NativeGuestExecutionResult RunGuestEntryBridge(
   Emit(bridge, {0xff, 0xd0});
   Emit(bridge, {0x49, 0x89, 0xc3});
   Emit(bridge, {0x4c, 0x89, 0xe4});
+  if (thread_pointer != 0) {
+    // mov rax, [r12+0x200]; wrfsbase rax
+    // rax is free here: the guest return value was already saved to r11.
+    Emit(bridge, {0x49, 0x8b, 0x84, 0x24, 0x00, 0x02, 0x00, 0x00});
+    Emit(bridge, {0xf3, 0x48, 0x0f, 0xae, 0xd0});
+  }
   EmitMoveImmediate(bridge, {0x48, 0xb8},
                     static_cast<std::uint64_t>(
                         reinterpret_cast<std::uintptr_t>(host_stack_slot)));
@@ -184,6 +200,11 @@ NativeGuestExecutionResult RunGuestEntryBridge(
 
   const auto recovery_offset = bridge.size();
   Emit(bridge, {0xfc});
+  if (thread_pointer != 0) {
+    // mov rax, [rsp+0x200]; wrfsbase rax
+    Emit(bridge, {0x48, 0x8b, 0x84, 0x24, 0x00, 0x02, 0x00, 0x00});
+    Emit(bridge, {0xf3, 0x48, 0x0f, 0xae, 0xd0});
+  }
   EmitMoveImmediate(bridge, {0x48, 0xb8},
                     static_cast<std::uint64_t>(
                         reinterpret_cast<std::uintptr_t>(host_stack_slot)));
@@ -257,7 +278,7 @@ NativeGuestExecutionResult RunGuestContinuationBridge(
     std::uint64_t return_value,
     const std::array<std::uint64_t, 6>& nonvolatile_registers,
     const std::array<std::byte, 512>& floating_state,
-    volatile std::uint64_t* host_stack_slot,
+    std::uint64_t thread_pointer, volatile std::uint64_t* host_stack_slot,
     volatile std::uint64_t* recovery_address,
     volatile std::uint64_t* control_request,
     hle::HleContextStatus* hle_status) {
@@ -272,6 +293,15 @@ NativeGuestExecutionResult RunGuestContinuationBridge(
                     static_cast<std::uint64_t>(
                         reinterpret_cast<std::uintptr_t>(host_stack_slot)));
   Emit(bridge, {0x48, 0x89, 0x20});
+
+  if (thread_pointer != 0) {
+    // rdfsbase r11; mov [rsp+0x200], r11; mov r11, tp; wrfsbase r11
+    // REX must be W+B (0x49) because the register lives in the ModRM rm field.
+    Emit(bridge, {0xf3, 0x49, 0x0f, 0xae, 0xc3});
+    Emit(bridge, {0x4c, 0x89, 0x9c, 0x24, 0x00, 0x02, 0x00, 0x00});
+    EmitMoveImmediate(bridge, {0x49, 0xbb}, thread_pointer);
+    Emit(bridge, {0xf3, 0x49, 0x0f, 0xae, 0xd3});
+  }
 
   EmitMoveImmediate(bridge, {0x48, 0xb8},
                     static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(
@@ -294,6 +324,14 @@ NativeGuestExecutionResult RunGuestContinuationBridge(
                     static_cast<std::uint64_t>(
                         reinterpret_cast<std::uintptr_t>(host_stack_slot)));
   Emit(bridge, {0x48, 0x8b, 0x20});
+  if (thread_pointer != 0) {
+    // mov r10, [rsp+0x200]; wrfsbase r10
+    // rax still holds the host-stack-slot pointer; r11 holds the guest
+    // return value, so r10 is the free scratch register here. REX on the
+    // wrfsbase must be W+B (0x49) because the register is in the rm field.
+    Emit(bridge, {0x4c, 0x8b, 0x94, 0x24, 0x00, 0x02, 0x00, 0x00});
+    Emit(bridge, {0xf3, 0x49, 0x0f, 0xae, 0xd2});
+  }
   Emit(bridge, {0x48, 0xc7, 0x00, 0x00, 0x00, 0x00, 0x00});
   Emit(bridge, {0x48, 0x0f, 0xae, 0x0c, 0x24});
   Emit(bridge, {0x48, 0x81, 0xc4, 0x08, 0x02, 0x00, 0x00});
@@ -303,6 +341,11 @@ NativeGuestExecutionResult RunGuestContinuationBridge(
 
   const auto recovery_offset = bridge.size();
   Emit(bridge, {0xfc});
+  if (thread_pointer != 0) {
+    // mov rax, [rsp+0x200]; wrfsbase rax
+    Emit(bridge, {0x48, 0x8b, 0x84, 0x24, 0x00, 0x02, 0x00, 0x00});
+    Emit(bridge, {0xf3, 0x48, 0x0f, 0xae, 0xd0});
+  }
   EmitMoveImmediate(bridge, {0x48, 0xb8},
                     static_cast<std::uint64_t>(
                         reinterpret_cast<std::uintptr_t>(host_stack_slot)));
@@ -370,33 +413,44 @@ NativeGuestExecutionResult RunGuestContinuationBridge(
 
 }  // namespace
 
+bool NativeGuestFsBaseSwitchSupported() noexcept {
+#if defined(_WIN32) && defined(_M_X64) && defined(PF_RDWRFSGSBASE_AVAILABLE)
+  return IsProcessorFeaturePresent(PF_RDWRFSGSBASE_AVAILABLE) != FALSE;
+#else
+  return false;
+#endif
+}
+
 NativeGuestExecutionResult NativeGuestExecutor::Execute(
     memory::GuestMemory& memory, std::uint64_t entry_point,
     std::uint64_t stack_address, std::uint64_t stack_size,
     std::uint64_t parameters_address, std::uint64_t exit_handler_address,
-    NativeGuestExecutionContext* execution_context) const {
+    NativeGuestExecutionContext* execution_context,
+    std::uint64_t thread_pointer) const {
   const std::array arguments = {parameters_address, exit_handler_address};
   return ExecuteEntry(memory, entry_point, stack_address, stack_size, arguments,
-                      sizeof(NativeGuestEntryParameters), execution_context);
+                      sizeof(NativeGuestEntryParameters), execution_context,
+                      thread_pointer);
 }
 
 NativeGuestExecutionResult NativeGuestExecutor::ExecuteThread(
     memory::GuestMemory& memory, std::uint64_t entry_point,
     std::uint64_t stack_address, std::uint64_t stack_size,
-    std::uint64_t argument,
-    NativeGuestExecutionContext* execution_context) const {
+    std::uint64_t argument, NativeGuestExecutionContext* execution_context,
+    std::uint64_t thread_pointer) const {
   const std::array arguments = {argument};
   return ExecuteEntry(memory, entry_point, stack_address, stack_size, arguments,
-                      0, execution_context);
+                      0, execution_context, thread_pointer);
 }
 
 NativeGuestExecutionResult NativeGuestExecutor::ExecuteFunction(
     memory::GuestMemory& memory, std::uint64_t entry_point,
     std::uint64_t stack_address, std::uint64_t stack_size,
     std::span<const std::uint64_t> arguments,
-    NativeGuestExecutionContext* execution_context) const {
+    NativeGuestExecutionContext* execution_context,
+    std::uint64_t thread_pointer) const {
   return ExecuteEntry(memory, entry_point, stack_address, stack_size, arguments,
-                      0, execution_context);
+                      0, execution_context, thread_pointer);
 }
 
 NativeGuestExecutionResult NativeGuestExecutor::ExecuteEntry(
@@ -404,7 +458,8 @@ NativeGuestExecutionResult NativeGuestExecutor::ExecuteEntry(
     std::uint64_t stack_address, std::uint64_t stack_size,
     std::span<const std::uint64_t> arguments,
     std::uint64_t readable_first_argument_size,
-    NativeGuestExecutionContext* execution_context) const {
+    NativeGuestExecutionContext* execution_context,
+    std::uint64_t thread_pointer) const {
   NativeGuestExecutionContext local_context;
   auto* const context =
       execution_context != nullptr ? execution_context : &local_context;
@@ -439,6 +494,16 @@ NativeGuestExecutionResult NativeGuestExecutor::ExecuteEntry(
                          memory::GuestMemoryProtection::kRead))) {
     return {NativeGuestExecutionStatus::kGuestParametersNotReadable, 0};
   }
+  if (thread_pointer != 0 &&
+      ((thread_pointer & (loader::kStaticTlsThreadPointerAlignment - 1)) != 0 ||
+       !memory.CanAccess(thread_pointer,
+                         loader::kStaticTlsThreadControlBlockBytes,
+                         stack_access))) {
+    return {NativeGuestExecutionStatus::kInvalidArgument, 0};
+  }
+  if (thread_pointer != 0 && !NativeGuestFsBaseSwitchSupported()) {
+    return {NativeGuestExecutionStatus::kUnsupportedHost, 0};
+  }
 
   std::array<std::uint64_t, 6> argument_registers{};
   std::copy(arguments.begin(), arguments.end(), argument_registers.begin());
@@ -460,7 +525,8 @@ NativeGuestExecutionResult NativeGuestExecutor::ExecuteEntry(
   context->guest_memory_end_ = memory.end_address();
   context->root_return_slot_ = stack_top - sizeof(std::uint64_t);
   const auto result = RunGuestEntry(memory, entry_point, stack_top, root_frame,
-                                    argument_registers, *context);
+                                    argument_registers, *context,
+                                    thread_pointer);
   if (result.status != NativeGuestExecutionStatus::kHleBlocked &&
       result.status != NativeGuestExecutionStatus::kHleYielded) {
     ResetExecutionContext(*context);
@@ -470,11 +536,12 @@ NativeGuestExecutionResult NativeGuestExecutor::ExecuteEntry(
 }
 
 NativeGuestExecutionResult NativeGuestExecutor::Resume(
-    memory::GuestMemory& memory,
-    NativeGuestExecutionContext& execution_context) const {
+    memory::GuestMemory& memory, NativeGuestExecutionContext& execution_context,
+    std::uint64_t thread_pointer) const {
 #if !defined(_M_X64) && !defined(__x86_64__)
   (void)memory;
   (void)execution_context;
+  (void)thread_pointer;
   return {NativeGuestExecutionStatus::kUnsupportedHost, 0};
 #else
   const auto resume_arguments_address = static_cast<std::uint64_t>(
@@ -499,6 +566,17 @@ NativeGuestExecutionResult NativeGuestExecutor::Resume(
                         memory::GuestMemoryProtection::kRead |
                             memory::GuestMemoryProtection::kWrite)) {
     return {NativeGuestExecutionStatus::kInvalidArgument, 0};
+  }
+  if (thread_pointer != 0 &&
+      ((thread_pointer & (loader::kStaticTlsThreadPointerAlignment - 1)) != 0 ||
+       !memory.CanAccess(thread_pointer,
+                         loader::kStaticTlsThreadControlBlockBytes,
+                         memory::GuestMemoryProtection::kRead |
+                             memory::GuestMemoryProtection::kWrite))) {
+    return {NativeGuestExecutionStatus::kInvalidArgument, 0};
+  }
+  if (thread_pointer != 0 && !NativeGuestFsBaseSwitchSupported()) {
+    return {NativeGuestExecutionStatus::kUnsupportedHost, 0};
   }
 #if defined(_WIN32)
   if (active_fault_boundary != nullptr) {
@@ -530,8 +608,8 @@ NativeGuestExecutionResult NativeGuestExecutor::Resume(
     return result;
   }
 
-  const auto result =
-      RunGuestContinuation(memory, execution_context, hle_return);
+  const auto result = RunGuestContinuation(memory, execution_context,
+                                           hle_return, thread_pointer);
   if (result.status != NativeGuestExecutionStatus::kHleBlocked &&
       result.status != NativeGuestExecutionStatus::kHleYielded) {
     ResetExecutionContext(execution_context);
@@ -542,7 +620,8 @@ NativeGuestExecutionResult NativeGuestExecutor::Resume(
 
 NativeGuestExecutionResult NativeGuestExecutor::Resume(
     memory::GuestMemory& memory, NativeGuestContinuation& continuation,
-    NativeGuestExecutionContext& execution_context) const {
+    NativeGuestExecutionContext& execution_context,
+    std::uint64_t thread_pointer) const {
   if (!continuation.valid_ || execution_context.active() ||
       execution_context.control_request_ !=
           NativeGuestExecutionContext::kControlNone ||
@@ -572,7 +651,7 @@ NativeGuestExecutionResult NativeGuestExecutor::Resume(
       continuation.nonvolatile_registers_;
   execution_context.floating_state_ = continuation.floating_state_;
   ResetContinuation(continuation);
-  return Resume(memory, execution_context);
+  return Resume(memory, execution_context, thread_pointer);
 }
 
 bool NativeGuestExecutor::TakeContinuation(
@@ -608,7 +687,8 @@ NativeGuestExecutionResult NativeGuestExecutor::RunGuestEntry(
     memory::GuestMemory& memory, std::uint64_t entry_point,
     std::uint64_t stack_top, std::uint64_t root_frame,
     const std::array<std::uint64_t, 6>& arguments,
-    NativeGuestExecutionContext& execution_context) {
+    NativeGuestExecutionContext& execution_context,
+    std::uint64_t thread_pointer) {
 #if !defined(_M_X64) && !defined(__x86_64__)
   (void)memory;
   (void)entry_point;
@@ -616,11 +696,13 @@ NativeGuestExecutionResult NativeGuestExecutor::RunGuestEntry(
   (void)root_frame;
   (void)arguments;
   (void)execution_context;
+  (void)thread_pointer;
   return {NativeGuestExecutionStatus::kUnsupportedHost, 0};
 #else
   return RunGuestEntryBridge(
       entry_point, memory.base_address(), memory.end_address(), stack_top,
-      root_frame, arguments, &execution_context.host_stack_pointer_,
+      root_frame, arguments, thread_pointer,
+      &execution_context.host_stack_pointer_,
       &execution_context.recovery_address_, &execution_context.control_request_,
       &execution_context.hle_status_);
 #endif
@@ -628,11 +710,12 @@ NativeGuestExecutionResult NativeGuestExecutor::RunGuestEntry(
 
 NativeGuestExecutionResult NativeGuestExecutor::RunGuestContinuation(
     memory::GuestMemory& memory, NativeGuestExecutionContext& execution_context,
-    std::uint64_t hle_return_value) {
+    std::uint64_t hle_return_value, std::uint64_t thread_pointer) {
 #if !defined(_M_X64) && !defined(__x86_64__)
   (void)memory;
   (void)execution_context;
   (void)hle_return_value;
+  (void)thread_pointer;
   return {NativeGuestExecutionStatus::kUnsupportedHost, 0};
 #else
   return RunGuestContinuationBridge(
@@ -640,7 +723,8 @@ NativeGuestExecutionResult NativeGuestExecutor::RunGuestContinuation(
       execution_context.resume_stack_pointer_,
       execution_context.root_return_slot_, hle_return_value,
       execution_context.nonvolatile_registers_,
-      execution_context.floating_state_, &execution_context.host_stack_pointer_,
+      execution_context.floating_state_, thread_pointer,
+      &execution_context.host_stack_pointer_,
       &execution_context.recovery_address_, &execution_context.control_request_,
       &execution_context.hle_status_);
 #endif

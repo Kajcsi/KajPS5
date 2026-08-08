@@ -25,11 +25,17 @@ ExportRegistryStatus ExportRegistry::Register(std::string library,
   }
 
   std::lock_guard lock(mutex_);
-  const auto [entry, inserted] = entries_.emplace(
-      Key{std::move(library), std::move(symbol)}, std::move(handler));
-  (void)entry;
-  return inserted ? ExportRegistryStatus::kOk
-                  : ExportRegistryStatus::kAlreadyExists;
+  const Key key{std::move(library), std::move(symbol)};
+  const auto found = entries_.find(key);
+  if (found == entries_.end()) {
+    entries_.emplace(std::move(key), Entry{std::move(handler), false});
+    return ExportRegistryStatus::kOk;
+  }
+  if (!found->second.fallback) {
+    return ExportRegistryStatus::kAlreadyExists;
+  }
+  found->second = Entry{std::move(handler), false};
+  return ExportRegistryStatus::kOk;
 }
 
 ExportRegistryStatus ExportRegistry::RegisterBatch(
@@ -48,16 +54,34 @@ ExportRegistryStatus ExportRegistry::RegisterBatch(
   std::lock_guard lock(mutex_);
   auto updated = entries_;
   for (auto& definition : exports) {
-    const auto [entry, inserted] = updated.emplace(
-        Key{std::move(definition.library), std::move(definition.symbol)},
-        std::move(definition.handler));
-    (void)entry;
-    if (!inserted) {
+    const Key key{std::move(definition.library), std::move(definition.symbol)};
+    const auto found = updated.find(key);
+    if (found != updated.end() && !found->second.fallback) {
       return ExportRegistryStatus::kAlreadyExists;
+    }
+    if (found == updated.end()) {
+      updated.emplace(std::move(key), Entry{std::move(definition.handler), false});
+    } else {
+      found->second = Entry{std::move(definition.handler), false};
     }
   }
   entries_.swap(updated);
   return ExportRegistryStatus::kOk;
+}
+
+ExportRegistryStatus ExportRegistry::RegisterFallback(
+    std::string library, std::string symbol, HleHandler handler) {
+  if (!IsValidName(library, kMaximumExportLibraryLength) ||
+      !IsValidName(symbol, kMaximumExportSymbolLength) || !handler) {
+    return ExportRegistryStatus::kInvalidArgument;
+  }
+  std::lock_guard lock(mutex_);
+  const auto [entry, inserted] = entries_.emplace(
+      Key{std::move(library), std::move(symbol)},
+      Entry{std::move(handler), true});
+  (void)entry;
+  return inserted ? ExportRegistryStatus::kOk
+                  : ExportRegistryStatus::kAlreadyExists;
 }
 
 ExportRegistry::ResolvedExport ExportRegistry::ResolveLocked(
@@ -74,7 +98,7 @@ ExportRegistry::ResolvedExport ExportRegistry::ResolveLocked(
     }
     const auto found = entries_.find(Key{library, std::string(symbol)});
     if (found != entries_.end()) {
-      resolved = {ExportRegistryStatus::kOk, found->second,
+      resolved = {ExportRegistryStatus::kOk, found->second.handler,
                   found->first.first};
       break;
     }
@@ -85,14 +109,14 @@ ExportRegistry::ResolvedExport ExportRegistry::ResolveLocked(
     return resolved;
   }
   if (library_order.empty()) {
-    for (const auto& [key, handler] : entries_) {
+  for (const auto& [key, entry] : entries_) {
       if (key.second != symbol) {
         continue;
       }
       if (resolved.status == ExportRegistryStatus::kOk) {
         return {ExportRegistryStatus::kAmbiguous, {}, {}};
       }
-      resolved = {ExportRegistryStatus::kOk, handler, key.first};
+      resolved = {ExportRegistryStatus::kOk, entry.handler, key.first};
     }
   }
   return resolved;

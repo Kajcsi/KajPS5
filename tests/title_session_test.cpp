@@ -186,10 +186,15 @@ int main() {
             TitleSessionStatus::kInvalidState,
         "title session accepted a second start");
 
-  const auto completed = session->Run(16);
+  kajps5::runtime::TitleSessionResult completed;
+  std::size_t completed_slices = 0;
+  do {
+    completed = session->Run(16);
+    completed_slices += completed.slices;
+  } while (completed.status == TitleSessionStatus::kPending);
   std::array<std::byte, 1> sequence{};
   Check(completed && completed.phase == TitleSessionPhase::kExited &&
-            completed.exit_value == 42 && completed.slices == 5 &&
+            completed.exit_value == 42 && completed_slices == 5 &&
             session->exit_value() == 42 &&
             session->memory().Read(sequence_address, sequence) &&
             sequence[0] == std::byte{5} &&
@@ -304,14 +309,20 @@ int main() {
             blocked_session->thread_runner().AllocateAndRegisterFunctionThread(
                 peer.handle, blocked_base, {}),
         "initializer wake peer registration failed");
-  const auto resumed = blocked_session->Run(8);
+  kajps5::runtime::TitleSessionResult resumed;
+  std::size_t resumed_slices = 0;
+  do {
+    resumed = blocked_session->Run(8);
+    resumed_slices += resumed.slices;
+  } while (resumed.status == TitleSessionStatus::kPending);
   std::array<std::byte, 1> blocked_sequence_value{};
-  Check(resumed && resumed.exit_value == 7 && resumed.slices == 3 &&
+  Check(resumed && resumed.exit_value == 7 && resumed_slices == 3 &&
             block_dispatches == 2 && wake_dispatches == 1 &&
             blocked_session->memory().Read(blocked_sequence,
                                            blocked_sequence_value) &&
             blocked_sequence_value[0] == std::byte{3},
         "title initializer did not resume after scheduled peer work");
+  std::cout << "title session tests passed\n";
   return 0;
 #endif
 }

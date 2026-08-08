@@ -52,6 +52,10 @@ NativeGuestThreadRunner::~NativeGuestThreadRunner() {
     if (state.owns_stack) {
       (void)memory_.Unmap(state.allocation_address, state.allocation_size);
     }
+    if (state.owns_tls) {
+      (void)memory_.Unmap(state.tls_allocation_address,
+                          state.tls_allocation_size);
+    }
   }
 }
 
@@ -143,6 +147,17 @@ NativeGuestThreadRunner::RegisterThreadEntry(
   state.parameters_address = parameters_address;
   state.exit_handler_address = exit_handler_address;
   state.entry_kind = entry_kind;
+  if (tls_templates_installed_) {
+    const auto tls = loader::CreateStaticTlsInstance(
+        memory_, tls_layout_, tls_modules_, stack_address + stack_size);
+    if (!tls) {
+      return NativeGuestThreadRegistrationStatus::kGuestTlsAllocationFailed;
+    }
+    state.thread_pointer = tls.instance.thread_pointer;
+    state.owns_tls = true;
+    state.tls_allocation_address = tls.instance.allocation_address;
+    state.tls_allocation_size = tls.instance.allocation_size;
+  }
   state.continuation = std::make_unique<NativeGuestContinuation>();
   threads_.emplace(handle, std::move(state));
   return NativeGuestThreadRegistrationStatus::kOk;
@@ -345,27 +360,29 @@ NativeGuestThreadRunResult NativeGuestThreadRunner::RunNext() {
   }
 
   auto& state = registered->second;
+  last_guest_instruction_pointer_ = thread->entry_address;
   NativeGuestExecutionResult execution;
   if (state.continuation->valid()) {
-    execution =
-        executor_.Resume(memory_, *state.continuation, execution_context_);
+    execution = executor_.Resume(memory_, *state.continuation,
+                                 execution_context_, state.thread_pointer);
   } else if (!state.started) {
     state.started = true;
     if (state.entry_kind == EntryKind::kProcess) {
       execution =
           executor_.Execute(memory_, thread->entry_address, state.stack_address,
                             state.stack_size, state.parameters_address,
-                            state.exit_handler_address, &execution_context_);
+                            state.exit_handler_address, &execution_context_,
+                            state.thread_pointer);
     } else if (state.entry_kind == EntryKind::kFunction) {
       execution = executor_.ExecuteFunction(
           memory_, thread->entry_address, state.stack_address, state.stack_size,
           std::span<const std::uint64_t>(state.arguments.data(),
                                          state.argument_count),
-          &execution_context_);
+          &execution_context_, state.thread_pointer);
     } else {
       execution = executor_.ExecuteThread(
           memory_, thread->entry_address, state.stack_address, state.stack_size,
-          thread->argument, &execution_context_);
+          thread->argument, &execution_context_, state.thread_pointer);
     }
   } else {
     return {NativeGuestThreadRunStatus::kThreadStateInvalid, *selected};
@@ -425,11 +442,15 @@ NativeGuestThreadRunResult NativeGuestThreadRunner::RunNext() {
 
 bool NativeGuestThreadRunner::ReleaseThread(
     std::map<kernel::KernelHandle, ThreadState>::iterator thread) noexcept {
-  const auto released = !thread->second.owns_stack ||
-                        memory_.Unmap(thread->second.allocation_address,
-                                      thread->second.allocation_size);
+  const auto stack_released = !thread->second.owns_stack ||
+                              memory_.Unmap(thread->second.allocation_address,
+                                            thread->second.allocation_size);
+  const auto tls_released =
+      !thread->second.owns_tls ||
+      memory_.Unmap(thread->second.tls_allocation_address,
+                    thread->second.tls_allocation_size);
   threads_.erase(thread);
-  return released;
+  return stack_released && tls_released;
 }
 
 std::optional<NativeGuestThreadRunResult>
@@ -456,6 +477,19 @@ NativeGuestThreadRunner::PrepareReadyPthreads() {
   return std::nullopt;
 }
 
+bool NativeGuestThreadRunner::InstallStaticTlsTemplates(
+    const loader::StaticTlsLayout& layout,
+    std::vector<loader::StaticTlsTemplateModule> modules) {
+  if (tls_templates_installed_ || !threads_.empty() ||
+      layout.module_count() == 0 || layout.module_count() != modules.size()) {
+    return false;
+  }
+  tls_layout_ = layout;
+  tls_modules_ = std::move(modules);
+  tls_templates_installed_ = true;
+  return true;
+}
+
 NativeGuestThreadRunResult NativeGuestThreadRunner::RunUntilIdle(
     std::size_t maximum_slices) {
   NativeGuestThreadRunResult last;
@@ -477,6 +511,11 @@ NativeGuestThreadRunResult NativeGuestThreadRunner::RunUntilIdle(
 
 std::size_t NativeGuestThreadRunner::registered_thread_count() const noexcept {
   return threads_.size();
+}
+
+std::uint64_t NativeGuestThreadRunner::last_guest_instruction_pointer()
+    const noexcept {
+  return last_guest_instruction_pointer_;
 }
 
 std::string_view NativeGuestThreadRegistrationStatusName(
@@ -506,6 +545,8 @@ std::string_view NativeGuestThreadRegistrationStatusName(
       return "guest-parameters-not-readable";
     case NativeGuestThreadRegistrationStatus::kGuestStackAllocationFailed:
       return "guest-stack-allocation-failed";
+    case NativeGuestThreadRegistrationStatus::kGuestTlsAllocationFailed:
+      return "guest-tls-allocation-failed";
   }
   return "unknown";
 }

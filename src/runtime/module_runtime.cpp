@@ -250,16 +250,6 @@ ModuleRuntimeResult ModuleRuntime::RelocateAndPlan(
       result.relocation_status = program.relocation.status;
       return result;
     }
-    if (program.relocation.unresolved_import_count != 0) {
-      auto result = Failure(ModuleRuntimeStatus::kUnresolvedImports, index,
-                            program.guest_path);
-      result.relocation_status = program.relocation.status;
-      result.unresolved_import_count =
-          program.relocation.unresolved_import_count;
-      result.import_coverage =
-          hle::AnalyzeImportCoverage(program.metadata, imports);
-      return result;
-    }
     program.lifecycle = loader::BuildLifecycleCallPlan(program.launch, memory_,
                                                        program.load_bias);
     if (!program.lifecycle) {
@@ -270,7 +260,32 @@ ModuleRuntimeResult ModuleRuntime::RelocateAndPlan(
     }
   }
   relocated_ = true;
-  return {};
+  ModuleRuntimeResult result;
+  bool diagnosed_unresolved_program = false;
+  for (std::size_t index = 0; index < programs_.size(); ++index) {
+    const auto& program = programs_[index];
+    if (program.relocation.unresolved_import_count >
+        std::numeric_limits<std::size_t>::max() -
+            result.unresolved_import_count) {
+      result.unresolved_import_count =
+          std::numeric_limits<std::size_t>::max();
+    } else {
+      result.unresolved_import_count +=
+          program.relocation.unresolved_import_count;
+    }
+    if (program.relocation.unresolved_import_count != 0 &&
+        !diagnosed_unresolved_program) {
+      // Coverage is per ELF metadata table. Report the first program with an
+      // unresolved relocation so adjacent-module diagnostics cannot describe
+      // the main program while its unresolved-count is nonzero elsewhere.
+      result.program_index = index;
+      result.failure_path = program.guest_path;
+      result.import_coverage = hle::AnalyzeImportCoverage(program.metadata,
+                                                           imports);
+      diagnosed_unresolved_program = true;
+    }
+  }
+  return result;
 }
 
 CombinedLifecycleResult ModuleRuntime::BuildCombinedLifecycle() const {

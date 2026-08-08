@@ -83,6 +83,7 @@ add_library(kajps5_core STATIC
   hle/libc_exports.cpp
   hle/libc_format.cpp
   hle/libc_thread_exports.cpp
+  hle/unresolved_import_stubs.cpp
   kernel/ampr_command_buffer.cpp
   kernel/clock.cpp
   kernel/cxa_guard.cpp
@@ -109,6 +110,7 @@ add_library(kajps5_core STATIC
   loader/relocation_trace.cpp
   loader/relocator.cpp
   loader/sce_symbol.cpp
+  loader/static_tls_instance.cpp
   loader/static_tls_layout.cpp
   runtime/title_loader.cpp
   runtime/module_runtime.cpp

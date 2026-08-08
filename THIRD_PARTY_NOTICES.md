@@ -917,6 +917,27 @@ GPL-2.0-or-later. The combined guidance is distributed under GPL-2.0-only.
 
 ## New adaptations
 
+The static TLS instance, guest TCB/DTV placement, and Windows-gated guest
+FS-base switching in `src/loader/static_tls_instance.*` and
+`src/cpu/native_guest_executor.*` adapt the runtime layout architecture from
+KytyPS5 `src/loader/runtimeLinker.cpp` at commit
+`fb5ecec455cf6c67154134429485ffccbfc34203`. The positive-offset TCB fields,
+template copy and zero-fill checks, teardown behavior, host TLS preservation,
+and focused edge-case coverage independently re-express behavior observed in
+SharpEmu `src/SharpEmu.HLE/GuestTlsTemplate.cs` and
+`src/SharpEmu.Core/Cpu/CpuDispatcher.cs` at commit
+`9e10d7c44a2821cfd5ccd3417c09c0cf269285a4`.
+
+The unresolved-import diagnostic thunks and replaceable fallback registration
+in `src/hle/{export_registry,unresolved_import_stubs}.*` adapt the import
+fallback shape from KytyPS5 `src/loader/runtimeLinker.cpp` at commit
+`fb5ecec455cf6c67154134429485ffccbfc34203`; bounded call diagnostics and
+known-data exclusion independently re-express SharpEmu import and diagnostic
+behavior at commit `9e10d7c44a2821cfd5ccd3417c09c0cf269285a4`. KytyPS5 is
+GPL-2.0-only and SharpEmu is GPL-2.0-or-later. No upstream source was copied
+verbatim. KajPS5 keeps the behavior in its single C++ runtime, scheduler,
+GuestMemory owner, and GPU owner.
+
 The RenderTarget64KB guest-image planner path in `src/gpu/image_layout.*`
 adapts KytyPS5 `src/graphics/presentation/videoOut.cpp` and
 `src/graphics/guest_gpu/tile.{h,cpp}` at commit

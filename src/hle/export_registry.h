@@ -64,6 +64,10 @@ class ExportRegistry final {
                                               HleHandler handler);
   [[nodiscard]] ExportRegistryStatus RegisterBatch(
       std::vector<HleExportDefinition> exports);
+  // A fallback supplies diagnostic compatibility only. It cannot replace an
+  // installed export; a later normal registration replaces it atomically.
+  [[nodiscard]] ExportRegistryStatus RegisterFallback(
+      std::string library, std::string symbol, HleHandler handler);
   [[nodiscard]] HleLookupResult Lookup(
       std::string_view symbol,
       std::span<const std::string> library_order) const;
@@ -89,7 +93,12 @@ class ExportRegistry final {
       std::span<const std::string> library_order) const;
 
   mutable std::mutex mutex_;
-  std::map<Key, HleHandler> entries_;
+  struct Entry {
+    HleHandler handler;
+    bool fallback = false;
+  };
+
+  std::map<Key, Entry> entries_;
 };
 
 [[nodiscard]] std::string_view ExportRegistryStatusName(
