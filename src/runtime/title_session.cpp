@@ -105,6 +105,10 @@ TitleHleSetupResult TitleSession::PrepareHleBatch(
     result.status = TitleHleSetupStatus::kDataSetupFailed;
     return result;
   }
+  kernel_runtime_.SetSanitizerMallocReplaceAddress(
+      result.data.sanitizer_malloc_replace_address);
+  kernel_runtime_.SetSanitizerNewReplaceAddress(
+      result.data.sanitizer_new_replace_address);
 
   result.export_status =
       hle::RegisterKernelExports(hle_exports_, kernel_runtime_);

@@ -18,6 +18,24 @@ inline constexpr auto kKernelStackCheckFailName = "__stack_chk_fail";
 inline constexpr auto kKernelStackCheckFailNid = "Ou3iL1abvng";
 inline constexpr auto kKernelGetProcParamName = "sceKernelGetProcParam";
 inline constexpr auto kKernelGetProcParamNid = "959qrazPIrg";
+inline constexpr auto kKernelGetSanitizerNewReplaceExternalName =
+    "sceKernelGetSanitizerNewReplaceExternal";
+inline constexpr auto kKernelGetSanitizerNewReplaceExternalNid = "bnZxYgAFeA0";
+inline constexpr auto kKernelGetSanitizerMallocReplaceExternalName =
+    "sceKernelGetSanitizerMallocReplaceExternal";
+inline constexpr auto kKernelGetSanitizerMallocReplaceExternalNid =
+    "py6L8jiVAN8";
+inline constexpr auto kKernelRtldSetApplicationHeapApiName =
+    "_sceKernelRtldSetApplicationHeapAPI";
+inline constexpr auto kKernelRtldSetApplicationHeapApiNid = "p5EcQeEeJAE";
+inline constexpr auto kKernelSetThreadAtexitCountName =
+    "_sceKernelSetThreadAtexitCount";
+inline constexpr auto kKernelSetThreadAtexitCountNid = "pB-yGZ2nQ9o";
+inline constexpr auto kKernelSetThreadAtexitReportName =
+    "_sceKernelSetThreadAtexitReport";
+inline constexpr auto kKernelSetThreadAtexitReportNid = "WhCc1w3EhSI";
+inline constexpr auto kKernelSetThreadDtorsName = "_sceKernelSetThreadDtors";
+inline constexpr auto kKernelSetThreadDtorsNid = "rNhWz+lvOMU";
 
 inline constexpr std::int32_t kKernelHleErrorNotFound = -2147352574;
 inline constexpr std::int32_t kKernelHleErrorNoSuchProcess = -2147352573;

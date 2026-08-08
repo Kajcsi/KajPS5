@@ -76,7 +76,7 @@ int main() {
   ExportRegistry registry;
   Check(kajps5::hle::RegisterKernelExports(registry, runtime) ==
             ExportRegistryStatus::kOk &&
-            registry.size() == 236,
+            registry.size() == 248,
         "default kernel exports did not register atomically");
 
   GuestMemory memory(0x1000, 0x1000);
@@ -85,11 +85,32 @@ int main() {
   const std::vector<std::string> libraries = {"libkernel"};
   HleCallContext direct_memory_context(memory);
   HleCallContext default_proc_param_context(memory);
+  HleCallContext default_malloc_replace_context(memory);
+  HleCallContext default_new_replace_context(memory);
   Check(registry.Dispatch(kajps5::hle::kKernelGetProcParamName, libraries,
                           default_proc_param_context) &&
             default_proc_param_context.GetRegister(HleRegister::kRax)
                     .value_or(1) == 0,
         "default proc-param export did not return zero");
+  Check(runtime.sanitizer_malloc_replace_address() == 0 &&
+            runtime.sanitizer_new_replace_address() == 0 &&
+            runtime.application_heap_api_address() == 0 &&
+            runtime.thread_atexit_count_callback() == 0 &&
+            runtime.thread_atexit_report_callback() == 0 &&
+            runtime.thread_dtors_callback() == 0 &&
+            registry.Dispatch(
+                kajps5::hle::kKernelGetSanitizerMallocReplaceExternalName,
+                libraries, default_malloc_replace_context) &&
+            default_malloc_replace_context.GetRegister(HleRegister::kRax)
+                    .value_or(1) ==
+                0 &&
+            registry.Dispatch(
+                kajps5::hle::kKernelGetSanitizerNewReplaceExternalNid,
+                libraries, default_new_replace_context) &&
+            default_new_replace_context.GetRegister(HleRegister::kRax)
+                    .value_or(1) ==
+                0,
+        "runtime registration defaults are not zero");
   constexpr std::uint64_t kProcessParametersAddress = 0x1234'5678'9abc'def0;
   runtime.SetProcessParametersAddress(kProcessParametersAddress);
   HleCallContext proc_param_name_context(memory);
@@ -103,6 +124,69 @@ int main() {
             proc_param_nid_context.GetRegister(HleRegister::kRax).value_or(0) ==
                 kProcessParametersAddress,
         "proc-param name and NID exports did not use the shared runtime");
+  constexpr std::uint64_t kMallocReplaceAddress = 0x40000300;
+  constexpr std::uint64_t kNewReplaceAddress = 0x40000400;
+  runtime.SetSanitizerMallocReplaceAddress(kMallocReplaceAddress);
+  runtime.SetSanitizerNewReplaceAddress(kNewReplaceAddress);
+  HleCallContext malloc_replace_name_context(memory);
+  HleCallContext malloc_replace_nid_context(memory);
+  HleCallContext new_replace_name_context(memory);
+  HleCallContext new_replace_nid_context(memory);
+  Check(registry.Dispatch(
+                kajps5::hle::kKernelGetSanitizerMallocReplaceExternalName,
+                libraries, malloc_replace_name_context) &&
+            malloc_replace_name_context.GetRegister(HleRegister::kRax)
+                    .value_or(0) ==
+                kMallocReplaceAddress &&
+            registry.Dispatch(
+                kajps5::hle::kKernelGetSanitizerMallocReplaceExternalNid,
+                libraries, malloc_replace_nid_context) &&
+            malloc_replace_nid_context.GetRegister(HleRegister::kRax)
+                    .value_or(0) ==
+                kMallocReplaceAddress &&
+            registry.Dispatch(
+                kajps5::hle::kKernelGetSanitizerNewReplaceExternalName,
+                libraries, new_replace_name_context) &&
+            new_replace_name_context.GetRegister(HleRegister::kRax)
+                    .value_or(0) ==
+                kNewReplaceAddress &&
+            registry.Dispatch(
+                kajps5::hle::kKernelGetSanitizerNewReplaceExternalNid,
+                libraries, new_replace_nid_context) &&
+            new_replace_nid_context.GetRegister(HleRegister::kRax)
+                    .value_or(0) ==
+                kNewReplaceAddress,
+        "sanitizer replacement getter aliases did not use the shared runtime");
+  const auto check_setter = [&](std::string_view name, std::uint64_t value) {
+    HleCallContext context(memory);
+    return context.SetRegister(HleRegister::kRdi, value) &&
+           registry.Dispatch(name, libraries, context) &&
+           context.return_written() &&
+           context.GetRegister(HleRegister::kRax).value_or(1) == 0;
+  };
+  Check(check_setter(kajps5::hle::kKernelRtldSetApplicationHeapApiName,
+                     0x1111) &&
+            runtime.application_heap_api_address() == 0x1111 &&
+            check_setter(kajps5::hle::kKernelRtldSetApplicationHeapApiNid,
+                         0x2222) &&
+            runtime.application_heap_api_address() == 0x2222 &&
+            check_setter(kajps5::hle::kKernelSetThreadAtexitCountName,
+                         0x3333) &&
+            runtime.thread_atexit_count_callback() == 0x3333 &&
+            check_setter(kajps5::hle::kKernelSetThreadAtexitCountNid,
+                         0x4444) &&
+            runtime.thread_atexit_count_callback() == 0x4444 &&
+            check_setter(kajps5::hle::kKernelSetThreadAtexitReportName,
+                         0x5555) &&
+            runtime.thread_atexit_report_callback() == 0x5555 &&
+            check_setter(kajps5::hle::kKernelSetThreadAtexitReportNid,
+                         0x6666) &&
+            runtime.thread_atexit_report_callback() == 0x6666 &&
+            check_setter(kajps5::hle::kKernelSetThreadDtorsName, 0x7777) &&
+            runtime.thread_dtors_callback() == 0x7777 &&
+            check_setter(kajps5::hle::kKernelSetThreadDtorsNid, 0x8888) &&
+            runtime.thread_dtors_callback() == 0x8888,
+        "runtime registration setter aliases did not replace shared state");
   Check(registry.Dispatch(kajps5::hle::kKernelGetDirectMemorySizeNid,
                           libraries, direct_memory_context) &&
             direct_memory_context.GetRegister(HleRegister::kRax).value_or(0) ==
@@ -150,7 +234,7 @@ int main() {
 
   Check(kajps5::hle::RegisterKernelExports(registry, runtime) ==
             ExportRegistryStatus::kAlreadyExists &&
-            registry.size() == 236,
+            registry.size() == 248,
         "duplicate default registration changed the registry");
 
   ExportRegistry conflict_registry;

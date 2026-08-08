@@ -72,6 +72,10 @@ HleDataResult InstallHleDataSymbols(ImportRegistry& registry,
                     std::uint32_t{1});
   WriteLittleEndian(std::span(page), kProgramNamePointerOffset,
                     page_address + kProgramNameBufferOffset);
+  WriteLittleEndian(std::span(page), kHleSanitizerMallocReplaceOffset,
+                    kHleSanitizerMallocReplaceSize);
+  WriteLittleEndian(std::span(page), kHleSanitizerNewReplaceOffset,
+                    kHleSanitizerNewReplaceSize);
   const auto name_size =
       std::min(process_image_name.size(), kMaximumProgramNameBytes);
   std::transform(process_image_name.begin(),
@@ -110,7 +114,9 @@ HleDataResult InstallHleDataSymbols(ImportRegistry& registry,
           page_address + kStackGuardOffset,
           page_address + kProgramNamePointerOffset,
           page_address + kLibcNeedFlagOffset,
-          page_address + kLibcInternalNeedFlagOffset};
+          page_address + kLibcInternalNeedFlagOffset,
+          page_address + kHleSanitizerMallocReplaceOffset,
+          page_address + kHleSanitizerNewReplaceOffset};
 }
 
 std::string_view HleDataStatusName(HleDataStatus status) noexcept {

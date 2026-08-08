@@ -35,7 +35,7 @@ ExportRegistryStatus RegisterKernelExports(ExportRegistry& registry,
   clock_exports.reserve(clock_exports.size() + event_queue_exports.size() +
                         event_flag_exports.size() + file_exports.size() +
                         memory_exports.size() + pthread_exports.size() +
-                        semaphore_exports.size() + 4);
+                        semaphore_exports.size() + 16);
   clock_exports.insert(clock_exports.end(),
                        std::make_move_iterator(event_queue_exports.begin()),
                        std::make_move_iterator(event_queue_exports.end()));
@@ -62,6 +62,63 @@ ExportRegistryStatus RegisterKernelExports(ExportRegistry& registry,
       {kLibKernelName, kKernelGetProcParamName, get_proc_param});
   clock_exports.push_back(
       {kLibKernelName, kKernelGetProcParamNid, get_proc_param});
+  const auto get_sanitizer_new_replace = [runtime_view](HleCallContext& context) {
+    context.SetReturn(runtime_view->sanitizer_new_replace_address());
+    return HleContextStatus::kOk;
+  };
+  clock_exports.push_back({kLibKernelName,
+                           kKernelGetSanitizerNewReplaceExternalName,
+                           get_sanitizer_new_replace});
+  clock_exports.push_back({kLibKernelName,
+                           kKernelGetSanitizerNewReplaceExternalNid,
+                           get_sanitizer_new_replace});
+  const auto get_sanitizer_malloc_replace =
+      [runtime_view](HleCallContext& context) {
+        context.SetReturn(runtime_view->sanitizer_malloc_replace_address());
+        return HleContextStatus::kOk;
+      };
+  clock_exports.push_back({kLibKernelName,
+                           kKernelGetSanitizerMallocReplaceExternalName,
+                           get_sanitizer_malloc_replace});
+  clock_exports.push_back({kLibKernelName,
+                           kKernelGetSanitizerMallocReplaceExternalNid,
+                           get_sanitizer_malloc_replace});
+  const auto set_application_heap_api = [runtime_view](HleCallContext& context) {
+    runtime_view->SetApplicationHeapApiAddress(context.Argument(0).value_or(0));
+    context.SetReturn(0);
+    return HleContextStatus::kOk;
+  };
+  clock_exports.push_back({kLibKernelName, kKernelRtldSetApplicationHeapApiName,
+                           set_application_heap_api});
+  clock_exports.push_back({kLibKernelName, kKernelRtldSetApplicationHeapApiNid,
+                           set_application_heap_api});
+  const auto set_thread_atexit_count = [runtime_view](HleCallContext& context) {
+    runtime_view->SetThreadAtexitCountCallback(context.Argument(0).value_or(0));
+    context.SetReturn(0);
+    return HleContextStatus::kOk;
+  };
+  clock_exports.push_back({kLibKernelName, kKernelSetThreadAtexitCountName,
+                           set_thread_atexit_count});
+  clock_exports.push_back({kLibKernelName, kKernelSetThreadAtexitCountNid,
+                           set_thread_atexit_count});
+  const auto set_thread_atexit_report = [runtime_view](HleCallContext& context) {
+    runtime_view->SetThreadAtexitReportCallback(context.Argument(0).value_or(0));
+    context.SetReturn(0);
+    return HleContextStatus::kOk;
+  };
+  clock_exports.push_back({kLibKernelName, kKernelSetThreadAtexitReportName,
+                           set_thread_atexit_report});
+  clock_exports.push_back({kLibKernelName, kKernelSetThreadAtexitReportNid,
+                           set_thread_atexit_report});
+  const auto set_thread_dtors = [runtime_view](HleCallContext& context) {
+    runtime_view->SetThreadDtorsCallback(context.Argument(0).value_or(0));
+    context.SetReturn(0);
+    return HleContextStatus::kOk;
+  };
+  clock_exports.push_back({kLibKernelName, kKernelSetThreadDtorsName,
+                           set_thread_dtors});
+  clock_exports.push_back({kLibKernelName, kKernelSetThreadDtorsNid,
+                           set_thread_dtors});
   const auto stack_check_fail = [](HleCallContext&) {
     return HleContextStatus::kFatalGuestError;
   };

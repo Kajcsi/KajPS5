@@ -1036,5 +1036,18 @@ and Vulkan guest image cache. The title runner uses this existing owner with
 one visible Windows window, bounded message/resize/poll handling, and explicit
 headless mode; no additional runtime or presentation owner is introduced.
 
+The kernel runtime-registration compatibility unit in
+`src/{hle/data_symbols,kernel_exports}.*`, `src/kernel/runtime.h`, and
+`src/runtime/title_session.cpp` reimplements the stable replacement-table and
+callback-registration behavior observed in KytyPS5
+`src/libs/libKernel.cpp`, `src/kernel/pthread.cpp`, and
+`src/loader/runtimeLinker.cpp` at commit
+`fb5ecec455cf6c67154134429485ffccbfc34203`, together with SharpEmu
+`src/SharpEmu.Libs/Kernel/KernelRuntimeCompatExports.cs` and
+`src/SharpEmu.Libs/Kernel/KernelMemoryCompatExports.cs` at commit
+`9e10d7c44a2821cfd5ccd3417c09c0cf269285a4`. KytyPS5 is GPL-2.0-only and
+SharpEmu is GPL-2.0-or-later; behavior was reimplemented and no upstream
+source was copied. KajPS5 retains one C++ runtime and one GuestMemory owner.
+
 Add an entry when a later change imports or adapts code. Include the project,
 commit, source path, destination path, copyright notice, and license.

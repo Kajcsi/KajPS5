@@ -3,6 +3,7 @@
 // Behavior reference: Copyright (C) 2026 SharpEmu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -97,6 +98,59 @@ int main() {
             default_name[8] == std::byte{'n'} &&
             default_name[9] == std::byte{0},
         "default process name is not guest-owned or terminated");
+  constexpr auto kMallocTableBytes = static_cast<std::size_t>(
+      kajps5::hle::kHleSanitizerMallocReplaceSize);
+  constexpr auto kNewTableBytes = static_cast<std::size_t>(
+      kajps5::hle::kHleSanitizerNewReplaceSize);
+  std::array<std::byte, kMallocTableBytes> malloc_table{};
+  std::array<std::byte, kNewTableBytes> new_table{};
+  Check(installed.sanitizer_malloc_replace_address ==
+                installed.page_address +
+                    kajps5::hle::kHleSanitizerMallocReplaceOffset &&
+            installed.sanitizer_new_replace_address ==
+                installed.page_address +
+                    kajps5::hle::kHleSanitizerNewReplaceOffset &&
+            installed.sanitizer_malloc_replace_address % alignof(std::uint64_t) ==
+                0 &&
+            installed.sanitizer_new_replace_address % alignof(std::uint64_t) ==
+                0 &&
+            installed.sanitizer_malloc_replace_address + kMallocTableBytes <=
+                installed.page_address + kajps5::hle::kHleDataPageSize &&
+            installed.sanitizer_new_replace_address + kNewTableBytes <=
+                installed.page_address + kajps5::hle::kHleDataPageSize &&
+            program_name + 512 <= installed.sanitizer_malloc_replace_address &&
+            installed.sanitizer_malloc_replace_address + kMallocTableBytes <=
+                installed.sanitizer_new_replace_address &&
+            memory.Read(installed.sanitizer_malloc_replace_address,
+                        malloc_table) &&
+            memory.Read(installed.sanitizer_new_replace_address, new_table) &&
+            ReadLittleEndian<std::uint64_t>(
+                memory, installed.sanitizer_malloc_replace_address) ==
+                kajps5::hle::kHleSanitizerMallocReplaceSize &&
+            ReadLittleEndian<std::uint64_t>(
+                memory, installed.sanitizer_new_replace_address) ==
+                kajps5::hle::kHleSanitizerNewReplaceSize &&
+            std::all_of(malloc_table.begin() + sizeof(std::uint64_t),
+                        malloc_table.end(),
+                        [](std::byte value) { return value == std::byte{0}; }) &&
+            std::all_of(new_table.begin() + sizeof(std::uint64_t),
+                        new_table.end(),
+                        [](std::byte value) { return value == std::byte{0}; }) &&
+            memory.CanAccess(installed.sanitizer_malloc_replace_address,
+                             kMallocTableBytes,
+                             GuestMemoryProtection::kWrite) &&
+            memory.CanAccess(installed.sanitizer_new_replace_address,
+                             kNewTableBytes,
+                             GuestMemoryProtection::kWrite),
+        "sanitizer replacement tables are not zeroed writable guest objects");
+  const std::array<std::byte, 1> guest_owned_marker = {std::byte{0xa5}};
+  std::array<std::byte, 1> guest_owned_readback{};
+  Check(memory.Initialize(installed.sanitizer_malloc_replace_address + 8,
+                          guest_owned_marker) &&
+            memory.Read(installed.sanitizer_malloc_replace_address + 8,
+                        guest_owned_readback) &&
+            guest_owned_readback == guest_owned_marker,
+        "sanitizer replacement table is not guest-writable");
 
   const std::vector<std::string> kernel_scope = {"libkernel"};
   const std::vector<std::string> libc_scope = {"libc"};

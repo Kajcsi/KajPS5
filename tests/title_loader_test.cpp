@@ -6,6 +6,7 @@
 #include "runtime/title_loader.h"
 
 #include "hle/call_context.h"
+#include "hle/data_symbols.h"
 #include "hle/kernel_exports.h"
 
 #include <cstddef>
@@ -144,6 +145,30 @@ int main(int argc, char** argv) {
   Check(prepared.session->kernel_runtime().process_parameters_address() ==
                 prepared.load_bias + kProcessParametersAddress,
         "title loader did not configure the process-parameter guest address");
+  kajps5::hle::HleCallContext hle_data_context(prepared.session->memory());
+  std::uint64_t malloc_replace_size = 0;
+  std::uint64_t new_replace_size = 0;
+  Check(prepared.session->kernel_runtime().sanitizer_malloc_replace_address() ==
+                prepared.hle.data.sanitizer_malloc_replace_address &&
+            prepared.session->kernel_runtime().sanitizer_new_replace_address() ==
+                prepared.hle.data.sanitizer_new_replace_address &&
+            prepared.session->memory().CanAccess(
+                prepared.hle.data.sanitizer_malloc_replace_address,
+                kajps5::hle::kHleSanitizerMallocReplaceSize,
+                kajps5::memory::GuestMemoryProtection::kWrite) &&
+            prepared.session->memory().CanAccess(
+                prepared.hle.data.sanitizer_new_replace_address,
+                kajps5::hle::kHleSanitizerNewReplaceSize,
+                kajps5::memory::GuestMemoryProtection::kWrite) &&
+            hle_data_context.ReadUInt64(
+                prepared.hle.data.sanitizer_malloc_replace_address,
+                malloc_replace_size) == kajps5::hle::HleContextStatus::kOk &&
+            hle_data_context.ReadUInt64(
+                prepared.hle.data.sanitizer_new_replace_address,
+                new_replace_size) == kajps5::hle::HleContextStatus::kOk &&
+            malloc_replace_size == kajps5::hle::kHleSanitizerMallocReplaceSize &&
+            new_replace_size == kajps5::hle::kHleSanitizerNewReplaceSize,
+        "title loader did not retain sanitizer replacement guest objects");
   const std::vector<std::string> libraries = {"libkernel"};
   kajps5::hle::HleCallContext proc_param_context(prepared.session->memory());
   Check(prepared.session->hle_exports()

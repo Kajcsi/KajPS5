@@ -76,6 +76,43 @@ public:
   [[nodiscard]] std::uint64_t process_parameters_address() const noexcept {
     return process_parameters_address_;
   }
+  void SetSanitizerMallocReplaceAddress(std::uint64_t address) noexcept {
+    sanitizer_malloc_replace_address_ = address;
+  }
+  [[nodiscard]] std::uint64_t sanitizer_malloc_replace_address() const
+      noexcept {
+    return sanitizer_malloc_replace_address_;
+  }
+  void SetSanitizerNewReplaceAddress(std::uint64_t address) noexcept {
+    sanitizer_new_replace_address_ = address;
+  }
+  [[nodiscard]] std::uint64_t sanitizer_new_replace_address() const noexcept {
+    return sanitizer_new_replace_address_;
+  }
+  void SetApplicationHeapApiAddress(std::uint64_t address) noexcept {
+    application_heap_api_address_ = address;
+  }
+  [[nodiscard]] std::uint64_t application_heap_api_address() const noexcept {
+    return application_heap_api_address_;
+  }
+  void SetThreadAtexitCountCallback(std::uint64_t callback) noexcept {
+    thread_atexit_count_callback_ = callback;
+  }
+  [[nodiscard]] std::uint64_t thread_atexit_count_callback() const noexcept {
+    return thread_atexit_count_callback_;
+  }
+  void SetThreadAtexitReportCallback(std::uint64_t callback) noexcept {
+    thread_atexit_report_callback_ = callback;
+  }
+  [[nodiscard]] std::uint64_t thread_atexit_report_callback() const noexcept {
+    return thread_atexit_report_callback_;
+  }
+  void SetThreadDtorsCallback(std::uint64_t callback) noexcept {
+    thread_dtors_callback_ = callback;
+  }
+  [[nodiscard]] std::uint64_t thread_dtors_callback() const noexcept {
+    return thread_dtors_callback_;
+  }
 
 private:
   HandleTable handles_;
@@ -93,6 +130,12 @@ private:
   ProcessLifecycleService process_lifecycle_;
   AmprCommandBufferService ampr_command_buffers_;
   std::uint64_t process_parameters_address_ = 0;
+  std::uint64_t sanitizer_malloc_replace_address_ = 0;
+  std::uint64_t sanitizer_new_replace_address_ = 0;
+  std::uint64_t application_heap_api_address_ = 0;
+  std::uint64_t thread_atexit_count_callback_ = 0;
+  std::uint64_t thread_atexit_report_callback_ = 0;
+  std::uint64_t thread_dtors_callback_ = 0;
 };
 
 } // namespace kajps5::kernel
