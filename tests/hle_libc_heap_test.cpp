@@ -78,7 +78,7 @@ int main() {
             registry, runtime.cxa_guards(), runtime.process_lifecycle(),
             runtime.libc_heap(), memory, kHeapTraceStorageAddress) ==
                 ExportRegistryStatus::kOk &&
-            registry.size() == 108,
+            registry.size() == 110,
         "libc heap exports did not register atomically");
   const std::vector<std::string> libc_scope = {kajps5::hle::kLibcName};
   const std::vector<std::string> libc_internal_ext_scope = {

@@ -868,6 +868,19 @@ protocol initialization offsets independently re-express SharpEmu
 SharpEmu is GPL-2.0-or-later. No upstream source was copied verbatim; KajPS5
 keeps one C++ pthread service, scheduler, and guest-memory owner.
 
+The live thread-attribute snapshot and rwlock additions in
+`src/kernel/pthread.{h,cpp}`, `src/hle/kernel_pthread_exports.{h,cpp}`, and
+the focused pthread tests follow the public names and pointer-backed rwlock
+shape in KytyPS5 `src/kernel/pthread.{h,cpp}` and `src/libs/libKernel.cpp` at
+commit `fb5ecec455cf6c67154134429485ffccbfc34203`. Checked attribute output,
+live mapped-stack reporting, guest-pointer validation, reader/writer ownership,
+and scheduler wakeup behavior adapt SharpEmu
+`src/SharpEmu.Libs/Kernel/KernelPthreadExtendedCompatExports.cs` at commit
+`9e10d7c44a2821cfd5ccd3417c09c0cf269285a4`. The same pinned KytyPS5
+`src/libs/libC.cpp` confirms that `__cxa_atexit` is exported from both libc
+and libSceLibcInternal. No upstream source was copied verbatim; this remains
+one C++ runtime, one scheduler, and one guest-memory model.
+
 The C++ mutex handlers in `src/hle/libc_thread_exports.cpp` and their focused
 test adapt the full `_Mtx_*` ABI, result values, recursive flag, and scheduler
 connection from KytyPS5 `src/libs/libC.cpp` at commit

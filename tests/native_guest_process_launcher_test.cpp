@@ -141,7 +141,10 @@ int main() {
             started.lifecycle_kind ==
                 kajps5::loader::LifecycleCallKind::kPreinitializer &&
             started.lifecycle_index == 0 && launcher.startup_active() &&
-            runner.registered_thread_count() == 1,
+            runner.registered_thread_count() == 1 &&
+            pthreads.GetThread(started.thread).has_value() &&
+            pthreads.GetThread(started.thread)->attributes.stack_address != 0 &&
+            pthreads.GetThread(started.thread)->attributes.stack_size != 0,
         "checked process startup did not prepare its preinitializer");
   const auto ready = launcher.RunStartupUntilReady(4);
   std::uint64_t marker = 0;

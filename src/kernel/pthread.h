@@ -131,6 +131,21 @@ struct PthreadConditionSnapshot {
   std::size_t active_waiter_count = 0;
 };
 
+struct PthreadRwlockCreateResult {
+  KernelStatus status = KernelStatus::kOk;
+  std::uint64_t handle = 0;
+  [[nodiscard]] explicit operator bool() const noexcept {
+    return status == KernelStatus::kOk;
+  }
+};
+
+struct PthreadRwlockSnapshot {
+  std::uint64_t handle = 0;
+  KernelHandle writer = kInvalidKernelHandle;
+  std::size_t reader_count = 0;
+  std::size_t waiter_count = 0;
+};
+
 class PthreadService final {
  public:
   PthreadService(GuestScheduler& scheduler, KernelClockService& clock) noexcept;
@@ -153,6 +168,13 @@ class PthreadService final {
   [[nodiscard]] bool ExitCurrent(std::uint64_t exit_value);
   [[nodiscard]] std::optional<PthreadThreadSnapshot> GetThread(
       KernelHandle handle) const;
+  // The native runner is the sole producer of the actual mapped stack range.
+  // It calls this only after allocation and registration both succeeded.
+  [[nodiscard]] bool SetThreadStack(KernelHandle handle,
+                                    std::uint64_t stack_address,
+                                    std::uint64_t stack_size);
+  [[nodiscard]] PthreadAttributeCreateResult CreateThreadAttributeSnapshot(
+      KernelHandle handle);
 
   [[nodiscard]] PthreadAttributeCreateResult CreateMutexAttribute();
   [[nodiscard]] KernelStatus DestroyMutexAttribute(std::uint64_t handle);
@@ -182,6 +204,15 @@ class PthreadService final {
   [[nodiscard]] std::optional<PthreadMutexSnapshot> GetMutex(
       std::uint64_t handle) const;
   [[nodiscard]] std::optional<bool> CurrentThreadOwnsMutex(
+      std::uint64_t handle) const;
+
+  [[nodiscard]] PthreadRwlockCreateResult CreateGuestRwlock();
+  [[nodiscard]] KernelStatus CanDestroyRwlock(std::uint64_t handle) const;
+  [[nodiscard]] KernelStatus DestroyRwlock(std::uint64_t handle);
+  [[nodiscard]] KernelStatus LockRwlock(std::uint64_t handle, bool write,
+                                         bool try_only);
+  [[nodiscard]] KernelStatus UnlockRwlock(std::uint64_t handle);
+  [[nodiscard]] std::optional<PthreadRwlockSnapshot> GetRwlock(
       std::uint64_t handle) const;
 
   [[nodiscard]] PthreadConditionCreateResult CreateCondition();
@@ -238,6 +269,20 @@ class PthreadService final {
     std::size_t active_waiter_count = 0;
   };
 
+  struct RwlockWaiter {
+    KernelHandle thread = kInvalidKernelHandle;
+    bool write = false;
+  };
+
+  struct RwlockState {
+    KernelHandle writer = kInvalidKernelHandle;
+    std::map<KernelHandle, std::uint32_t> readers;
+    std::deque<RwlockWaiter> waiters;
+    std::set<KernelHandle> granted_readers;
+    std::optional<KernelHandle> granted_writer;
+    std::size_t guest_object_slot = 0;
+  };
+
   static constexpr std::uint64_t kSyntheticAttributeHandleBase =
       0x0000600400000000;
   static constexpr std::uint64_t kSyntheticMutexAttributeHandleBase =
@@ -251,6 +296,8 @@ class PthreadService final {
                                                 KernelHandle thread_handle);
   [[nodiscard]] static std::string ConditionWaitKey(
       std::uint64_t condition_handle, KernelHandle thread_handle);
+  [[nodiscard]] static std::string RwlockWaitKey(
+      std::uint64_t rwlock_handle, KernelHandle thread_handle);
   [[nodiscard]] static bool IsMutexTypeValid(int type) noexcept;
   [[nodiscard]] static bool IsMutexProtocolValid(int protocol) noexcept;
   [[nodiscard]] PthreadMutexCreateResult CreateMutexLocked(
@@ -259,6 +306,9 @@ class PthreadService final {
   void GrantNextMutexWaiterLocked(std::uint64_t mutex_handle,
                                   MutexState& mutex,
                                   std::string& wake_key);
+  void GrantRwlockWaitersLocked(std::uint64_t rwlock_handle,
+                                RwlockState& rwlock,
+                                std::vector<std::string>& wake_keys);
   [[nodiscard]] KernelStatus WaitConditionInternal(
       std::uint64_t condition_handle, std::uint64_t mutex_handle,
       std::optional<std::uint64_t> deadline_nanoseconds);
@@ -269,9 +319,11 @@ class PthreadService final {
   KernelClockService& clock_;
   mutable std::mutex mutex_;
   std::map<std::uint64_t, PthreadAttribute> attributes_;
+  std::map<std::uint64_t, PthreadAttribute> thread_attribute_snapshots_;
   std::map<KernelHandle, PthreadThreadSnapshot> threads_;
   std::map<std::uint64_t, PthreadMutexAttribute> mutex_attributes_;
   std::map<std::uint64_t, MutexState> mutexes_;
+  std::map<std::uint64_t, RwlockState> rwlocks_;
   std::map<std::uint64_t, ConditionState> conditions_;
   std::map<KernelHandle, ConditionWaiter> completed_condition_waits_;
   std::array<std::optional<KeyState>, kMaximumPthreadKeys> keys_{};

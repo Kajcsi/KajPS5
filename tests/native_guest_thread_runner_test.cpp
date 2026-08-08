@@ -18,6 +18,7 @@
 #include "core/memory/guest_memory.h"
 #include "cpu/native_hle_trampoline.h"
 #include "hle/export_registry.h"
+#include "hle/kernel_pthread_exports.h"
 #include "kernel/clock.h"
 #include "kernel/guest_scheduler.h"
 #include "kernel/handle_table.h"
@@ -81,7 +82,7 @@ int main() {
   using kajps5::memory::GuestMemory;
   using kajps5::memory::GuestMemoryProtection;
 
-  auto memory = GuestMemory::CreateHostMapped(0x20000);
+  auto memory = GuestMemory::CreateHostMapped(0x120000);
   Check(memory != nullptr, "host-mapped guest memory allocation failed");
   if (!memory) {
     return 1;
@@ -93,6 +94,9 @@ int main() {
   const auto exit_code = base + 0x300;
   const auto process_code = base + 0x400;
   const auto function_code = base + 0x500;
+  const auto rwlock_block_code = base + 0x600;
+  const auto rwlock_object_address = base + 0x800;
+  const auto pthread_arena = base + 0x20000;
   const auto stack_one = base + 0x4000;
   const auto stack_two = base + 0x8000;
   const auto stack_three = base + 0xc000;
@@ -104,17 +108,25 @@ int main() {
             memory->Map(stack_one, stack_size, read_write) &&
             memory->Map(stack_two, stack_size, read_write) &&
             memory->Map(stack_three, stack_size, read_write) &&
-            memory->Map(stack_four, stack_size, read_write),
+            memory->Map(stack_four, stack_size, read_write) &&
+            memory->Map(pthread_arena,
+                        kajps5::kernel::kPthreadMutexArenaSize, read_write),
         "guest thread mappings failed");
 
   kajps5::kernel::HandleTable handles;
   kajps5::kernel::KernelClockService clock;
   kajps5::kernel::GuestScheduler scheduler(handles, clock);
   kajps5::kernel::PthreadService pthreads(scheduler, clock);
+  Check(pthreads.ConfigureGuestMutexArena(*memory, pthread_arena),
+        "native rwlock guest arena configuration failed");
   NativeGuestExecutionContext execution_context;
   std::size_t yield_dispatches = 0;
   std::size_t block_dispatches = 0;
   ExportRegistry registry;
+  Check(kajps5::hle::RegisterKernelPthreadExports(registry, pthreads,
+                                                   scheduler) ==
+            ExportRegistryStatus::kOk,
+        "pthread HLE export registration failed");
   Check(registry.Register("libTest", "yield",
                           [&](kajps5::hle::HleCallContext& context) {
                             ++yield_dispatches;
@@ -155,17 +167,24 @@ int main() {
   kajps5::cpu::NativeHleTrampoline exit_trampoline(
       *memory, registry, "exit", std::vector<std::string>{"libTest"}, 0,
       &execution_context);
+  kajps5::cpu::NativeHleTrampoline rwlock_trampoline(
+      *memory, registry, kajps5::hle::kKernelPthreadRwlockWrlockNid,
+      std::vector<std::string>{kajps5::hle::kLibKernelName}, 0,
+      &execution_context);
   Check(yield_trampoline.status() ==
                 kajps5::cpu::NativeHleTrampolineStatus::kOk &&
             block_trampoline.status() ==
                 kajps5::cpu::NativeHleTrampolineStatus::kOk &&
             exit_trampoline.status() ==
+                kajps5::cpu::NativeHleTrampolineStatus::kOk &&
+            rwlock_trampoline.status() ==
                 kajps5::cpu::NativeHleTrampolineStatus::kOk,
         "native HLE trampoline creation failed");
 
   const auto yield_entry = BuildImportEntry(yield_trampoline.address());
   const auto block_entry = BuildImportEntry(block_trampoline.address());
   const auto exit_entry = BuildImportEntry(exit_trampoline.address());
+  const auto rwlock_block_entry = BuildImportEntry(rwlock_trampoline.address());
   const std::vector<std::byte> peer_entry = {std::byte{0x48}, std::byte{0x89},
                                              std::byte{0xf8}, std::byte{0xc3}};
   const std::vector<std::byte> process_entry = {
@@ -175,10 +194,15 @@ int main() {
       std::byte{0x48}, std::byte{0x89}, std::byte{0xf8}, std::byte{0x48},
       std::byte{0x01}, std::byte{0xf0}, std::byte{0x48}, std::byte{0x01},
       std::byte{0xd0}, std::byte{0xc3}};
-  Check(memory->Initialize(yield_code, yield_entry) &&
+  const auto native_rwlock = pthreads.CreateGuestRwlock();
+  Check(native_rwlock &&
+            memory->Write(rwlock_object_address,
+                          std::as_bytes(std::span{&native_rwlock.handle, 1})) &&
+            memory->Initialize(yield_code, yield_entry) &&
             memory->Initialize(peer_code, peer_entry) &&
             memory->Initialize(block_code, block_entry) &&
             memory->Initialize(exit_code, exit_entry) &&
+            memory->Initialize(rwlock_block_code, rwlock_block_entry) &&
             memory->Initialize(process_code, process_entry) &&
             memory->Initialize(function_code, function_entry) &&
             memory->Protect(
@@ -247,6 +271,38 @@ int main() {
             block_dispatches == 2 && runner.registered_thread_count() == 0 &&
             runner.RunNext().status == NativeGuestThreadRunStatus::kIdle,
         "blocked guest thread did not retry and exit");
+
+  const auto rwlock_owner = scheduler.CreateThread("rwlock-owner", 700);
+  const auto rwlock_waiter = pthreads.CreateThread(
+      "rwlock-waiter", 0, rwlock_block_code, rwlock_object_address);
+  Check(rwlock_owner && rwlock_waiter &&
+            runner.RegisterThread(rwlock_waiter.handle, stack_three,
+                                  stack_size) ==
+                NativeGuestThreadRegistrationStatus::kOk &&
+            scheduler.SelectNext() == rwlock_owner.handle &&
+            pthreads.LockRwlock(native_rwlock.handle, false, false) ==
+                kajps5::kernel::KernelStatus::kOk &&
+            scheduler.YieldCurrent(),
+        "native rwlock contention fixture setup failed");
+  const auto native_rwlock_blocked = runner.RunNext();
+  const auto blocked_rwlock_thread = scheduler.Snapshot(rwlock_waiter.handle);
+  Check(native_rwlock_blocked.status == NativeGuestThreadRunStatus::kThreadBlocked &&
+            blocked_rwlock_thread && blocked_rwlock_thread->state ==
+                kajps5::kernel::GuestThreadState::kBlocked &&
+            scheduler.SelectNext() == rwlock_owner.handle &&
+            pthreads.UnlockRwlock(native_rwlock.handle) ==
+                kajps5::kernel::KernelStatus::kOk &&
+            scheduler.ExitCurrent(0),
+        "native HLE rwlock waiter did not suspend and receive a wakeup");
+  const auto native_rwlock_exit = runner.RunNext();
+  const auto native_rwlock_snapshot = scheduler.Snapshot(rwlock_waiter.handle);
+  Check(native_rwlock_exit.status == NativeGuestThreadRunStatus::kThreadExited &&
+            native_rwlock_snapshot && native_rwlock_snapshot->state ==
+                kajps5::kernel::GuestThreadState::kExited &&
+            native_rwlock_snapshot->exit_value == rwlock_object_address &&
+            pthreads.DestroyRwlock(native_rwlock.handle) ==
+                kajps5::kernel::KernelStatus::kOk,
+        "native HLE rwlock waiter did not retry, acquire, and exit");
 
   const auto forced_exit =
       pthreads.CreateThread("forced-exit", 0, exit_code, 0x44);

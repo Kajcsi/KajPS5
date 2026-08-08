@@ -209,6 +209,82 @@ int main() {
                 collision_guest_mutex.handle,
         "guest and synthetic mutex handles aliased or leaked their slots");
 
+  KernelRuntime rwlock_collision_runtime;
+  auto& rwlock_collision_pthreads = rwlock_collision_runtime.pthreads();
+  const auto rwlock_collision_mutex = rwlock_collision_pthreads.CreateMutex(0);
+  kajps5::memory::GuestMemory rwlock_collision_memory(
+      rwlock_collision_mutex.handle, kPthreadMutexArenaSize +
+                                        kPthreadMutexObjectSize);
+  Check(rwlock_collision_mutex &&
+            rwlock_collision_pthreads.ConfigureGuestMutexArena(
+                rwlock_collision_memory, rwlock_collision_mutex.handle) &&
+            rwlock_collision_pthreads.CreateGuestRwlock().handle ==
+                rwlock_collision_mutex.handle + kPthreadMutexObjectSize,
+        "guest rwlock allocation collided with a synthetic mutex");
+
+  KernelRuntime mutex_collision_runtime;
+  auto& mutex_collision_pthreads = mutex_collision_runtime.pthreads();
+  const auto mutex_collision_base = std::uint64_t{0x0000600600000001};
+  kajps5::memory::GuestMemory mutex_collision_memory(
+      mutex_collision_base, kPthreadMutexArenaSize + kPthreadMutexObjectSize);
+  const auto first_collision_rwlock =
+      mutex_collision_pthreads.ConfigureGuestMutexArena(
+          mutex_collision_memory, mutex_collision_base)
+          ? mutex_collision_pthreads.CreateGuestRwlock()
+          : PthreadRwlockCreateResult{KernelStatus::kNoResources, 0};
+  const auto skipped_synthetic_mutex = mutex_collision_pthreads.CreateMutex(0);
+  Check(first_collision_rwlock &&
+            first_collision_rwlock.handle == mutex_collision_base &&
+            skipped_synthetic_mutex &&
+            skipped_synthetic_mutex.handle == mutex_collision_base + 1,
+        "synthetic mutex allocation collided with a guest rwlock");
+
+  // Rwlocks share the bounded guest pthread-object arena with mutexes, retain
+  // pointer identity, and hand off a blocked writer through the scheduler.
+  KernelRuntime rwlock_runtime;
+  auto& rwlock_pthreads = rwlock_runtime.pthreads();
+  auto& rwlock_scheduler = rwlock_runtime.scheduler();
+  kajps5::memory::GuestMemory rwlock_memory(0x1000,
+                                             kPthreadMutexArenaSize + 0x2000);
+  Check(rwlock_pthreads.ConfigureGuestMutexArena(rwlock_memory, 0x1000),
+        "rwlock guest arena configuration failed");
+  const auto rwlock = rwlock_pthreads.CreateGuestRwlock();
+  const auto rwlock_mutex = rwlock_pthreads.CreateGuestMutex(0);
+  Check(rwlock && rwlock.handle == 0x1000 && rwlock_mutex &&
+            rwlock_mutex.handle == 0x1000 + kPthreadMutexObjectSize,
+        "rwlock and mutex guest objects collided");
+  const auto rw_reader = rwlock_scheduler.CreateThread("rw-reader", 700);
+  const auto rw_writer = rwlock_scheduler.CreateThread("rw-writer", 700);
+  const auto rw_observer = rwlock_scheduler.CreateThread("rw-observer", 700);
+  Check(rw_reader && rw_writer && rw_observer &&
+            rwlock_scheduler.SelectNext() == rw_reader.handle &&
+            rwlock_pthreads.LockRwlock(rwlock.handle, false, false) ==
+                KernelStatus::kOk &&
+            rwlock_pthreads.LockRwlock(rwlock.handle, false, false) ==
+                KernelStatus::kOk &&
+            rwlock_pthreads.GetRwlock(rwlock.handle)->reader_count == 2 &&
+            rwlock_scheduler.YieldCurrent() &&
+            rwlock_scheduler.SelectNext() == rw_writer.handle &&
+            rwlock_pthreads.LockRwlock(rwlock.handle, true, false) ==
+                KernelStatus::kWouldBlock &&
+            rwlock_pthreads.GetRwlock(rwlock.handle)->waiter_count == 1 &&
+            rwlock_scheduler.SelectNext() == rw_observer.handle &&
+            rwlock_pthreads.LockRwlock(rwlock.handle, false, true) ==
+                KernelStatus::kBusy && rwlock_pthreads.ExitCurrent(0) &&
+            rwlock_scheduler.SelectNext() == rw_reader.handle &&
+            rwlock_pthreads.UnlockRwlock(rwlock.handle) == KernelStatus::kOk &&
+            rwlock_pthreads.GetRwlock(rwlock.handle)->reader_count == 1 &&
+            rwlock_pthreads.UnlockRwlock(rwlock.handle) == KernelStatus::kOk &&
+            rwlock_pthreads.CanDestroyRwlock(rwlock.handle) ==
+                KernelStatus::kBusy && rwlock_pthreads.ExitCurrent(0) &&
+            rwlock_scheduler.SelectNext() == rw_writer.handle &&
+            rwlock_pthreads.LockRwlock(rwlock.handle, true, false) ==
+                KernelStatus::kOk &&
+            rwlock_pthreads.UnlockRwlock(rwlock.handle) == KernelStatus::kOk &&
+            rwlock_pthreads.DestroyRwlock(rwlock.handle) == KernelStatus::kOk &&
+            rwlock_pthreads.CreateGuestRwlock().handle == rwlock.handle,
+        "rwlock ownership, blocking, destroy, or arena reuse failed");
+
   KernelRuntime condition_runtime;
   auto& condition_pthreads = condition_runtime.pthreads();
   auto& condition_scheduler = condition_runtime.scheduler();

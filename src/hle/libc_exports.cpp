@@ -771,7 +771,7 @@ ExportRegistryStatus RegisterLibcExports(ExportRegistry& registry,
   auto* const heap_view = &heap;
   auto* const memory_view = &memory;
   std::vector<HleExportDefinition> exports;
-  exports.reserve(108);
+  exports.reserve(110);
   AddAliases(exports, kCxaGuardAcquireName, kCxaGuardAcquireNid,
              [guard_view](HleCallContext& context) {
                return CxaGuardAcquire(context, *guard_view);
@@ -800,6 +800,11 @@ ExportRegistryStatus RegisterLibcExports(ExportRegistry& registry,
              [lifecycle_view](HleCallContext& context) {
                return RegisterCxaDestructor(context, *lifecycle_view);
              });
+  AddLibraryAliases(exports, kLibcInternalLibraryName, kLibcCxaAtexitName,
+                    kLibcCxaAtexitNid,
+                    [lifecycle_view](HleCallContext& context) {
+                      return RegisterCxaDestructor(context, *lifecycle_view);
+                    });
   AddAliases(exports, kLibcCatchReturnFromMainName,
              kLibcCatchReturnFromMainNid,
              [lifecycle_view](HleCallContext& context) {

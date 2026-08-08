@@ -71,7 +71,7 @@ int main() {
   Check(kajps5::hle::RegisterKernelPthreadExports(
             registry, runtime.pthreads(), runtime.scheduler()) ==
             ExportRegistryStatus::kOk &&
-            registry.size() == 120,
+            registry.size() == 151,
         "pthread exports did not register atomically");
 
   GuestMemory memory(0x1000, 0x500000);
@@ -139,11 +139,156 @@ int main() {
             runtime.pthreads().attribute_count() == 1,
         "invalid pthread attribute output changed service state");
 
+  const auto initializer = runtime.pthreads().CreateThread(
+      "initializer", 0, 0x12345678, 0);
+  Check(initializer && runtime.pthreads().SetThreadStack(initializer.handle,
+                                                          0x420000, 0x200000),
+        "scheduled initializer did not retain its mapped stack");
+  HleCallContext get_initializer_attr(memory);
+  Check(get_initializer_attr.SetRegister(HleRegister::kRdi, initializer.handle) &&
+            get_initializer_attr.SetRegister(HleRegister::kRsi, 0x1140) &&
+            Dispatch(registry, kajps5::hle::kKernelPthreadAttrGetNid,
+                     get_initializer_attr) == 0,
+        "scePthreadAttrGet did not resolve the scheduled initializer");
+  std::uint64_t initializer_attribute = 0;
+  Check(get_initializer_attr.ReadUInt64(0x1140, initializer_attribute) ==
+                HleContextStatus::kOk &&
+            runtime.pthreads().GetAttribute(initializer_attribute) &&
+            runtime.pthreads().GetAttribute(initializer_attribute)->stack_address ==
+                0x420000 &&
+            runtime.pthreads().GetAttribute(initializer_attribute)->stack_size ==
+                0x200000,
+        "scePthreadAttrGet did not expose the live guest stack");
+  HleCallContext get_initializer_affinity(memory);
+  Check(get_initializer_affinity.SetRegister(HleRegister::kRdi, 0x1140) &&
+            get_initializer_affinity.SetRegister(HleRegister::kRsi, 0x1148) &&
+            Dispatch(registry, kajps5::hle::kKernelPthreadAttrGetaffinityNid,
+                     get_initializer_affinity) == 0,
+        "scePthreadAttrGetaffinity did not resolve the attribute snapshot");
+  std::uint64_t affinity = 0;
+  Check(get_initializer_affinity.ReadUInt64(0x1148, affinity) ==
+                HleContextStatus::kOk &&
+            affinity == kajps5::kernel::kPthreadDefaultAffinityMask,
+        "scePthreadAttrGetaffinity returned the wrong mask");
+  HleCallContext faulted_initializer_attr(memory);
+  Check(faulted_initializer_attr.SetRegister(HleRegister::kRdi,
+                                             initializer.handle) &&
+            faulted_initializer_attr.SetRegister(HleRegister::kRsi, 0x800) &&
+            Dispatch(registry, kajps5::hle::kKernelPthreadAttrGetNid,
+                     faulted_initializer_attr) ==
+                KernelResult(kajps5::hle::kKernelHleErrorFault),
+        "scePthreadAttrGet accepted an unmapped output");
+  HleCallContext null_initializer_attr(memory);
+  Check(null_initializer_attr.SetRegister(HleRegister::kRdi,
+                                          initializer.handle) &&
+            Dispatch(registry, kajps5::hle::kKernelPthreadAttrGetNid,
+                     null_initializer_attr) ==
+                KernelResult(kajps5::hle::kKernelHleErrorInvalidArgument),
+        "scePthreadAttrGet accepted a null output");
+  HleCallContext truncated_initializer_affinity(memory);
+  Check(truncated_initializer_affinity.SetRegister(HleRegister::kRdi, 0x1140) &&
+            truncated_initializer_affinity.SetRegister(HleRegister::kRsi,
+                                                        0x500ffc) &&
+            Dispatch(registry, kajps5::hle::kKernelPthreadAttrGetaffinityNid,
+                     truncated_initializer_affinity) ==
+                KernelResult(kajps5::hle::kKernelHleErrorFault),
+        "scePthreadAttrGetaffinity accepted a truncated output");
+  Check(runtime.pthreads().DiscardReadyThread(initializer.handle),
+        "scheduled initializer cleanup failed");
+
   const auto main_thread = runtime.scheduler().CreateThread("main", 700);
   const auto worker_thread = runtime.scheduler().CreateThread("worker", 700);
   Check(main_thread && worker_thread &&
             runtime.scheduler().SelectNext() == main_thread.handle,
         "pthread scheduler setup failed");
+
+  HleCallContext rwlock_init(memory);
+  Check(rwlock_init.SetRegister(HleRegister::kRdi, 0x1150) &&
+            Dispatch(registry, kajps5::hle::kKernelPthreadRwlockInitNid,
+                     rwlock_init) == 0,
+        "scePthreadRwlockInit did not resolve");
+  std::uint64_t rwlock_handle = 0;
+  Check(rwlock_init.ReadUInt64(0x1150, rwlock_handle) == HleContextStatus::kOk &&
+            rwlock_handle >= 0x10000 &&
+            runtime.pthreads().GetRwlock(rwlock_handle),
+        "scePthreadRwlockInit did not write a guest pointer object");
+  const auto initialized_rwlock_handle = rwlock_handle;
+  HleCallContext rwlock_read(memory);
+  Check(rwlock_read.SetRegister(HleRegister::kRdi, 0x1150) &&
+            Dispatch(registry, kajps5::hle::kPosixPthreadRwlockRdlockNid,
+                     rwlock_read) == 0,
+        "pthread_rwlock_rdlock did not acquire a free rwlock");
+  HleCallContext rwlock_try_write(memory);
+  Check(rwlock_try_write.SetRegister(HleRegister::kRdi, 0x1150) &&
+            Dispatch(registry, kajps5::hle::kKernelPthreadRwlockTrywrlockNid,
+                     rwlock_try_write) ==
+                KernelResult(kajps5::hle::kKernelHleErrorDeadlock),
+        "scePthreadRwlockTrywrlock did not report self-deadlock");
+  HleCallContext rwlock_try_read_nid(memory);
+  Check(rwlock_try_read_nid.SetRegister(HleRegister::kRdi, 0x1150) &&
+            Dispatch(registry, kajps5::hle::kKernelPthreadRwlockTryrdlockNid,
+                     rwlock_try_read_nid) == 0 &&
+            runtime.pthreads().GetRwlock(rwlock_handle)->reader_count == 2,
+        "shared try-read NID did not use libKernel rwlock semantics");
+  HleCallContext rwlock_destroy_busy(memory);
+  Check(rwlock_destroy_busy.SetRegister(HleRegister::kRdi, 0x1150) &&
+            Dispatch(registry, kajps5::hle::kKernelPthreadRwlockDestroyNid,
+                     rwlock_destroy_busy) ==
+                KernelResult(kajps5::hle::kKernelHleErrorBusy),
+        "scePthreadRwlockDestroy accepted a held rwlock");
+  HleCallContext rwlock_unlock(memory);
+  Check(rwlock_unlock.SetRegister(HleRegister::kRdi, 0x1150) &&
+            Dispatch(registry, kajps5::hle::kPosixPthreadRwlockUnlockNid,
+                     rwlock_unlock) == 0 &&
+            Dispatch(registry, kajps5::hle::kPosixPthreadRwlockUnlockNid,
+                     rwlock_unlock) == 0 &&
+            Dispatch(registry, kajps5::hle::kKernelPthreadRwlockDestroyNid,
+                     rwlock_destroy_busy) == 0,
+        "rwlock unlock/destroy did not preserve guest pointer identity");
+  HleCallContext static_rwlock_write(memory);
+  Check(static_rwlock_write.SetRegister(HleRegister::kRdi, 0x1150) &&
+            Dispatch(registry, kajps5::hle::kKernelPthreadRwlockWrlockNid,
+                     static_rwlock_write) == 0 &&
+            static_rwlock_write.ReadUInt64(0x1150, rwlock_handle) ==
+                HleContextStatus::kOk &&
+            rwlock_handle == initialized_rwlock_handle &&
+            runtime.pthreads().GetRwlock(rwlock_handle),
+        "zero-initialized rwlock was not lazily materialized");
+  HleCallContext writer_write(memory);
+  Check(writer_write.SetRegister(HleRegister::kRdi, 0x1150) &&
+            Dispatch(registry, kajps5::hle::kKernelPthreadRwlockWrlockNid,
+                     writer_write) ==
+                KernelResult(kajps5::hle::kKernelHleErrorDeadlock),
+        "writer-owned blocking write did not report libKernel EDEADLK");
+  HleCallContext writer_try_write(memory);
+  Check(writer_try_write.SetRegister(HleRegister::kRdi, 0x1150) &&
+            Dispatch(registry, kajps5::hle::kKernelPthreadRwlockTrywrlockNid,
+                     writer_try_write) ==
+                KernelResult(kajps5::hle::kKernelHleErrorDeadlock),
+        "writer-owned try-write did not report libKernel EDEADLK");
+  HleCallContext writer_read(memory);
+  Check(writer_read.SetRegister(HleRegister::kRdi, 0x1150) &&
+            Dispatch(registry, kajps5::hle::kKernelPthreadRwlockRdlockNid,
+                     writer_read) ==
+                KernelResult(kajps5::hle::kKernelHleErrorDeadlock),
+        "writer-owned blocking read did not report libKernel EDEADLK");
+  HleCallContext writer_try_read_nid(memory);
+  Check(writer_try_read_nid.SetRegister(HleRegister::kRdi, 0x1150) &&
+            Dispatch(registry, kajps5::hle::kKernelPthreadRwlockTryrdlockNid,
+                     writer_try_read_nid) ==
+                KernelResult(kajps5::hle::kKernelHleErrorDeadlock),
+        "shared try-read NID did not preserve kernel-negative EDEADLK");
+  Check(Dispatch(registry, kajps5::hle::kKernelPthreadRwlockUnlockNid,
+                 rwlock_unlock) == 0 &&
+            Dispatch(registry, kajps5::hle::kKernelPthreadRwlockDestroyNid,
+                     rwlock_destroy_busy) == 0,
+        "lazily materialized rwlock did not unlock and reuse its slot");
+  HleCallContext rwlock_fault(memory);
+  Check(rwlock_fault.SetRegister(HleRegister::kRdi, 0x800) &&
+            Dispatch(registry, kajps5::hle::kKernelPthreadRwlockInitNid,
+                     rwlock_fault) ==
+                KernelResult(kajps5::hle::kKernelHleErrorFault),
+        "scePthreadRwlockInit accepted an unmapped pointer");
 
   HleCallContext self(memory);
   Check(Dispatch(registry, kajps5::hle::kPosixPthreadSelfNid, self) ==

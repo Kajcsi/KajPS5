@@ -315,6 +315,64 @@ HleContextStatus PthreadAttrGetstacksize(HleCallContext& context,
   return HleContextStatus::kOk;
 }
 
+HleContextStatus PthreadAttrGet(HleCallContext& context,
+                                kernel::PthreadService& pthreads) {
+  const auto thread = context.Argument(0).value_or(0);
+  const auto output = context.Argument(1).value_or(0);
+  if (thread == 0 || output == 0) {
+    SetSignedResult(context, kKernelHleErrorInvalidArgument);
+    return HleContextStatus::kOk;
+  }
+  if (!context.CanWriteMemory(output, sizeof(std::uint64_t))) {
+    SetSignedResult(context, kKernelHleErrorFault);
+    return HleContextStatus::kOk;
+  }
+  const auto snapshot = pthreads.CreateThreadAttributeSnapshot(thread);
+  if (!snapshot) {
+    SetSignedResult(context, PthreadStatusResult(snapshot.status, false));
+    return HleContextStatus::kOk;
+  }
+  if (context.WriteUInt64(output, snapshot.handle) != HleContextStatus::kOk) {
+    (void)pthreads.DestroyAttribute(snapshot.handle);
+    SetSignedResult(context, kKernelHleErrorFault);
+    return HleContextStatus::kOk;
+  }
+  context.SetReturn(0);
+  return HleContextStatus::kOk;
+}
+
+HleContextStatus PthreadAttrGetaffinity(HleCallContext& context,
+                                        kernel::PthreadService& pthreads) {
+  const auto attribute_address = context.Argument(0).value_or(0);
+  const auto output = context.Argument(1).value_or(0);
+  if (attribute_address == 0 || output == 0) {
+    SetSignedResult(context, kKernelHleErrorInvalidArgument);
+    return HleContextStatus::kOk;
+  }
+  if (!context.CanWriteMemory(output, sizeof(std::uint64_t))) {
+    SetSignedResult(context, kKernelHleErrorFault);
+    return HleContextStatus::kOk;
+  }
+  std::uint64_t attribute_handle = 0;
+  if (context.ReadUInt64(attribute_address, attribute_handle) !=
+      HleContextStatus::kOk) {
+    SetSignedResult(context, kKernelHleErrorFault);
+    return HleContextStatus::kOk;
+  }
+  const auto attribute = pthreads.GetAttribute(attribute_handle);
+  if (!attribute) {
+    SetSignedResult(context, kKernelHleErrorInvalidArgument);
+    return HleContextStatus::kOk;
+  }
+  if (context.WriteUInt64(output, attribute->affinity_mask) !=
+      HleContextStatus::kOk) {
+    SetSignedResult(context, kKernelHleErrorFault);
+    return HleContextStatus::kOk;
+  }
+  context.SetReturn(0);
+  return HleContextStatus::kOk;
+}
+
 std::int32_t SignedArgument(const HleCallContext& context,
                             std::size_t index) noexcept {
   return std::bit_cast<std::int32_t>(
@@ -536,6 +594,121 @@ HleContextStatus PthreadMutexUnlock(HleCallContext& context,
   }
   SetSignedResult(context,
                   PthreadStatusResult(pthreads.UnlockMutex(handle),
+                                      posix_errors));
+  return HleContextStatus::kOk;
+}
+
+HleContextStatus PthreadRwlockInit(HleCallContext& context,
+                                   kernel::PthreadService& pthreads,
+                                   bool posix_errors) {
+  const auto address = context.Argument(0).value_or(0);
+  if (address == 0) {
+    SetSignedResult(context, InvalidArgument(posix_errors));
+    return HleContextStatus::kOk;
+  }
+  if (!context.CanWriteMemory(address, sizeof(std::uint64_t))) {
+    SetSignedResult(context, MemoryFault(posix_errors));
+    return HleContextStatus::kOk;
+  }
+  const auto created = pthreads.CreateGuestRwlock();
+  if (!created) {
+    SetSignedResult(context, PthreadStatusResult(created.status, posix_errors));
+    return HleContextStatus::kOk;
+  }
+  if (context.WriteUInt64(address, created.handle) != HleContextStatus::kOk) {
+    (void)pthreads.DestroyRwlock(created.handle);
+    SetSignedResult(context, MemoryFault(posix_errors));
+    return HleContextStatus::kOk;
+  }
+  context.SetReturn(0);
+  return HleContextStatus::kOk;
+}
+
+bool ResolveRwlock(HleCallContext& context, kernel::PthreadService& pthreads,
+                   bool posix_errors, bool create_if_zero,
+                   std::uint64_t& handle) {
+  const auto address = context.Argument(0).value_or(0);
+  if (!ReadOpaqueHandle(context, address, posix_errors, handle)) {
+    return false;
+  }
+  if (handle == 0 && create_if_zero) {
+    if (!context.CanWriteMemory(address, sizeof(std::uint64_t))) {
+      SetSignedResult(context, MemoryFault(posix_errors));
+      return false;
+    }
+    const auto created = pthreads.CreateGuestRwlock();
+    if (!created) {
+      SetSignedResult(context, PthreadStatusResult(created.status, posix_errors));
+      return false;
+    }
+    if (context.WriteUInt64(address, created.handle) != HleContextStatus::kOk) {
+      (void)pthreads.DestroyRwlock(created.handle);
+      SetSignedResult(context, MemoryFault(posix_errors));
+      return false;
+    }
+    handle = created.handle;
+  }
+  if (handle == 0 || !pthreads.GetRwlock(handle)) {
+    SetSignedResult(context, InvalidArgument(posix_errors));
+    return false;
+  }
+  return true;
+}
+
+HleContextStatus PthreadRwlockDestroy(HleCallContext& context,
+                                      kernel::PthreadService& pthreads,
+                                      bool posix_errors) {
+  const auto address = context.Argument(0).value_or(0);
+  std::uint64_t handle = 0;
+  if (!ResolveRwlock(context, pthreads, posix_errors, false, handle)) {
+    return HleContextStatus::kOk;
+  }
+  if (context.WriteUInt64(address, 0) != HleContextStatus::kOk) {
+    SetSignedResult(context, MemoryFault(posix_errors));
+    return HleContextStatus::kOk;
+  }
+  const auto destroyed = pthreads.DestroyRwlock(handle);
+  if (destroyed != kernel::KernelStatus::kOk) {
+    (void)context.WriteUInt64(address, handle);
+  }
+  SetSignedResult(context, PthreadStatusResult(destroyed, posix_errors));
+  return HleContextStatus::kOk;
+}
+
+HleContextStatus PthreadRwlockLock(HleCallContext& context,
+                                   kernel::PthreadService& pthreads,
+                                   bool posix_errors, bool write,
+                                   bool try_only) {
+  std::uint64_t handle = 0;
+  if (!ResolveRwlock(context, pthreads, posix_errors, true, handle)) {
+    return HleContextStatus::kOk;
+  }
+  const auto status = pthreads.LockRwlock(handle, write, try_only);
+  if (status == kernel::KernelStatus::kWouldBlock && !try_only) {
+    context.SetReturn(0);
+    return HleContextStatus::kBlocked;
+  }
+  // The only rwlock lock-path invalid-argument result is a self-conflict:
+  // write after read/write, or read after write. libKernel reports EDEADLK
+  // for both the blocking and try variants rather than EINVAL.
+  if (status == kernel::KernelStatus::kInvalidArgument) {
+    SetSignedResult(context, posix_errors ? kPosixErrorDeadlock
+                                          : kKernelHleErrorDeadlock);
+  } else {
+    SetSignedResult(context, PthreadStatusResult(status, posix_errors));
+  }
+  return HleContextStatus::kOk;
+}
+
+HleContextStatus PthreadRwlockUnlock(HleCallContext& context,
+                                     kernel::PthreadService& pthreads,
+                                     bool posix_errors) {
+  std::uint64_t handle = 0;
+  if (!ResolveRwlock(context, pthreads, posix_errors, true, handle)) {
+    return HleContextStatus::kOk;
+  }
+  SetSignedResult(context,
+                  PthreadStatusResult(pthreads.UnlockRwlock(handle),
                                       posix_errors));
   return HleContextStatus::kOk;
 }
@@ -791,6 +964,12 @@ void AddAliases(std::vector<HleExportDefinition>& exports, const char* name,
   AddLibraryAliases(exports, kLibKernelName, name, nid, std::move(handler));
 }
 
+template <typename Handler>
+void AddNameAlias(std::vector<HleExportDefinition>& exports, const char* name,
+                  Handler handler) {
+  exports.push_back({kLibKernelName, name, std::move(handler)});
+}
+
 }  // namespace
 
 std::vector<HleExportDefinition> detail::MakeKernelPthreadExports(
@@ -798,7 +977,7 @@ std::vector<HleExportDefinition> detail::MakeKernelPthreadExports(
   auto* const pthread_view = &pthreads;
   auto* const scheduler_view = &scheduler;
   std::vector<HleExportDefinition> exports;
-  exports.reserve(120);
+  exports.reserve(151);
 
   AddAliases(exports, kPosixPthreadSelfName, kPosixPthreadSelfNid,
              [scheduler_view](HleCallContext& context) {
@@ -895,6 +1074,15 @@ std::vector<HleExportDefinition> detail::MakeKernelPthreadExports(
              [pthread_view](HleCallContext& context) {
                return PthreadAttrGetstacksize(context, *pthread_view, false);
              });
+  AddAliases(exports, kKernelPthreadAttrGetName, kKernelPthreadAttrGetNid,
+             [pthread_view](HleCallContext& context) {
+               return PthreadAttrGet(context, *pthread_view);
+             });
+  AddAliases(exports, kKernelPthreadAttrGetaffinityName,
+             kKernelPthreadAttrGetaffinityNid,
+             [pthread_view](HleCallContext& context) {
+               return PthreadAttrGetaffinity(context, *pthread_view);
+             });
 
   AddAliases(exports, kPosixPthreadMutexattrInitName,
              kPosixPthreadMutexattrInitNid,
@@ -986,6 +1174,67 @@ std::vector<HleExportDefinition> detail::MakeKernelPthreadExports(
              kKernelPthreadMutexUnlockNid,
              [pthread_view](HleCallContext& context) {
                return PthreadMutexUnlock(context, *pthread_view, false);
+             });
+
+  AddAliases(exports, kPosixPthreadRwlockInitName, kPosixPthreadRwlockInitNid,
+             [pthread_view](HleCallContext& context) {
+               return PthreadRwlockInit(context, *pthread_view, true);
+             });
+  AddAliases(exports, kKernelPthreadRwlockInitName, kKernelPthreadRwlockInitNid,
+             [pthread_view](HleCallContext& context) {
+               return PthreadRwlockInit(context, *pthread_view, false);
+             });
+  AddAliases(exports, kPosixPthreadRwlockDestroyName, kPosixPthreadRwlockDestroyNid,
+             [pthread_view](HleCallContext& context) {
+               return PthreadRwlockDestroy(context, *pthread_view, true);
+             });
+  AddAliases(exports, kKernelPthreadRwlockDestroyName, kKernelPthreadRwlockDestroyNid,
+             [pthread_view](HleCallContext& context) {
+               return PthreadRwlockDestroy(context, *pthread_view, false);
+             });
+  AddAliases(exports, kPosixPthreadRwlockRdlockName, kPosixPthreadRwlockRdlockNid,
+             [pthread_view](HleCallContext& context) {
+               return PthreadRwlockLock(context, *pthread_view, true, false, false);
+             });
+  AddAliases(exports, kKernelPthreadRwlockRdlockName, kKernelPthreadRwlockRdlockNid,
+             [pthread_view](HleCallContext& context) {
+               return PthreadRwlockLock(context, *pthread_view, false, false, false);
+             });
+  AddAliases(exports, kPosixPthreadRwlockWrlockName, kPosixPthreadRwlockWrlockNid,
+             [pthread_view](HleCallContext& context) {
+               return PthreadRwlockLock(context, *pthread_view, true, true, false);
+             });
+  AddAliases(exports, kKernelPthreadRwlockWrlockName, kKernelPthreadRwlockWrlockNid,
+             [pthread_view](HleCallContext& context) {
+               return PthreadRwlockLock(context, *pthread_view, false, true, false);
+             });
+  // The pinned libKernel table uses the same NID for the sce and POSIX
+  // try-read spellings. The NID follows libKernel/sce error routing; retain
+  // the POSIX spelling as a name-only alias without a duplicate NID key.
+  AddAliases(exports, kKernelPthreadRwlockTryrdlockName,
+             kKernelPthreadRwlockTryrdlockNid,
+               [pthread_view](HleCallContext& context) {
+                 return PthreadRwlockLock(context, *pthread_view, false, false, true);
+               });
+  AddNameAlias(exports, kPosixPthreadRwlockTryrdlockName,
+               [pthread_view](HleCallContext& context) {
+                 return PthreadRwlockLock(context, *pthread_view, true, false, true);
+               });
+  AddAliases(exports, kPosixPthreadRwlockTrywrlockName, kPosixPthreadRwlockTrywrlockNid,
+             [pthread_view](HleCallContext& context) {
+               return PthreadRwlockLock(context, *pthread_view, true, true, true);
+             });
+  AddAliases(exports, kKernelPthreadRwlockTrywrlockName, kKernelPthreadRwlockTrywrlockNid,
+             [pthread_view](HleCallContext& context) {
+               return PthreadRwlockLock(context, *pthread_view, false, true, true);
+             });
+  AddAliases(exports, kPosixPthreadRwlockUnlockName, kPosixPthreadRwlockUnlockNid,
+             [pthread_view](HleCallContext& context) {
+               return PthreadRwlockUnlock(context, *pthread_view, true);
+             });
+  AddAliases(exports, kKernelPthreadRwlockUnlockName, kKernelPthreadRwlockUnlockNid,
+             [pthread_view](HleCallContext& context) {
+               return PthreadRwlockUnlock(context, *pthread_view, false);
              });
 
   AddAliases(exports, kPosixPthreadCondInitName, kPosixPthreadCondInitNid,

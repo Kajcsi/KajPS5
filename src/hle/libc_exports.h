@@ -19,6 +19,7 @@ class GuestMemory;
 namespace kajps5::hle {
 
 inline constexpr auto kLibcName = "libc";
+inline constexpr auto kLibcInternalLibraryName = "libSceLibcInternal";
 inline constexpr auto kLibcInternalExtName = "libSceLibcInternalExt";
 inline constexpr auto kCxaGuardAcquireName = "__cxa_guard_acquire";
 inline constexpr auto kCxaGuardAcquireNid = "3GPpjQdAMTw";

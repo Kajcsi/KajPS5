@@ -159,6 +159,18 @@ NativeGuestProcessLauncher::StartNextInitializer() {
     startup_.reset();
     return result;
   }
+  if (!pthreads_.SetThreadStack(created.handle, allocation.stack_address,
+                                allocation.stack_size)) {
+    const auto rollback_ok = pthreads_.DiscardReadyThread(created.handle);
+    const auto result = NativeGuestProcessStartupResult{
+        rollback_ok
+            ? NativeGuestProcessStartupStatus::kInitializerThreadRegistrationFailed
+            : NativeGuestProcessStartupStatus::kInitializerThreadRollbackFailed,
+        call.kind, call.index, call.address,
+        rollback_ok ? kernel::kInvalidKernelHandle : created.handle};
+    startup_.reset();
+    return result;
+  }
 
   startup_->active_initializer = created.handle;
   return {NativeGuestProcessStartupStatus::kPending, call.kind, call.index,

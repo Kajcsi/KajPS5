@@ -65,6 +65,11 @@ inline constexpr auto kPosixPthreadAttrGetstacksizeNid = "0qOtCR-ZHck";
 inline constexpr auto kKernelPthreadAttrGetstacksizeName =
     "scePthreadAttrGetstacksize";
 inline constexpr auto kKernelPthreadAttrGetstacksizeNid = "-fA+7ZlGDQs";
+inline constexpr auto kKernelPthreadAttrGetName = "scePthreadAttrGet";
+inline constexpr auto kKernelPthreadAttrGetNid = "x1X76arYMxU";
+inline constexpr auto kKernelPthreadAttrGetaffinityName =
+    "scePthreadAttrGetaffinity";
+inline constexpr auto kKernelPthreadAttrGetaffinityNid = "8+s5BzZjxSg";
 
 inline constexpr auto kPosixPthreadMutexattrInitName =
     "pthread_mutexattr_init";
@@ -114,6 +119,35 @@ inline constexpr auto kPosixPthreadMutexUnlockName = "pthread_mutex_unlock";
 inline constexpr auto kPosixPthreadMutexUnlockNid = "2Z+PpY6CaJg";
 inline constexpr auto kKernelPthreadMutexUnlockName = "scePthreadMutexUnlock";
 inline constexpr auto kKernelPthreadMutexUnlockNid = "tn3VlD0hG60";
+
+inline constexpr auto kKernelPthreadRwlockInitName = "scePthreadRwlockInit";
+inline constexpr auto kKernelPthreadRwlockInitNid = "6ULAa0fq4jA";
+inline constexpr auto kPosixPthreadRwlockInitName = "pthread_rwlock_init";
+inline constexpr auto kPosixPthreadRwlockInitNid = "ytQULN-nhL4";
+inline constexpr auto kKernelPthreadRwlockDestroyName = "scePthreadRwlockDestroy";
+inline constexpr auto kKernelPthreadRwlockDestroyNid = "BB+kb08Tl9A";
+inline constexpr auto kPosixPthreadRwlockDestroyName = "pthread_rwlock_destroy";
+inline constexpr auto kPosixPthreadRwlockDestroyNid = "1471ajPzxh0";
+inline constexpr auto kKernelPthreadRwlockRdlockName = "scePthreadRwlockRdlock";
+inline constexpr auto kKernelPthreadRwlockRdlockNid = "Ox9i0c7L5w0";
+inline constexpr auto kPosixPthreadRwlockRdlockName = "pthread_rwlock_rdlock";
+inline constexpr auto kPosixPthreadRwlockRdlockNid = "iGjsr1WAtI0";
+inline constexpr auto kKernelPthreadRwlockWrlockName = "scePthreadRwlockWrlock";
+inline constexpr auto kKernelPthreadRwlockWrlockNid = "mqdNorrB+gI";
+inline constexpr auto kPosixPthreadRwlockWrlockName = "pthread_rwlock_wrlock";
+inline constexpr auto kPosixPthreadRwlockWrlockNid = "sIlRvQqsN2Y";
+inline constexpr auto kKernelPthreadRwlockUnlockName = "scePthreadRwlockUnlock";
+inline constexpr auto kKernelPthreadRwlockUnlockNid = "EgmLo6EWgso";
+inline constexpr auto kPosixPthreadRwlockUnlockName = "pthread_rwlock_unlock";
+inline constexpr auto kPosixPthreadRwlockUnlockNid = "+L98PIbGttk";
+inline constexpr auto kKernelPthreadRwlockTryrdlockName = "scePthreadRwlockTryrdlock";
+inline constexpr auto kKernelPthreadRwlockTryrdlockNid = "SFxTMOfuCkE";
+inline constexpr auto kPosixPthreadRwlockTryrdlockName = "pthread_rwlock_tryrdlock";
+inline constexpr auto kPosixPthreadRwlockTryrdlockNid = "SFxTMOfuCkE";
+inline constexpr auto kKernelPthreadRwlockTrywrlockName = "scePthreadRwlockTrywrlock";
+inline constexpr auto kKernelPthreadRwlockTrywrlockNid = "bIHoZCTomsI";
+inline constexpr auto kPosixPthreadRwlockTrywrlockName = "pthread_rwlock_trywrlock";
+inline constexpr auto kPosixPthreadRwlockTrywrlockNid = "XhWHn6P5R7U";
 
 inline constexpr auto kPosixPthreadCondInitName = "pthread_cond_init";
 inline constexpr auto kPosixPthreadCondInitNid = "0TyVk4MSLt0";

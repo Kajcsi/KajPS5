@@ -36,8 +36,10 @@ KernelStatus PthreadService::DestroyAttribute(std::uint64_t handle) {
   }
 
   std::lock_guard lock(mutex_);
-  return attributes_.erase(handle) == 1 ? KernelStatus::kOk
-                                        : KernelStatus::kNotFound;
+  if (attributes_.erase(handle) == 1 || thread_attribute_snapshots_.erase(handle) == 1) {
+    return KernelStatus::kOk;
+  }
+  return KernelStatus::kNotFound;
 }
 
 KernelStatus PthreadService::SetAttributeStackSize(
@@ -59,10 +61,13 @@ std::optional<PthreadAttribute> PthreadService::GetAttribute(
     std::uint64_t handle) const {
   std::lock_guard lock(mutex_);
   const auto found = attributes_.find(handle);
-  if (found == attributes_.end()) {
-    return std::nullopt;
+  if (found != attributes_.end()) {
+    return found->second;
   }
-  return found->second;
+  const auto snapshot = thread_attribute_snapshots_.find(handle);
+  return snapshot == thread_attribute_snapshots_.end()
+             ? std::nullopt
+             : std::optional<PthreadAttribute>(snapshot->second);
 }
 
 PthreadThreadCreateResult PthreadService::CreateThread(
@@ -146,6 +151,25 @@ bool PthreadService::ExitCurrent(std::uint64_t exit_value) {
         wake_keys.push_back(std::move(wake_key));
       }
     }
+    for (auto& [handle, rwlock] : rwlocks_) {
+      bool released = false;
+      if (rwlock.writer == *current_thread) {
+        rwlock.writer = kInvalidKernelHandle;
+        rwlock.granted_writer.reset();
+        released = true;
+      }
+      if (rwlock.readers.erase(*current_thread) != 0) {
+        rwlock.granted_readers.erase(*current_thread);
+        released = true;
+      }
+      std::erase_if(rwlock.waiters, [current_thread](const RwlockWaiter& waiter) {
+        return waiter.thread == *current_thread;
+      });
+      if (released && rwlock.writer == kInvalidKernelHandle &&
+          rwlock.readers.empty()) {
+        GrantRwlockWaitersLocked(handle, rwlock, wake_keys);
+      }
+    }
   }
   for (const auto& wake_key : wake_keys) {
     (void)scheduler_.WakeBlockedThreads(wake_key, 1);
@@ -161,6 +185,39 @@ std::optional<PthreadThreadSnapshot> PthreadService::GetThread(
     return std::nullopt;
   }
   return found->second;
+}
+
+bool PthreadService::SetThreadStack(KernelHandle handle,
+                                    std::uint64_t stack_address,
+                                    std::uint64_t stack_size) {
+  if (stack_address == 0 || stack_size < kPthreadMinimumStackSize) {
+    return false;
+  }
+  std::lock_guard lock(mutex_);
+  const auto found = threads_.find(handle);
+  if (found == threads_.end()) {
+    return false;
+  }
+  found->second.attributes.stack_address = stack_address;
+  found->second.attributes.stack_size = stack_size;
+  return true;
+}
+
+PthreadAttributeCreateResult PthreadService::CreateThreadAttributeSnapshot(
+    KernelHandle handle) {
+  std::lock_guard lock(mutex_);
+  const auto thread = threads_.find(handle);
+  if (thread == threads_.end() || next_attribute_id_ == 0 ||
+      next_attribute_id_ > std::numeric_limits<std::uint64_t>::max() -
+                               kSyntheticAttributeHandleBase) {
+    return {thread == threads_.end() ? KernelStatus::kNotFound
+                                     : KernelStatus::kNoResources,
+            0};
+  }
+  const auto attribute = kSyntheticAttributeHandleBase + next_attribute_id_++;
+  thread_attribute_snapshots_.insert_or_assign(attribute,
+                                                thread->second.attributes);
+  return {KernelStatus::kOk, attribute};
 }
 
 PthreadAttributeCreateResult PthreadService::CreateMutexAttribute() {
@@ -237,7 +294,7 @@ bool PthreadService::ConfigureGuestMutexArena(memory::GuestMemory& memory,
       mutexes_.begin(), mutexes_.end(), [](const auto& entry) {
         return entry.second.guest_object_slot.has_value();
       });
-  if (guest_mutex_memory_ != nullptr || has_guest_mutex || address == 0 ||
+  if (guest_mutex_memory_ != nullptr || has_guest_mutex || !rwlocks_.empty() || address == 0 ||
       address > std::numeric_limits<std::uint64_t>::max() -
                     kPthreadMutexArenaSize ||
       !memory.CanAccess(
@@ -258,7 +315,7 @@ bool PthreadService::ReleaseGuestMutexArena() {
       mutexes_.begin(), mutexes_.end(), [](const auto& entry) {
         return entry.second.guest_object_slot.has_value();
       });
-  if (guest_mutex_memory_ == nullptr || has_guest_mutex) {
+  if (guest_mutex_memory_ == nullptr || has_guest_mutex || !rwlocks_.empty()) {
     return false;
   }
   guest_mutex_memory_ = nullptr;
@@ -365,10 +422,11 @@ PthreadMutexCreateResult PthreadService::CreateMutexLocked(
     return {KernelStatus::kNoResources, 0};
   }
   auto candidate_id = next_mutex_id_;
-  const auto maximum_probes = mutexes_.size();
+  const auto maximum_probes = mutexes_.size() + rwlocks_.size();
   for (std::size_t probes = 0;;) {
     const auto handle = kSyntheticMutexHandleBase + candidate_id;
-    if (mutexes_.find(handle) == mutexes_.end()) {
+    if (mutexes_.find(handle) == mutexes_.end() &&
+        rwlocks_.find(handle) == rwlocks_.end()) {
       const auto [entry, inserted] = mutexes_.emplace(handle, std::move(mutex));
       (void)entry;
       if (!inserted) {
@@ -570,6 +628,196 @@ std::optional<bool> PthreadService::CurrentThreadOwnsMutex(
     return std::nullopt;
   }
   return found->second.owner == *current_thread;
+}
+
+PthreadRwlockCreateResult PthreadService::CreateGuestRwlock() {
+  std::lock_guard lock(mutex_);
+  if (guest_mutex_memory_ == nullptr) {
+    return {KernelStatus::kNoResources, 0};
+  }
+  for (std::size_t slot = 0; slot < guest_mutex_slots_.size(); ++slot) {
+    if (guest_mutex_slots_[slot]) {
+      continue;
+    }
+    const auto offset = slot * kPthreadMutexObjectSize;
+    if (guest_mutex_arena_address_ >
+        std::numeric_limits<std::uint64_t>::max() - offset) {
+      return {KernelStatus::kNoResources, 0};
+    }
+    const auto handle = guest_mutex_arena_address_ + offset;
+    if (mutexes_.contains(handle) || rwlocks_.contains(handle) ||
+        !guest_mutex_memory_->Fill(handle, kPthreadMutexObjectSize,
+                                   std::byte{0})) {
+      continue;
+    }
+    const auto [entry, inserted] =
+        rwlocks_.emplace(handle, RwlockState{.guest_object_slot = slot});
+    (void)entry;
+    if (!inserted) {
+      return {KernelStatus::kNoResources, 0};
+    }
+    guest_mutex_slots_[slot] = true;
+    return {KernelStatus::kOk, handle};
+  }
+  return {KernelStatus::kNoResources, 0};
+}
+
+KernelStatus PthreadService::CanDestroyRwlock(std::uint64_t handle) const {
+  if (handle == 0) {
+    return KernelStatus::kInvalidArgument;
+  }
+  std::lock_guard lock(mutex_);
+  const auto found = rwlocks_.find(handle);
+  if (found == rwlocks_.end()) {
+    return KernelStatus::kNotFound;
+  }
+  const auto& rwlock = found->second;
+  return rwlock.writer == kInvalidKernelHandle && rwlock.readers.empty() &&
+                 rwlock.waiters.empty() && rwlock.granted_readers.empty() &&
+                 !rwlock.granted_writer
+             ? KernelStatus::kOk
+             : KernelStatus::kBusy;
+}
+
+KernelStatus PthreadService::DestroyRwlock(std::uint64_t handle) {
+  std::lock_guard lock(mutex_);
+  const auto found = rwlocks_.find(handle);
+  if (found == rwlocks_.end()) {
+    return KernelStatus::kNotFound;
+  }
+  const auto& rwlock = found->second;
+  if (rwlock.writer != kInvalidKernelHandle || !rwlock.readers.empty() ||
+      !rwlock.waiters.empty() || !rwlock.granted_readers.empty() ||
+      rwlock.granted_writer) {
+    return KernelStatus::kBusy;
+  }
+  const auto slot = found->second.guest_object_slot;
+  if (slot >= guest_mutex_slots_.size() || guest_mutex_memory_ == nullptr ||
+      !guest_mutex_memory_->Fill(handle, kPthreadMutexObjectSize,
+                                 std::byte{0})) {
+    return KernelStatus::kNoResources;
+  }
+  guest_mutex_slots_[slot] = false;
+  rwlocks_.erase(found);
+  return KernelStatus::kOk;
+}
+
+KernelStatus PthreadService::LockRwlock(std::uint64_t handle, bool write,
+                                        bool try_only) {
+  const auto current = scheduler_.current_thread();
+  if (!current) {
+    return KernelStatus::kBusy;
+  }
+  std::string wait_key;
+  {
+    std::lock_guard lock(mutex_);
+    const auto found = rwlocks_.find(handle);
+    if (found == rwlocks_.end()) {
+      return KernelStatus::kNotFound;
+    }
+    auto& rwlock = found->second;
+    if (write && rwlock.writer == *current && rwlock.granted_writer == current) {
+      rwlock.granted_writer.reset();
+      return KernelStatus::kOk;
+    }
+    if (!write && rwlock.granted_readers.erase(*current) != 0) {
+      return KernelStatus::kOk;
+    }
+    if (write &&
+        (rwlock.writer == *current || rwlock.readers.contains(*current))) {
+      return KernelStatus::kInvalidArgument;
+    }
+    if (!write && rwlock.readers.contains(*current)) {
+      auto& count = rwlock.readers.at(*current);
+      if (count == std::numeric_limits<std::uint32_t>::max()) {
+        return KernelStatus::kNoResources;
+      }
+      ++count;
+      return KernelStatus::kOk;
+    }
+    if (!write && rwlock.writer == *current) {
+      return KernelStatus::kInvalidArgument;
+    }
+    const bool free = rwlock.writer == kInvalidKernelHandle &&
+                      rwlock.readers.empty();
+    if (free && rwlock.waiters.empty()) {
+      if (write) {
+        rwlock.writer = *current;
+      } else {
+        rwlock.readers.emplace(*current, 1);
+      }
+      return KernelStatus::kOk;
+    }
+    if (try_only) {
+      return KernelStatus::kBusy;
+    }
+    if (std::none_of(rwlock.waiters.begin(), rwlock.waiters.end(),
+                     [current](const RwlockWaiter& waiter) {
+                       return waiter.thread == *current;
+                     })) {
+      rwlock.waiters.push_back({*current, write});
+    }
+    wait_key = RwlockWaitKey(handle, *current);
+  }
+  if (scheduler_.BlockCurrent(wait_key)) {
+    return KernelStatus::kWouldBlock;
+  }
+  std::lock_guard lock(mutex_);
+  if (const auto found = rwlocks_.find(handle); found != rwlocks_.end()) {
+    std::erase_if(found->second.waiters, [current](const RwlockWaiter& waiter) {
+      return waiter.thread == *current;
+    });
+  }
+  return KernelStatus::kBusy;
+}
+
+KernelStatus PthreadService::UnlockRwlock(std::uint64_t handle) {
+  const auto current = scheduler_.current_thread();
+  if (!current) {
+    return KernelStatus::kBusy;
+  }
+  std::vector<std::string> wake_keys;
+  {
+    std::lock_guard lock(mutex_);
+    const auto found = rwlocks_.find(handle);
+    if (found == rwlocks_.end()) {
+      return KernelStatus::kNotFound;
+    }
+    auto& rwlock = found->second;
+    if (rwlock.writer == *current) {
+      rwlock.writer = kInvalidKernelHandle;
+    } else if (const auto reader = rwlock.readers.find(*current);
+               reader != rwlock.readers.end()) {
+      if (--reader->second == 0) {
+        rwlock.readers.erase(reader);
+      }
+    } else {
+      return KernelStatus::kPermissionDenied;
+    }
+    if (rwlock.writer == kInvalidKernelHandle && rwlock.readers.empty()) {
+      GrantRwlockWaitersLocked(handle, rwlock, wake_keys);
+    }
+  }
+  for (const auto& wake_key : wake_keys) {
+    (void)scheduler_.WakeBlockedThreads(wake_key, 1);
+  }
+  return KernelStatus::kOk;
+}
+
+std::optional<PthreadRwlockSnapshot> PthreadService::GetRwlock(
+    std::uint64_t handle) const {
+  std::lock_guard lock(mutex_);
+  const auto found = rwlocks_.find(handle);
+  if (found == rwlocks_.end()) {
+    return std::nullopt;
+  }
+  std::size_t readers = 0;
+  for (const auto& [thread, count] : found->second.readers) {
+    (void)thread;
+    readers += count;
+  }
+  return PthreadRwlockSnapshot{handle, found->second.writer, readers,
+                               found->second.waiters.size()};
 }
 
 PthreadConditionCreateResult PthreadService::CreateCondition() {
@@ -889,6 +1137,12 @@ std::string PthreadService::ConditionWaitKey(
          std::to_string(thread_handle);
 }
 
+std::string PthreadService::RwlockWaitKey(std::uint64_t rwlock_handle,
+                                          KernelHandle thread_handle) {
+  return "pthread-rwlock:" + std::to_string(rwlock_handle) + ":" +
+         std::to_string(thread_handle);
+}
+
 bool PthreadService::IsMutexTypeValid(int type) noexcept {
   return type >= kPthreadMutexErrorCheck && type <= kPthreadMutexAdaptive;
 }
@@ -908,6 +1162,30 @@ void PthreadService::GrantNextMutexWaiterLocked(
   mutex.recursion_count = 1;
   mutex.granted_waiters.insert(next_thread);
   wake_key = MutexWaitKey(mutex_handle, next_thread);
+}
+
+void PthreadService::GrantRwlockWaitersLocked(
+    std::uint64_t rwlock_handle, RwlockState& rwlock,
+    std::vector<std::string>& wake_keys) {
+  if (rwlock.writer != kInvalidKernelHandle || !rwlock.readers.empty() ||
+      rwlock.waiters.empty()) {
+    return;
+  }
+  if (rwlock.waiters.front().write) {
+    const auto waiter = rwlock.waiters.front();
+    rwlock.waiters.pop_front();
+    rwlock.writer = waiter.thread;
+    rwlock.granted_writer = waiter.thread;
+    wake_keys.push_back(RwlockWaitKey(rwlock_handle, waiter.thread));
+    return;
+  }
+  while (!rwlock.waiters.empty() && !rwlock.waiters.front().write) {
+    const auto waiter = rwlock.waiters.front();
+    rwlock.waiters.pop_front();
+    rwlock.readers.emplace(waiter.thread, 1);
+    rwlock.granted_readers.insert(waiter.thread);
+    wake_keys.push_back(RwlockWaitKey(rwlock_handle, waiter.thread));
+  }
 }
 
 PthreadKeyCreateResult PthreadService::CreateKey(

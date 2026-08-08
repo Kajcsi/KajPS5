@@ -54,7 +54,7 @@ int main() {
             registry, runtime.cxa_guards(), runtime.process_lifecycle(),
             runtime.libc_heap(), memory, kHeapTraceStorageAddress) ==
                 ExportRegistryStatus::kOk &&
-            registry.size() == 108,
+            registry.size() == 110,
         "libc exports did not register atomically");
 
   constexpr std::uint64_t kGuardAddress = 0x1020;
@@ -69,6 +69,13 @@ int main() {
   const std::vector<std::string> libc_scope = {kajps5::hle::kLibcName};
   const std::vector<std::string> libc_internal_ext_scope = {
       kajps5::hle::kLibcInternalExtName};
+  const std::vector<std::string> libc_internal_scope = {
+      kajps5::hle::kLibcInternalLibraryName};
+  Check(registry.Lookup(kajps5::hle::kLibcCxaAtexitName,
+                        libc_internal_scope) &&
+            registry.Lookup(kajps5::hle::kLibcCxaAtexitNid,
+                            libc_internal_scope),
+        "__cxa_atexit is not scoped to libSceLibcInternal");
   Check(registry.Lookup(kajps5::hle::kLibcHeapGetTraceInfoName,
                         libc_internal_ext_scope) &&
             registry.Lookup(kajps5::hle::kLibcHeapGetTraceInfoNid,
