@@ -30,6 +30,7 @@ add_library(kajps5_core STATIC
   gpu/vulkan/loader.cpp
   gpu/vulkan/presentation.cpp
   platform/windows/vulkan_window.cpp
+  platform/windows/native_guest_instruction_sampler.cpp
   gpu/shader/recompiler/cfg/ShaderCFG.cpp
   gpu/shader/recompiler/decompiler/ExportOps.cpp
   gpu/shader/recompiler/decompiler/ImageOps.cpp

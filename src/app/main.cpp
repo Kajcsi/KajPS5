@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <charconv>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -14,6 +16,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <vector>
 
 #include "core/memory/guest_memory.h"
@@ -42,6 +45,7 @@
 #include "runtime/title_loader.h"
 
 #if defined(_WIN32)
+#include "platform/windows/native_guest_instruction_sampler.h"
 #include "platform/windows/vulkan_window.h"
 #endif
 
@@ -53,6 +57,21 @@ constexpr std::size_t kMaximumTitleRunSlices = 1000000;
 constexpr std::size_t kTitleRunChunkSlices = 1024;
 constexpr std::size_t kMaximumTitleRunIterations = 1000000;
 constexpr std::size_t kMaximumModuleOverlayDirectories = 16;
+#if defined(_WIN32)
+constexpr std::uint32_t kMaximumGuestWatchdogMilliseconds = 4294967294U;
+
+std::optional<std::uint32_t> ParsePositiveMilliseconds(
+    const std::string_view value) noexcept {
+  std::uint32_t milliseconds = 0;
+  const auto parsed = std::from_chars(value.data(), value.data() + value.size(),
+                                      milliseconds);
+  if (parsed.ec != std::errc() || parsed.ptr != value.data() + value.size() ||
+      milliseconds == 0 || milliseconds > kMaximumGuestWatchdogMilliseconds) {
+    return std::nullopt;
+  }
+  return milliseconds;
+}
+#endif
 
 std::optional<std::uint64_t> AlignUp(std::uint64_t value,
                                      std::uint64_t alignment) noexcept {
@@ -319,7 +338,8 @@ int TraceExecutableFile(const char* path) {
 int RunExecutableFile(
     const char* path,
     std::span<const std::string_view> module_overlay_directories,
-    bool headless) {
+    bool headless,
+    std::optional<std::uint32_t> guest_watchdog_milliseconds) {
   std::string file_error;
   auto image = ReadExecutableFile(path, file_error);
   if (!image) {
@@ -519,6 +539,32 @@ int RunExecutableFile(
   prepared.session->gpu_runtime().EnableVulkanActionExecution(false);
 #endif
 
+#if defined(_WIN32)
+  std::unique_ptr<kajps5::platform::windows::NativeGuestInstructionSampler>
+      guest_instruction_sampler;
+  if (guest_watchdog_milliseconds) {
+    guest_instruction_sampler =
+        kajps5::platform::windows::NativeGuestInstructionSampler::StartForCallingThread(
+            std::chrono::milliseconds(*guest_watchdog_milliseconds),
+            [&session = *prepared.session](const auto& sample) {
+              const bool in_guest_memory = session.memory().Contains(
+                  sample.instruction_pointer, 1);
+              std::cerr << "title.guest_watchdog.sample=" << sample.index << '\n'
+                        << "title.guest_watchdog.rip=0x" << std::hex
+                        << sample.instruction_pointer << std::dec << '\n'
+                        << "title.guest_watchdog.in_guest_memory="
+                        << (in_guest_memory ? "true" : "false") << '\n'
+                        << std::flush;
+            });
+    if (!guest_instruction_sampler) {
+      std::cerr << "Guest watchdog unavailable: cannot start Windows sampler\n";
+      return 4;
+    }
+  }
+#else
+  (void)guest_watchdog_milliseconds;
+#endif
+
   const auto started =
       prepared.session->Start(process_image_name, prepared.stack_search_start);
   std::cout << "title.start.status="
@@ -619,6 +665,7 @@ int main(int argc, char** argv) {
   if (argc >= 3 && std::string_view(argv[1]) == "--run-elf") {
     std::vector<std::string_view> module_directories;
     bool headless = false;
+    std::optional<std::uint32_t> guest_watchdog_milliseconds;
     for (int index = 3; index < argc;) {
       const std::string_view argument = argv[index];
       if (argument == "--headless") {
@@ -627,17 +674,31 @@ int main(int argc, char** argv) {
       } else if (argument == "--module-dir" && index + 1 < argc) {
         module_directories.emplace_back(argv[index + 1]);
         index += 2;
+      } else if (argument == "--guest-watchdog-ms" && index + 1 < argc) {
+#if !defined(_WIN32)
+        std::cerr << "--guest-watchdog-ms is only available on Windows\n";
+        return 1;
+#else
+        guest_watchdog_milliseconds = ParsePositiveMilliseconds(argv[index + 1]);
+        if (!guest_watchdog_milliseconds) {
+          std::cerr << "--guest-watchdog-ms must be a positive whole number of milliseconds\n";
+          return 1;
+        }
+        index += 2;
+#endif
       } else {
-        std::cerr << "Usage: kajps5 --run-elf <path> [--headless] [--module-dir <path>]\n";
+        std::cerr << "Usage: kajps5 --run-elf <path> [--headless] [--module-dir <path>] [--guest-watchdog-ms <positive-ms>]\n";
         return 1;
       }
     }
-    return RunExecutableFile(argv[2], module_directories, headless);
+    return RunExecutableFile(argv[2], module_directories, headless,
+                             guest_watchdog_milliseconds);
   }
 
   if (argc > 1) {
     std::cerr << "Usage: kajps5 [--version | --trace-elf <path> | --run-elf "
-                  "<path> [--headless] [--module-dir <path>]]\n";
+                  "<path> [--headless] [--module-dir <path>] "
+                  "[--guest-watchdog-ms <positive-ms>]]\n";
     return 1;
   }
 

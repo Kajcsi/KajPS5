@@ -462,6 +462,15 @@ add_test(NAME kajps5_gpu_vulkan_smoke
 set_tests_properties(kajps5_gpu_vulkan_smoke PROPERTIES SKIP_RETURN_CODE 77)
 
 if(WIN32)
+  add_executable(kajps5_windows_native_guest_instruction_sampler_test
+                 windows_native_guest_instruction_sampler_test.cpp)
+  target_link_libraries(kajps5_windows_native_guest_instruction_sampler_test
+                        PRIVATE kajps5_core)
+  kajps5_deploy_msvc_asan_runtime(
+    kajps5_windows_native_guest_instruction_sampler_test)
+  add_test(NAME kajps5_windows_native_guest_instruction_sampler
+           COMMAND kajps5_windows_native_guest_instruction_sampler_test)
+
   add_executable(kajps5_gpu_vulkan_present_smoke_test
                  gpu_vulkan_present_smoke_test.cpp)
   target_link_libraries(kajps5_gpu_vulkan_present_smoke_test PRIVATE kajps5_core)
