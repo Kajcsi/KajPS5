@@ -5,6 +5,9 @@
 
 #include "runtime/title_loader.h"
 
+#include "hle/call_context.h"
+#include "hle/kernel_exports.h"
+
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -20,6 +23,9 @@ namespace {
 constexpr std::size_t kProgramHeaderOffset = 64;
 constexpr std::size_t kProgramOffset = 0x100;
 constexpr std::uint64_t kProgramAddress = 0x1000;
+constexpr std::uint64_t kProcessParametersOffset = 0x20;
+constexpr std::uint64_t kProcessParametersAddress =
+    kProgramAddress + kProcessParametersOffset;
 
 void Check(bool condition, const char* message) {
   if (!condition) {
@@ -53,8 +59,10 @@ void Write64(std::vector<std::byte>& image, std::size_t offset,
 }
 
 std::vector<std::byte> MakePublicRunElf() {
-  constexpr std::size_t code_size = 6;
-  std::vector<std::byte> image(kProgramOffset + code_size);
+  constexpr std::size_t load_file_size = 0x30;
+  constexpr std::size_t load_memory_size = 0x40;
+  constexpr std::size_t program_header_size = 56;
+  std::vector<std::byte> image(kProgramOffset + load_file_size);
   image[0] = std::byte{0x7f};
   image[1] = std::byte{'E'};
   image[2] = std::byte{'L'};
@@ -69,15 +77,26 @@ std::vector<std::byte> MakePublicRunElf() {
   Write64(image, 32, kProgramHeaderOffset);
   Write16(image, 52, 64);
   Write16(image, 54, 56);
-  Write16(image, 56, 1);
+  Write16(image, 56, 2);
 
   Write32(image, kProgramHeaderOffset, 1);
   Write32(image, kProgramHeaderOffset + 4, 5);
   Write64(image, kProgramHeaderOffset + 8, kProgramOffset);
   Write64(image, kProgramHeaderOffset + 16, kProgramAddress);
-  Write64(image, kProgramHeaderOffset + 32, code_size);
-  Write64(image, kProgramHeaderOffset + 40, code_size);
+  Write64(image, kProgramHeaderOffset + 32, load_file_size);
+  Write64(image, kProgramHeaderOffset + 40, load_memory_size);
   Write64(image, kProgramHeaderOffset + 48, 0x100);
+
+  const auto process_parameters_header =
+      kProgramHeaderOffset + program_header_size;
+  Write32(image, process_parameters_header, 0x61000001);
+  Write32(image, process_parameters_header + 4, 4);
+  Write64(image, process_parameters_header + 8,
+          kProgramOffset + kProcessParametersOffset);
+  Write64(image, process_parameters_header + 16, kProcessParametersAddress);
+  Write64(image, process_parameters_header + 32, 0x10);
+  Write64(image, process_parameters_header + 40, 0x10);
+  Write64(image, process_parameters_header + 48, 8);
 
   image[kProgramOffset] = std::byte{0xb8};
   image[kProgramOffset + 1] = std::byte{42};
@@ -122,6 +141,18 @@ int main(int argc, char** argv) {
           prepared.session->memory().CanExecute(
               kProgramAddress + prepared.load_bias, 1),
       "public title image preparation failed");
+  Check(prepared.session->kernel_runtime().process_parameters_address() ==
+                prepared.load_bias + kProcessParametersAddress,
+        "title loader did not configure the process-parameter guest address");
+  const std::vector<std::string> libraries = {"libkernel"};
+  kajps5::hle::HleCallContext proc_param_context(prepared.session->memory());
+  Check(prepared.session->hle_exports()
+                .Dispatch(kajps5::hle::kKernelGetProcParamNid, libraries,
+                          proc_param_context) &&
+            proc_param_context.GetRegister(kajps5::hle::HleRegister::kRax)
+                    .value_or(0) ==
+                prepared.load_bias + kProcessParametersAddress,
+        "title HLE proc-param NID did not return the load-biased address");
   const auto started =
       prepared.session->Start("public-run.elf", prepared.stack_search_start);
   Check(started.status == TitleSessionStatus::kPending &&

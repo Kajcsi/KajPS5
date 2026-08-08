@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <memory>
 #include <utility>
 
@@ -69,6 +70,12 @@ public:
   [[nodiscard]] AmprCommandBufferService& ampr_command_buffers() noexcept {
     return ampr_command_buffers_;
   }
+  void SetProcessParametersAddress(std::uint64_t address) noexcept {
+    process_parameters_address_ = address;
+  }
+  [[nodiscard]] std::uint64_t process_parameters_address() const noexcept {
+    return process_parameters_address_;
+  }
 
 private:
   HandleTable handles_;
@@ -85,6 +92,7 @@ private:
   LibcHeapService libc_heap_;
   ProcessLifecycleService process_lifecycle_;
   AmprCommandBufferService ampr_command_buffers_;
+  std::uint64_t process_parameters_address_ = 0;
 };
 
 } // namespace kajps5::kernel

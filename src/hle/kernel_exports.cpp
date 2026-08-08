@@ -31,10 +31,11 @@ ExportRegistryStatus RegisterKernelExports(ExportRegistry& registry,
       detail::MakeKernelPthreadExports(runtime.pthreads(), runtime.scheduler());
   auto semaphore_exports =
       detail::MakeKernelSemaphoreExports(runtime.semaphores());
+  auto* const runtime_view = &runtime;
   clock_exports.reserve(clock_exports.size() + event_queue_exports.size() +
                         event_flag_exports.size() + file_exports.size() +
                         memory_exports.size() + pthread_exports.size() +
-                        semaphore_exports.size() + 2);
+                        semaphore_exports.size() + 4);
   clock_exports.insert(clock_exports.end(),
                        std::make_move_iterator(event_queue_exports.begin()),
                        std::make_move_iterator(event_queue_exports.end()));
@@ -53,6 +54,14 @@ ExportRegistryStatus RegisterKernelExports(ExportRegistry& registry,
   clock_exports.insert(clock_exports.end(),
                        std::make_move_iterator(semaphore_exports.begin()),
                        std::make_move_iterator(semaphore_exports.end()));
+  const auto get_proc_param = [runtime_view](HleCallContext& context) {
+    context.SetReturn(runtime_view->process_parameters_address());
+    return HleContextStatus::kOk;
+  };
+  clock_exports.push_back(
+      {kLibKernelName, kKernelGetProcParamName, get_proc_param});
+  clock_exports.push_back(
+      {kLibKernelName, kKernelGetProcParamNid, get_proc_param});
   const auto stack_check_fail = [](HleCallContext&) {
     return HleContextStatus::kFatalGuestError;
   };

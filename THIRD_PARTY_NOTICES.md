@@ -20,6 +20,14 @@ KytyPS5 identifies as GPL-2.0-only. SharpEmu identifies as
 GPL-2.0-or-later. No upstream host executor, continuation system, ownership
 model, or source was copied.
 
+The `sceKernelGetProcParam` behavior in `src/kernel/runtime.h`,
+`src/hle/kernel_exports.*`, `src/runtime/title_loader.cpp`, and focused tests
+reimplements the process-parameter address flow observed in KytyPS5
+`src/libs/libKernel.cpp` and `src/loader/runtimeLinker.cpp` at commit
+`fb5ecec455cf6c67154134429485ffccbfc34203`, and SharpEmu
+`src/SharpEmu.Libs/Kernel/KernelRuntimeCompatExports.cs` at commit
+`9e10d7c44a2821cfd5ccd3417c09c0cf269285a4`; no upstream source was copied.
+
 ## Loader and guest memory
 
 The dynamic-table, dynamic-string, symbol, `RELA`, and launch-metadata behavior

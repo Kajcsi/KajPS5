@@ -76,7 +76,7 @@ int main() {
   ExportRegistry registry;
   Check(kajps5::hle::RegisterKernelExports(registry, runtime) ==
             ExportRegistryStatus::kOk &&
-            registry.size() == 234,
+            registry.size() == 236,
         "default kernel exports did not register atomically");
 
   GuestMemory memory(0x1000, 0x1000);
@@ -84,6 +84,25 @@ int main() {
   // PS5 ELF metadata uses this exact lowercase library name.
   const std::vector<std::string> libraries = {"libkernel"};
   HleCallContext direct_memory_context(memory);
+  HleCallContext default_proc_param_context(memory);
+  Check(registry.Dispatch(kajps5::hle::kKernelGetProcParamName, libraries,
+                          default_proc_param_context) &&
+            default_proc_param_context.GetRegister(HleRegister::kRax)
+                    .value_or(1) == 0,
+        "default proc-param export did not return zero");
+  constexpr std::uint64_t kProcessParametersAddress = 0x1234'5678'9abc'def0;
+  runtime.SetProcessParametersAddress(kProcessParametersAddress);
+  HleCallContext proc_param_name_context(memory);
+  HleCallContext proc_param_nid_context(memory);
+  Check(registry.Dispatch(kajps5::hle::kKernelGetProcParamName, libraries,
+                          proc_param_name_context) &&
+            proc_param_name_context.GetRegister(HleRegister::kRax).value_or(0) ==
+                kProcessParametersAddress &&
+            registry.Dispatch(kajps5::hle::kKernelGetProcParamNid, libraries,
+                              proc_param_nid_context) &&
+            proc_param_nid_context.GetRegister(HleRegister::kRax).value_or(0) ==
+                kProcessParametersAddress,
+        "proc-param name and NID exports did not use the shared runtime");
   Check(registry.Dispatch(kajps5::hle::kKernelGetDirectMemorySizeNid,
                           libraries, direct_memory_context) &&
             direct_memory_context.GetRegister(HleRegister::kRax).value_or(0) ==
@@ -131,7 +150,7 @@ int main() {
 
   Check(kajps5::hle::RegisterKernelExports(registry, runtime) ==
             ExportRegistryStatus::kAlreadyExists &&
-            registry.size() == 234,
+            registry.size() == 236,
         "duplicate default registration changed the registry");
 
   ExportRegistry conflict_registry;

@@ -220,6 +220,8 @@ TitleLoadResult PrepareTitleImageWithModules(
     result.status = TitleLoadStatus::kSessionCreationFailed;
     return result;
   }
+  session->kernel_runtime().SetProcessParametersAddress(
+      launch.metadata.process_parameters.value_or(0));
 
   auto module_runtime = std::make_unique<ModuleRuntime>(session->memory());
   result.modules = module_runtime->RegisterMain(
