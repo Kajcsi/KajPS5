@@ -8,6 +8,7 @@
 #include "hle/call_context.h"
 #include "hle/data_symbols.h"
 #include "hle/kernel_exports.h"
+#include "hle/libc_exports.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -179,6 +180,33 @@ int main(int argc, char** argv) {
             malloc_replace_size == kajps5::hle::kHleSanitizerMallocReplaceSize &&
             new_replace_size == kajps5::hle::kHleSanitizerNewReplaceSize,
         "title loader did not retain sanitizer replacement guest objects");
+  constexpr std::uint64_t kHeapTraceInfoOffset = 0x800;
+  const auto heap_trace_info =
+      prepared.hle.data.page_address + kHeapTraceInfoOffset;
+  Check(hle_data_context.WriteUInt64(heap_trace_info, 32) ==
+            kajps5::hle::HleContextStatus::kOk,
+        "title loader heap-trace info setup failed");
+  const std::vector<std::string> libc_internal_ext_libraries = {
+      kajps5::hle::kLibcInternalExtName};
+  kajps5::hle::HleCallContext heap_trace_context(prepared.session->memory());
+  Check(heap_trace_context.SetRegister(kajps5::hle::HleRegister::kRdi,
+                                      heap_trace_info),
+        "title loader heap-trace argument setup failed");
+  std::uint64_t heap_trace_mask = 0;
+  std::uint64_t heap_trace_mstate = 0;
+  Check(prepared.session->hle_exports()
+                .Dispatch(kajps5::hle::kLibcHeapGetTraceInfoNid,
+                          libc_internal_ext_libraries, heap_trace_context) &&
+            heap_trace_context.ReadUInt64(heap_trace_info + 16,
+                                          heap_trace_mask) ==
+                kajps5::hle::HleContextStatus::kOk &&
+            heap_trace_context.ReadUInt64(heap_trace_info + 24,
+                                          heap_trace_mstate) ==
+                kajps5::hle::HleContextStatus::kOk &&
+            heap_trace_mask ==
+                prepared.hle.data.libc_heap_trace_storage_address &&
+            heap_trace_mstate == heap_trace_mask + sizeof(std::uint64_t),
+        "title loader did not wire heap trace storage into libc HLE");
   const std::vector<std::string> libraries = {"libkernel"};
   kajps5::hle::HleCallContext proc_param_context(prepared.session->memory());
   Check(prepared.session->hle_exports()

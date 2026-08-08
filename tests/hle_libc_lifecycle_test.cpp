@@ -49,7 +49,7 @@ int main() {
   Check(kajps5::hle::RegisterLibcExports(
             registry, runtime.cxa_guards(), runtime.process_lifecycle(),
             runtime.libc_heap(), memory) == ExportRegistryStatus::kOk &&
-            registry.size() == 106,
+            registry.size() == 108,
         "libc lifecycle exports did not register atomically");
 
   const std::vector<std::string> libc_scope = {kajps5::hle::kLibcName};

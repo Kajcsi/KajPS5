@@ -190,6 +190,17 @@ adapt pinned SharpEmu `src/SharpEmu.HLE/HleDataSymbols.cs`. KajPS5 stores every
 address in checked guest memory instead of exposing a host pointer. No data
 symbol source was copied.
 
+The `sceLibcHeapGetTraceInfo` bridge in `src/hle/libc_exports.cpp`, its
+session-owned data-page storage in `src/hle/data_symbols.cpp`, and the focused
+tests use the layout and exact `libSceLibcInternalExt` NID confirmed by
+KytyPS5 `src/libs/libC.cpp` at commit
+`fb5ecec455cf6c67154134429485ffccbfc34203`. The checked 32-byte input and
+zeroed, stable mask plus 64-entry mstate table adapt the behavior in SharpEmu
+`src/SharpEmu.Libs/LibcInternalExports.cs` and its focused tests at commit
+`9e10d7c44a2821cfd5ccd3417c09c0cf269285a4`. KytyPS5 is GPL-2.0-only;
+SharpEmu is GPL-2.0-or-later. KajPS5 uses its existing guest-memory boundary
+and does not copy upstream source.
+
 The register and memory boundary in `src/hle/call_context.cpp` and
 `tests/hle_call_context_test.cpp` follows behavior in SharpEmu's
 `src/SharpEmu.HLE/CpuContext.cs`. No context source was copied.

@@ -102,8 +102,11 @@ int main() {
       kajps5::hle::kHleSanitizerMallocReplaceSize);
   constexpr auto kNewTableBytes = static_cast<std::size_t>(
       kajps5::hle::kHleSanitizerNewReplaceSize);
+  constexpr auto kHeapTraceStorageBytes = static_cast<std::size_t>(
+      kajps5::hle::kHleLibcHeapTraceStorageSize);
   std::array<std::byte, kMallocTableBytes> malloc_table{};
   std::array<std::byte, kNewTableBytes> new_table{};
+  std::array<std::byte, kHeapTraceStorageBytes> heap_trace_storage{};
   Check(installed.sanitizer_malloc_replace_address ==
                 installed.page_address +
                     kajps5::hle::kHleSanitizerMallocReplaceOffset &&
@@ -121,9 +124,21 @@ int main() {
             program_name + 512 <= installed.sanitizer_malloc_replace_address &&
             installed.sanitizer_malloc_replace_address + kMallocTableBytes <=
                 installed.sanitizer_new_replace_address &&
+            installed.sanitizer_new_replace_address + kNewTableBytes <=
+                installed.libc_heap_trace_storage_address &&
+            installed.libc_heap_trace_storage_address ==
+                installed.page_address +
+                    kajps5::hle::kHleLibcHeapTraceStorageOffset &&
+            installed.libc_heap_trace_storage_address %
+                    alignof(std::uint64_t) ==
+                0 &&
+            installed.libc_heap_trace_storage_address + kHeapTraceStorageBytes <=
+                installed.page_address + kajps5::hle::kHleDataPageSize &&
             memory.Read(installed.sanitizer_malloc_replace_address,
                         malloc_table) &&
             memory.Read(installed.sanitizer_new_replace_address, new_table) &&
+            memory.Read(installed.libc_heap_trace_storage_address,
+                        heap_trace_storage) &&
             ReadLittleEndian<std::uint64_t>(
                 memory, installed.sanitizer_malloc_replace_address) ==
                 kajps5::hle::kHleSanitizerMallocReplaceSize &&
@@ -136,13 +151,18 @@ int main() {
             std::all_of(new_table.begin() + sizeof(std::uint64_t),
                         new_table.end(),
                         [](std::byte value) { return value == std::byte{0}; }) &&
+            std::all_of(heap_trace_storage.begin(), heap_trace_storage.end(),
+                        [](std::byte value) { return value == std::byte{0}; }) &&
             memory.CanAccess(installed.sanitizer_malloc_replace_address,
                              kMallocTableBytes,
                              GuestMemoryProtection::kWrite) &&
             memory.CanAccess(installed.sanitizer_new_replace_address,
                              kNewTableBytes,
+                             GuestMemoryProtection::kWrite) &&
+            memory.CanAccess(installed.libc_heap_trace_storage_address,
+                             kHeapTraceStorageBytes,
                              GuestMemoryProtection::kWrite),
-        "sanitizer replacement tables are not zeroed writable guest objects");
+        "HLE page objects are not zeroed writable guest storage");
   const std::array<std::byte, 1> guest_owned_marker = {std::byte{0xa5}};
   std::array<std::byte, 1> guest_owned_readback{};
   Check(memory.Initialize(installed.sanitizer_malloc_replace_address + 8,

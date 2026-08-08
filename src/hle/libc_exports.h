@@ -19,6 +19,7 @@ class GuestMemory;
 namespace kajps5::hle {
 
 inline constexpr auto kLibcName = "libc";
+inline constexpr auto kLibcInternalExtName = "libSceLibcInternalExt";
 inline constexpr auto kCxaGuardAcquireName = "__cxa_guard_acquire";
 inline constexpr auto kCxaGuardAcquireNid = "3GPpjQdAMTw";
 inline constexpr auto kCxaGuardReleaseName = "__cxa_guard_release";
@@ -121,10 +122,13 @@ inline constexpr auto kLibcMspaceMallocUsableSizeNid = "fEoW6BJsPt4";
 inline constexpr auto kLibcMspaceIsHeapEmptyName =
     "sceLibcMspaceIsHeapEmpty";
 inline constexpr auto kLibcMspaceIsHeapEmptyNid = "pzUa7KEoydw";
+inline constexpr auto kLibcHeapGetTraceInfoName = "sceLibcHeapGetTraceInfo";
+inline constexpr auto kLibcHeapGetTraceInfoNid = "NWtTN10cJzE";
 
 [[nodiscard]] ExportRegistryStatus RegisterLibcExports(
     ExportRegistry& registry, kernel::CxaGuardService& guards,
     kernel::ProcessLifecycleService& lifecycle,
-    kernel::LibcHeapService& heap, memory::GuestMemory& memory);
+    kernel::LibcHeapService& heap, memory::GuestMemory& memory,
+    std::uint64_t heap_trace_storage_address = 0);
 
 }  // namespace kajps5::hle

@@ -32,6 +32,13 @@ constexpr std::int32_t kMaximumInitArgumentCount = 2;
 constexpr std::uint64_t kPosixEinval = 22;
 constexpr std::uint64_t kPosixEnomem = 12;
 constexpr std::size_t kMaximumLibcWideUnits = 1024 * 1024;
+constexpr std::uint64_t kLibcHeapTraceInfoSize = 32;
+constexpr std::uint64_t kLibcHeapTraceInfoMaskOffset = 16;
+constexpr std::uint64_t kLibcHeapTraceInfoMstateOffset = 24;
+constexpr std::uint64_t kLibcHeapTraceMstateTableOffset =
+    sizeof(std::uint64_t);
+constexpr std::uint64_t kLibcHeapTraceStorageSize =
+    sizeof(std::uint64_t) + 64 * sizeof(std::uint64_t);
 
 bool IsPowerOfTwo(std::uint64_t value) noexcept {
   return value != 0 && (value & (value - 1)) == 0;
@@ -694,11 +701,61 @@ HleContextStatus MspaceIsHeapEmpty(HleCallContext& context,
   return HleContextStatus::kOk;
 }
 
+HleContextStatus LibcHeapGetTraceInfo(
+    HleCallContext& context, std::uint64_t heap_trace_storage_address) {
+  const auto info_address = context.Argument(0).value_or(0);
+  if (info_address == 0) {
+    context.SetReturn(0);
+    return HleContextStatus::kInvalidArgument;
+  }
+
+  std::uint64_t info_size = 0;
+  if (context.ReadUInt64(info_address, info_size) != HleContextStatus::kOk) {
+    context.SetReturn(0);
+    return HleContextStatus::kMemoryFault;
+  }
+  if (info_size != kLibcHeapTraceInfoSize) {
+    context.SetReturn(0);
+    return HleContextStatus::kInvalidArgument;
+  }
+  if (info_address > std::numeric_limits<std::uint64_t>::max() -
+                         (kLibcHeapTraceInfoSize - 1) ||
+      !context.CanWriteMemory(info_address + kLibcHeapTraceInfoMaskOffset,
+                              2 * sizeof(std::uint64_t)) ||
+      heap_trace_storage_address == 0 ||
+      !context.CanWriteMemory(heap_trace_storage_address,
+                              kLibcHeapTraceStorageSize)) {
+    context.SetReturn(0);
+    return HleContextStatus::kMemoryFault;
+  }
+
+  if (context.WriteUInt64(info_address + kLibcHeapTraceInfoMaskOffset,
+                          heap_trace_storage_address) !=
+          HleContextStatus::kOk ||
+      context.WriteUInt64(info_address + kLibcHeapTraceInfoMstateOffset,
+                          heap_trace_storage_address +
+                              kLibcHeapTraceMstateTableOffset) !=
+          HleContextStatus::kOk) {
+    context.SetReturn(0);
+    return HleContextStatus::kMemoryFault;
+  }
+  context.SetReturn(0);
+  return HleContextStatus::kOk;
+}
+
 template <typename Handler>
 void AddAliases(std::vector<HleExportDefinition>& exports, const char* name,
                 const char* nid, Handler handler) {
   exports.push_back({kLibcName, name, handler});
   exports.push_back({kLibcName, nid, std::move(handler)});
+}
+
+template <typename Handler>
+void AddLibraryAliases(std::vector<HleExportDefinition>& exports,
+                       const char* library, const char* name,
+                       const char* nid, Handler handler) {
+  exports.push_back({library, name, handler});
+  exports.push_back({library, nid, std::move(handler)});
 }
 
 }  // namespace
@@ -707,13 +764,14 @@ ExportRegistryStatus RegisterLibcExports(ExportRegistry& registry,
                                          kernel::CxaGuardService& guards,
                                          kernel::ProcessLifecycleService& lifecycle,
                                          kernel::LibcHeapService& heap,
-                                         memory::GuestMemory& memory) {
+                                         memory::GuestMemory& memory,
+                                         std::uint64_t heap_trace_storage_address) {
   auto* const guard_view = &guards;
   auto* const lifecycle_view = &lifecycle;
   auto* const heap_view = &heap;
   auto* const memory_view = &memory;
   std::vector<HleExportDefinition> exports;
-  exports.reserve(106);
+  exports.reserve(108);
   AddAliases(exports, kCxaGuardAcquireName, kCxaGuardAcquireNid,
              [guard_view](HleCallContext& context) {
                return CxaGuardAcquire(context, *guard_view);
@@ -916,6 +974,12 @@ ExportRegistryStatus RegisterLibcExports(ExportRegistry& registry,
              [heap_view, memory_view](HleCallContext& context) {
                return MspaceIsHeapEmpty(context, *heap_view, *memory_view);
              });
+  AddLibraryAliases(
+      exports, kLibcInternalExtName, kLibcHeapGetTraceInfoName,
+      kLibcHeapGetTraceInfoNid,
+      [heap_trace_storage_address](HleCallContext& context) {
+        return LibcHeapGetTraceInfo(context, heap_trace_storage_address);
+      });
   return registry.RegisterBatch(std::move(exports));
 }
 

@@ -165,7 +165,8 @@ TitleHleSetupResult TitleSession::PrepareHleBatch(
   result.export_status =
       hle::RegisterLibcExports(hle_exports_, kernel_runtime_.cxa_guards(),
                                kernel_runtime_.process_lifecycle(),
-                               kernel_runtime_.libc_heap(), *memory_);
+                               kernel_runtime_.libc_heap(), *memory_,
+                               result.data.libc_heap_trace_storage_address);
   if (result.export_status != hle::ExportRegistryStatus::kOk) {
     result.status = TitleHleSetupStatus::kLibcExportsFailed;
     rollback_mappings();

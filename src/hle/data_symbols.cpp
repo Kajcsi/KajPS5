@@ -116,7 +116,8 @@ HleDataResult InstallHleDataSymbols(ImportRegistry& registry,
           page_address + kLibcNeedFlagOffset,
           page_address + kLibcInternalNeedFlagOffset,
           page_address + kHleSanitizerMallocReplaceOffset,
-          page_address + kHleSanitizerNewReplaceOffset};
+          page_address + kHleSanitizerNewReplaceOffset,
+          page_address + kHleLibcHeapTraceStorageOffset};
 }
 
 std::string_view HleDataStatusName(HleDataStatus status) noexcept {

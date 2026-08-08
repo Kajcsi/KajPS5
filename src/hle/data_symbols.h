@@ -18,6 +18,9 @@ inline constexpr std::uint64_t kHleSanitizerMallocReplaceOffset = 0x300;
 inline constexpr std::uint64_t kHleSanitizerMallocReplaceSize = 0x70;
 inline constexpr std::uint64_t kHleSanitizerNewReplaceOffset = 0x400;
 inline constexpr std::uint64_t kHleSanitizerNewReplaceSize = 0x68;
+inline constexpr std::uint64_t kHleLibcHeapTraceStorageOffset = 0x500;
+inline constexpr std::uint64_t kHleLibcHeapTraceStorageSize =
+    sizeof(std::uint64_t) + 64 * sizeof(std::uint64_t);
 inline constexpr std::uint64_t kHleStackGuardValue =
     0xc0dec0decafeba00;
 inline constexpr auto kHleStackGuardNid = "f7uOxY9mM1U";
@@ -42,6 +45,7 @@ struct HleDataResult {
   std::uint64_t libc_internal_need_flag_address = 0;
   std::uint64_t sanitizer_malloc_replace_address = 0;
   std::uint64_t sanitizer_new_replace_address = 0;
+  std::uint64_t libc_heap_trace_storage_address = 0;
 
   [[nodiscard]] explicit operator bool() const noexcept {
     return status == HleDataStatus::kOk;

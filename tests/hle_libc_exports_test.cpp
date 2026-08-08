@@ -46,13 +46,15 @@ int main() {
   using kajps5::kernel::KernelRuntime;
   using kajps5::memory::GuestMemory;
 
-  GuestMemory memory(0x1000, 0x100);
+  GuestMemory memory(0x1000, 0x1000);
   KernelRuntime runtime;
   ExportRegistry registry;
+  constexpr std::uint64_t kHeapTraceStorageAddress = 0x1800;
   Check(kajps5::hle::RegisterLibcExports(
             registry, runtime.cxa_guards(), runtime.process_lifecycle(),
-            runtime.libc_heap(), memory) == ExportRegistryStatus::kOk &&
-            registry.size() == 106,
+            runtime.libc_heap(), memory, kHeapTraceStorageAddress) ==
+                ExportRegistryStatus::kOk &&
+            registry.size() == 108,
         "libc exports did not register atomically");
 
   constexpr std::uint64_t kGuardAddress = 0x1020;
@@ -65,6 +67,15 @@ int main() {
   Check(first && runtime.scheduler().SelectNext() == first.handle,
         "first guard thread did not start");
   const std::vector<std::string> libc_scope = {kajps5::hle::kLibcName};
+  const std::vector<std::string> libc_internal_ext_scope = {
+      kajps5::hle::kLibcInternalExtName};
+  Check(registry.Lookup(kajps5::hle::kLibcHeapGetTraceInfoName,
+                        libc_internal_ext_scope) &&
+            registry.Lookup(kajps5::hle::kLibcHeapGetTraceInfoNid,
+                            libc_internal_ext_scope) &&
+            !registry.Lookup(kajps5::hle::kLibcHeapGetTraceInfoName,
+                             libc_scope),
+        "heap-trace export is not scoped to libSceLibcInternalExt");
 
   HleCallContext pure_virtual(memory);
   const auto pure_virtual_result = registry.Dispatch(

@@ -13,6 +13,7 @@
 
 #include "core/memory/guest_memory.h"
 #include "hle/call_context.h"
+#include "hle/data_symbols.h"
 #include "hle/export_registry.h"
 #include "hle/libc_exports.h"
 #include "kernel/runtime.h"
@@ -59,20 +60,130 @@ int main() {
   using kajps5::memory::GuestMemoryProtection;
 
   constexpr std::uint64_t kOutputAddress = 0x10000;
+  constexpr std::uint64_t kHeapTraceStorageAddress = 0x11000;
   GuestMemory memory(0x10000, 0x10000, GuestMemoryProtection::kNone);
   Check(memory.Map(kOutputAddress, 0x100,
                    GuestMemoryProtection::kRead |
                        GuestMemoryProtection::kWrite),
         "heap output cell did not map");
+  Check(memory.Map(kHeapTraceStorageAddress,
+                   kajps5::hle::kHleLibcHeapTraceStorageSize,
+                   GuestMemoryProtection::kRead |
+                       GuestMemoryProtection::kWrite),
+        "heap trace storage did not map");
 
   KernelRuntime runtime;
   ExportRegistry registry;
   Check(kajps5::hle::RegisterLibcExports(
             registry, runtime.cxa_guards(), runtime.process_lifecycle(),
-            runtime.libc_heap(), memory) == ExportRegistryStatus::kOk &&
-            registry.size() == 106,
+            runtime.libc_heap(), memory, kHeapTraceStorageAddress) ==
+                ExportRegistryStatus::kOk &&
+            registry.size() == 108,
         "libc heap exports did not register atomically");
   const std::vector<std::string> libc_scope = {kajps5::hle::kLibcName};
+  const std::vector<std::string> libc_internal_ext_scope = {
+      kajps5::hle::kLibcInternalExtName};
+
+  HleCallContext null_heap_trace(memory);
+  SetArguments(null_heap_trace, {0});
+  const auto null_heap_trace_result = registry.Dispatch(
+      kajps5::hle::kLibcHeapGetTraceInfoNid, libc_internal_ext_scope,
+      null_heap_trace);
+  Check(null_heap_trace_result.status == ExportRegistryStatus::kOk &&
+            null_heap_trace_result.handler_status ==
+                kajps5::hle::HleContextStatus::kInvalidArgument &&
+            ReturnValue(null_heap_trace) == 0,
+        "heap trace accepted a null info pointer");
+
+  HleCallContext unreadable_heap_trace(memory);
+  SetArguments(unreadable_heap_trace, {0x20000});
+  const auto unreadable_heap_trace_result = registry.Dispatch(
+      kajps5::hle::kLibcHeapGetTraceInfoNid, libc_internal_ext_scope,
+      unreadable_heap_trace);
+  Check(unreadable_heap_trace_result.handler_status ==
+                kajps5::hle::HleContextStatus::kMemoryFault &&
+            ReturnValue(unreadable_heap_trace) == 0,
+        "heap trace accepted an unreadable info pointer");
+
+  constexpr std::uint64_t kHeapTraceInfoAddress = kOutputAddress + 0x40;
+  HleCallContext heap_trace_setup(memory);
+  Check(heap_trace_setup.WriteUInt64(kHeapTraceInfoAddress, 24) ==
+            kajps5::hle::HleContextStatus::kOk,
+        "heap trace wrong-size setup failed");
+  HleCallContext wrong_size_heap_trace(memory);
+  SetArguments(wrong_size_heap_trace, {kHeapTraceInfoAddress});
+  const auto wrong_size_heap_trace_result = registry.Dispatch(
+      kajps5::hle::kLibcHeapGetTraceInfoName, libc_internal_ext_scope,
+      wrong_size_heap_trace);
+  Check(wrong_size_heap_trace_result.handler_status ==
+                kajps5::hle::HleContextStatus::kInvalidArgument &&
+            ReturnValue(wrong_size_heap_trace) == 0,
+        "heap trace accepted the wrong info size");
+
+  constexpr std::uint64_t kTruncatedInfoAddress = kOutputAddress + 0xe8;
+  constexpr std::uint64_t kTruncatedMaskAddress = kTruncatedInfoAddress + 16;
+  Check(heap_trace_setup.WriteUInt64(kTruncatedInfoAddress, 32) ==
+                kajps5::hle::HleContextStatus::kOk &&
+            heap_trace_setup.WriteUInt64(kTruncatedMaskAddress,
+                                         0xfeedfacefeedface) ==
+                kajps5::hle::HleContextStatus::kOk,
+        "heap trace truncated-output setup failed");
+  HleCallContext truncated_heap_trace(memory);
+  SetArguments(truncated_heap_trace, {kTruncatedInfoAddress});
+  const auto truncated_heap_trace_result = registry.Dispatch(
+      kajps5::hle::kLibcHeapGetTraceInfoNid, libc_internal_ext_scope,
+      truncated_heap_trace);
+  std::uint64_t truncated_marker = 0;
+  Check(truncated_heap_trace_result.handler_status ==
+                kajps5::hle::HleContextStatus::kMemoryFault &&
+            ReturnValue(truncated_heap_trace) == 0 &&
+            heap_trace_setup.ReadUInt64(kTruncatedMaskAddress,
+                                         truncated_marker) ==
+                kajps5::hle::HleContextStatus::kOk &&
+            truncated_marker == 0xfeedfacefeedface,
+        "heap trace partially wrote a truncated output range");
+
+  Check(heap_trace_setup.WriteUInt64(kHeapTraceInfoAddress, 32) ==
+            kajps5::hle::HleContextStatus::kOk,
+        "heap trace valid setup failed");
+  HleCallContext heap_trace(memory);
+  SetArguments(heap_trace, {kHeapTraceInfoAddress});
+  const auto heap_trace_result = registry.Dispatch(
+      kajps5::hle::kLibcHeapGetTraceInfoNid, libc_internal_ext_scope,
+      heap_trace);
+  std::uint64_t heap_trace_mask = 0;
+  std::uint64_t heap_trace_mstate = 0;
+  std::array<std::byte,
+             static_cast<std::size_t>(kajps5::hle::kHleLibcHeapTraceStorageSize)>
+      heap_trace_storage{};
+  Check(heap_trace_result && ReturnValue(heap_trace) == 0 &&
+            heap_trace.ReadUInt64(kHeapTraceInfoAddress + 16,
+                                  heap_trace_mask) ==
+                kajps5::hle::HleContextStatus::kOk &&
+            heap_trace.ReadUInt64(kHeapTraceInfoAddress + 24,
+                                  heap_trace_mstate) ==
+                kajps5::hle::HleContextStatus::kOk &&
+            heap_trace_mask == kHeapTraceStorageAddress &&
+            heap_trace_mstate == heap_trace_mask + sizeof(std::uint64_t) &&
+            memory.Read(kHeapTraceStorageAddress, heap_trace_storage) &&
+            std::all_of(heap_trace_storage.begin(), heap_trace_storage.end(),
+                        [](std::byte value) { return value == std::byte{0}; }),
+        "heap trace did not return stable zeroed guest storage");
+  HleCallContext repeated_heap_trace(memory);
+  SetArguments(repeated_heap_trace, {kHeapTraceInfoAddress});
+  std::uint64_t repeated_mask = 0;
+  std::uint64_t repeated_mstate = 0;
+  Check(registry.Dispatch(kajps5::hle::kLibcHeapGetTraceInfoNid,
+                          libc_internal_ext_scope, repeated_heap_trace) &&
+            repeated_heap_trace.ReadUInt64(kHeapTraceInfoAddress + 16,
+                                           repeated_mask) ==
+                kajps5::hle::HleContextStatus::kOk &&
+            repeated_heap_trace.ReadUInt64(kHeapTraceInfoAddress + 24,
+                                           repeated_mstate) ==
+                kajps5::hle::HleContextStatus::kOk &&
+            repeated_mask == heap_trace_mask &&
+            repeated_mstate == heap_trace_mstate,
+        "heap trace storage addresses changed between calls");
 
   HleCallContext malloc_call(memory);
   SetArguments(malloc_call, {24});
