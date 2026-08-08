@@ -17,6 +17,10 @@
 #include "kernel/guest_scheduler.h"
 #include "kernel/status.h"
 
+namespace kajps5::memory {
+class GuestMemory;
+}
+
 namespace kajps5::kernel {
 
 inline constexpr std::uint64_t kPthreadDefaultAffinityMask = 0x7f;
@@ -29,6 +33,12 @@ inline constexpr int kPthreadMutexErrorCheck = 1;
 inline constexpr int kPthreadMutexRecursive = 2;
 inline constexpr int kPthreadMutexNormal = 3;
 inline constexpr int kPthreadMutexAdaptive = 4;
+inline constexpr std::uint64_t kPthreadMutexObjectSize = 0x100;
+inline constexpr std::uint64_t kPthreadMutexObjectTypeOffset = 0x20;
+inline constexpr std::uint64_t kPthreadMutexObjectProtocolOffset = 0x3c;
+inline constexpr std::uint64_t kPthreadMutexArenaSize = 1024U * 1024U;
+inline constexpr std::size_t kPthreadMutexArenaSlotCount =
+    kPthreadMutexArenaSize / kPthreadMutexObjectSize;
 
 struct PthreadAttribute {
   std::uint64_t affinity_mask = kPthreadDefaultAffinityMask;
@@ -155,6 +165,17 @@ class PthreadService final {
 
   [[nodiscard]] PthreadMutexCreateResult CreateMutex(
       std::uint64_t attribute_handle, int static_type = 0);
+  // HLE pthread mutexes are pointers to 0x100-byte guest objects.  The
+  // legacy CreateMutex entry point intentionally remains synthetic for
+  // internal callers that do not have a guest-memory ABI slot.
+  [[nodiscard]] bool ConfigureGuestMutexArena(memory::GuestMemory& memory,
+                                               std::uint64_t address);
+  // Used only to unwind an HLE setup failure before any mutex can escape to
+  // guest code. Existing mutexes deliberately prevent releasing the arena.
+  [[nodiscard]] bool ReleaseGuestMutexArena();
+  [[nodiscard]] PthreadMutexCreateResult CreateGuestMutex(
+      std::uint64_t attribute_handle, int static_type = 0);
+  [[nodiscard]] KernelStatus CanDestroyMutex(std::uint64_t handle) const;
   [[nodiscard]] KernelStatus DestroyMutex(std::uint64_t handle);
   [[nodiscard]] KernelStatus LockMutex(std::uint64_t handle, bool try_only);
   [[nodiscard]] KernelStatus UnlockMutex(std::uint64_t handle);
@@ -201,6 +222,7 @@ class PthreadService final {
     std::deque<KernelHandle> waiters;
     std::set<KernelHandle> granted_waiters;
     std::size_t condition_waiter_count = 0;
+    std::optional<std::size_t> guest_object_slot;
   };
 
   struct ConditionWaiter {
@@ -231,6 +253,9 @@ class PthreadService final {
       std::uint64_t condition_handle, KernelHandle thread_handle);
   [[nodiscard]] static bool IsMutexTypeValid(int type) noexcept;
   [[nodiscard]] static bool IsMutexProtocolValid(int protocol) noexcept;
+  [[nodiscard]] PthreadMutexCreateResult CreateMutexLocked(
+      std::uint64_t attribute_handle, int static_type,
+      std::optional<std::size_t> guest_object_slot);
   void GrantNextMutexWaiterLocked(std::uint64_t mutex_handle,
                                   MutexState& mutex,
                                   std::string& wake_key);
@@ -252,6 +277,9 @@ class PthreadService final {
   std::array<std::optional<KeyState>, kMaximumPthreadKeys> keys_{};
   std::map<KernelHandle, std::map<std::uint32_t, std::uint64_t>>
       specific_values_;
+  memory::GuestMemory* guest_mutex_memory_ = nullptr;
+  std::uint64_t guest_mutex_arena_address_ = 0;
+  std::array<bool, kPthreadMutexArenaSlotCount> guest_mutex_slots_{};
   std::uint64_t next_attribute_id_ = 1;
   std::uint64_t next_mutex_attribute_id_ = 1;
   std::uint64_t next_mutex_id_ = 1;

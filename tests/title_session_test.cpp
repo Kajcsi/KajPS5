@@ -82,7 +82,7 @@ int main() {
                               {}),
         "title session accepted memory without a native host mapping");
 
-  auto hle_memory = GuestMemory::CreateHostMapped(0x10000);
+  auto hle_memory = GuestMemory::CreateHostMapped(0x200000);
   Check(hle_memory != nullptr, "title HLE memory allocation failed");
   if (!hle_memory) {
     return 1;
@@ -114,6 +114,11 @@ int main() {
             hle_session->hle_functions() != nullptr &&
             hle_session->hle_functions()->size() == 0,
         "title session did not own its default HLE runtime");
+  const auto pthread_arena = hle_base + kajps5::hle::kHleDataPageSize;
+  Check(hle_session->memory().CanAccess(
+            pthread_arena, kajps5::kernel::kPthreadMutexArenaSize,
+            GuestMemoryProtection::kWrite),
+        "title session did not map its pthread opaque-object arena");
   Check(hle_session->PrepareHle({}, hle_base, "public.elf").status ==
                 kajps5::runtime::TitleHleSetupStatus::kAlreadyAttempted &&
             kajps5::runtime::TitleHleSetupStatusName(
@@ -126,8 +131,46 @@ int main() {
             TitleSessionStatus::kStartupFailed,
         "invalid staged launch was not rejected");
   Check(hle_session->PrepareHle({}, hle_base, "public.elf").status ==
-            kajps5::runtime::TitleHleSetupStatus::kInvalidState,
+                kajps5::runtime::TitleHleSetupStatus::kInvalidState,
         "failed title session accepted HLE setup");
+
+  auto rollback_memory = GuestMemory::CreateHostMapped(0x200000);
+  Check(rollback_memory != nullptr, "rollback title memory allocation failed");
+  if (!rollback_memory) {
+    return 1;
+  }
+  const auto rollback_base =
+      (rollback_memory->base_address() + kajps5::hle::kHleDataPageSize - 1) &
+      ~(kajps5::hle::kHleDataPageSize - 1);
+  auto rollback_session = TitleSession::Create(std::move(rollback_memory));
+  Check(rollback_session != nullptr && rollback_session->memory().Map(
+                                          rollback_base + 0x100000,
+                                          kajps5::kernel::kPthreadMutexArenaSize,
+                                          GuestMemoryProtection::kRead |
+                                              GuestMemoryProtection::kWrite) &&
+            rollback_session->kernel_runtime().pthreads()
+                .ConfigureGuestMutexArena(rollback_session->memory(),
+                                          rollback_base + 0x100000),
+        "rollback title session setup failed");
+  if (!rollback_session) {
+    return 1;
+  }
+  const auto rollback_setup = rollback_session->PrepareHle(
+      hle_metadata[0], rollback_base, "public.elf");
+  const auto preserved_mutex =
+      rollback_session->kernel_runtime().pthreads().CreateGuestMutex(0);
+  Check(rollback_setup.status ==
+                kajps5::runtime::TitleHleSetupStatus::kPthreadArenaSetupFailed &&
+            !rollback_session->memory().IsMapped(
+                rollback_base, kajps5::hle::kHleDataPageSize) &&
+            !rollback_session->memory().IsMapped(
+                rollback_base + kajps5::hle::kHleDataPageSize,
+                kajps5::kernel::kPthreadMutexArenaSize) &&
+            preserved_mutex &&
+            preserved_mutex.handle == rollback_base + 0x100000 &&
+            rollback_session->kernel_runtime().pthreads().DestroyMutex(
+                preserved_mutex.handle) == KernelStatus::kOk,
+        "failed title HLE setup did not roll back only its own state");
 
   auto memory = GuestMemory::CreateHostMapped(0x600000);
   Check(memory != nullptr, "host-mapped title memory allocation failed");

@@ -2,10 +2,13 @@
 // Behavior reference: Copyright (C) 2026 SharpEmu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
 #include <cstdlib>
 #include <iostream>
 #include <memory>
+#include <vector>
 
+#include "core/memory/guest_memory.h"
 #include "kernel/pthread.h"
 #include "kernel/runtime.h"
 
@@ -125,6 +128,86 @@ int main() {
   Check(pthreads.DestroyMutexAttribute(attributes.handle) ==
             KernelStatus::kNotFound,
         "stale mutex attribute was accepted");
+
+  // HLE mutexes use guest-resident opaque objects, while CreateMutex above
+  // remains the synthetic/internal compatibility path.
+  kajps5::memory::GuestMemory guest_mutex_memory(
+      0x1000, kPthreadMutexArenaSize + 0x2000);
+  KernelRuntime guest_mutex_runtime;
+  auto& guest_mutex_pthreads = guest_mutex_runtime.pthreads();
+  Check(guest_mutex_pthreads.ConfigureGuestMutexArena(guest_mutex_memory,
+                                                       0x1000),
+        "guest mutex arena configuration failed");
+  Check(guest_mutex_memory.CanAccess(
+            0x1000, kPthreadMutexArenaSize,
+            kajps5::memory::GuestMemoryProtection::kWrite),
+        "guest mutex arena fixture was not mapped writable");
+  Check(guest_mutex_pthreads.CreateGuestMutex(0, 99).status ==
+                KernelStatus::kInvalidArgument,
+        "invalid guest mutex initialization did not fail before reserving a slot");
+  const auto guest_mutex = guest_mutex_pthreads.CreateGuestMutex(
+      0, kPthreadMutexRecursive);
+  Check(guest_mutex && guest_mutex.handle == 0x1000 &&
+            guest_mutex_pthreads.GetMutex(guest_mutex.handle) &&
+            guest_mutex_pthreads.GetMutex(guest_mutex.handle)->type ==
+                kPthreadMutexRecursive,
+        "guest mutex allocation did not expose the first opaque-object slot");
+  std::vector<PthreadMutexCreateResult> guest_mutexes;
+  guest_mutexes.reserve(kPthreadMutexArenaSlotCount - 1);
+  for (std::size_t index = 1; index < kPthreadMutexArenaSlotCount; ++index) {
+    guest_mutexes.push_back(guest_mutex_pthreads.CreateGuestMutex(0));
+  }
+  Check(std::all_of(guest_mutexes.begin(), guest_mutexes.end(),
+                    [](const PthreadMutexCreateResult& created) {
+                      return static_cast<bool>(created);
+                    }) &&
+            guest_mutex_pthreads.CreateGuestMutex(0).status ==
+                KernelStatus::kNoResources,
+        "guest mutex arena did not enforce bounded exhaustion");
+  Check(guest_mutex_pthreads.DestroyMutex(guest_mutex.handle) ==
+                KernelStatus::kOk &&
+            guest_mutex_pthreads.CreateGuestMutex(0).handle ==
+                guest_mutex.handle,
+        "guest mutex arena did not reuse a released object slot");
+
+  KernelRuntime collision_runtime;
+  auto& collision_pthreads = collision_runtime.pthreads();
+  const auto first_internal_mutex = collision_pthreads.CreateMutex(0);
+  Check(static_cast<bool>(first_internal_mutex),
+        "collision fixture did not create its initial internal mutex");
+  kajps5::memory::GuestMemory collision_memory(
+      first_internal_mutex.handle,
+      kPthreadMutexArenaSize + kPthreadMutexObjectSize);
+  Check(collision_pthreads.ConfigureGuestMutexArena(
+            collision_memory, first_internal_mutex.handle),
+        "guest arena could not overlap an existing synthetic mutex handle");
+  const auto skipped_guest_mutex = collision_pthreads.CreateGuestMutex(0);
+  Check(skipped_guest_mutex &&
+            skipped_guest_mutex.handle ==
+                first_internal_mutex.handle + kPthreadMutexObjectSize &&
+            skipped_guest_mutex.handle != first_internal_mutex.handle &&
+            collision_pthreads.DestroyMutex(skipped_guest_mutex.handle) ==
+                KernelStatus::kOk &&
+            collision_pthreads.ReleaseGuestMutexArena(),
+        "guest mutex allocation did not skip an occupied synthetic handle");
+  Check(collision_pthreads.ConfigureGuestMutexArena(
+            collision_memory, first_internal_mutex.handle + 1),
+        "guest arena could not overlap a future synthetic mutex handle");
+  const auto collision_guest_mutex = collision_pthreads.CreateGuestMutex(0);
+  const auto second_internal_mutex = collision_pthreads.CreateMutex(0);
+  Check(collision_guest_mutex && second_internal_mutex &&
+            collision_guest_mutex.handle == first_internal_mutex.handle + 1 &&
+            second_internal_mutex.handle == first_internal_mutex.handle + 2 &&
+            collision_guest_mutex.handle != first_internal_mutex.handle &&
+            collision_guest_mutex.handle != second_internal_mutex.handle &&
+            collision_pthreads.GetMutex(first_internal_mutex.handle) &&
+            collision_pthreads.GetMutex(collision_guest_mutex.handle) &&
+            collision_pthreads.GetMutex(second_internal_mutex.handle) &&
+            collision_pthreads.DestroyMutex(collision_guest_mutex.handle) ==
+                KernelStatus::kOk &&
+            collision_pthreads.CreateGuestMutex(0).handle ==
+                collision_guest_mutex.handle,
+        "guest and synthetic mutex handles aliased or leaked their slots");
 
   KernelRuntime condition_runtime;
   auto& condition_pthreads = condition_runtime.pthreads();

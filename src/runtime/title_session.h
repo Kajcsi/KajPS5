@@ -72,6 +72,7 @@ enum class TitleHleSetupStatus {
   kInvalidState,
   kAlreadyAttempted,
   kDataSetupFailed,
+  kPthreadArenaSetupFailed,
   kKernelExportsFailed,
   kLibcExportsFailed,
   kLibcThreadExportsFailed,
@@ -181,6 +182,7 @@ class TitleSession final {
   cpu::NativeGuestProcessLauncher process_launcher_;
   bool configured_ = false;
   bool hle_preparation_attempted_ = false;
+  std::uint64_t pthread_mutex_arena_address_ = 0;
   TitleSessionPhase phase_ = TitleSessionPhase::kCreated;
   kernel::KernelHandle main_thread_ = kernel::kInvalidKernelHandle;
   std::uint64_t exit_value_ = 0;

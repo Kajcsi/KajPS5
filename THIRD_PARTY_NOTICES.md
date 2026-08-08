@@ -845,6 +845,18 @@ KytyPS5 identifies as GPL-2.0-only. SharpEmu identifies as
 GPL-2.0-or-later. No upstream pthread source was copied verbatim, and KajPS5
 keeps all pthread state in its one kernel runtime and scheduler.
 
+The guest-resident pthread mutex-object arena in `src/kernel/pthread.{h,cpp}`,
+its HLE use in `src/hle/kernel_pthread_exports.cpp`, and title-memory setup in
+`src/runtime/{title_session,title_loader}.*` adapt the pointer ABI observation
+from KytyPS5 `src/kernel/pthread.h` and `src/kernel/pthread.cpp` at commit
+`fb5ecec455cf6c67154134429485ffccbfc34203`, where `PthreadMutex` is a
+`PthreadMutexPrivate*`. The bounded 0x100-byte object layout and the type and
+protocol initialization offsets independently re-express SharpEmu
+`src/SharpEmu.Libs/Kernel/KernelPthreadCompatExports.cs` at commit
+`9e10d7c44a2821cfd5ccd3417c09c0cf269285a4`. KytyPS5 is GPL-2.0-only and
+SharpEmu is GPL-2.0-or-later. No upstream source was copied verbatim; KajPS5
+keeps one C++ pthread service, scheduler, and guest-memory owner.
+
 The C++ mutex handlers in `src/hle/libc_thread_exports.cpp` and their focused
 test adapt the full `_Mtx_*` ABI, result values, recursive flag, and scheduler
 connection from KytyPS5 `src/libs/libC.cpp` at commit

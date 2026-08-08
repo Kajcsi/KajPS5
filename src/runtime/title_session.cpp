@@ -5,6 +5,7 @@
 
 #include "runtime/title_session.h"
 
+#include <limits>
 #include <utility>
 
 #include "hle/agc_exports.h"
@@ -105,6 +106,50 @@ TitleHleSetupResult TitleSession::PrepareHleBatch(
     result.status = TitleHleSetupStatus::kDataSetupFailed;
     return result;
   }
+  bool pthread_arena_mapped = false;
+  bool pthread_arena_configured = false;
+  const auto rollback_mappings = [&] {
+    hle_functions_.reset();
+    bool arena_released = true;
+    if (pthread_arena_configured) {
+      arena_released = kernel_runtime_.pthreads().ReleaseGuestMutexArena();
+      if (arena_released) {
+        pthread_arena_configured = false;
+      }
+    }
+    if (pthread_arena_mapped && arena_released) {
+      (void)memory_->Unmap(pthread_mutex_arena_address_,
+                           kernel::kPthreadMutexArenaSize);
+      pthread_arena_mapped = false;
+    }
+    if (!pthread_arena_mapped) {
+      pthread_mutex_arena_address_ = 0;
+    }
+    (void)memory_->Unmap(data_page_address, hle::kHleDataPageSize);
+  };
+  if (data_page_address > std::numeric_limits<std::uint64_t>::max() -
+                              hle::kHleDataPageSize) {
+    result.status = TitleHleSetupStatus::kPthreadArenaSetupFailed;
+    rollback_mappings();
+    return result;
+  }
+  pthread_mutex_arena_address_ = data_page_address + hle::kHleDataPageSize;
+  constexpr auto read_write = memory::GuestMemoryProtection::kRead |
+                              memory::GuestMemoryProtection::kWrite;
+  if (!memory_->Map(pthread_mutex_arena_address_,
+                    kernel::kPthreadMutexArenaSize, read_write)) {
+    result.status = TitleHleSetupStatus::kPthreadArenaSetupFailed;
+    rollback_mappings();
+    return result;
+  }
+  pthread_arena_mapped = true;
+  if (!kernel_runtime_.pthreads().ConfigureGuestMutexArena(
+          *memory_, pthread_mutex_arena_address_)) {
+    result.status = TitleHleSetupStatus::kPthreadArenaSetupFailed;
+    rollback_mappings();
+    return result;
+  }
+  pthread_arena_configured = true;
   kernel_runtime_.SetSanitizerMallocReplaceAddress(
       result.data.sanitizer_malloc_replace_address);
   kernel_runtime_.SetSanitizerNewReplaceAddress(
@@ -114,6 +159,7 @@ TitleHleSetupResult TitleSession::PrepareHleBatch(
       hle::RegisterKernelExports(hle_exports_, kernel_runtime_);
   if (result.export_status != hle::ExportRegistryStatus::kOk) {
     result.status = TitleHleSetupStatus::kKernelExportsFailed;
+    rollback_mappings();
     return result;
   }
   result.export_status =
@@ -122,47 +168,55 @@ TitleHleSetupResult TitleSession::PrepareHleBatch(
                                kernel_runtime_.libc_heap(), *memory_);
   if (result.export_status != hle::ExportRegistryStatus::kOk) {
     result.status = TitleHleSetupStatus::kLibcExportsFailed;
+    rollback_mappings();
     return result;
   }
   result.export_status =
       hle::RegisterLibcThreadExports(hle_exports_, kernel_runtime_.pthreads());
   if (result.export_status != hle::ExportRegistryStatus::kOk) {
     result.status = TitleHleSetupStatus::kLibcThreadExportsFailed;
+    rollback_mappings();
     return result;
   }
   result.export_status =
       hle::RegisterJsonExports(hle_exports_, kernel_runtime_.json_values());
   if (result.export_status != hle::ExportRegistryStatus::kOk) {
     result.status = TitleHleSetupStatus::kJsonExportsFailed;
+    rollback_mappings();
     return result;
   }
   result.export_status = hle::RegisterAmprExports(
       hle_exports_, kernel_runtime_.ampr_command_buffers(), *memory_);
   if (result.export_status != hle::ExportRegistryStatus::kOk) {
     result.status = TitleHleSetupStatus::kAmprExportsFailed;
+    rollback_mappings();
     return result;
   }
   result.export_status = hle::RegisterAgcExports(
       hle_exports_, gpu_runtime_, kernel_runtime_.event_queues());
   if (result.export_status != hle::ExportRegistryStatus::kOk) {
     result.status = TitleHleSetupStatus::kAgcExportsFailed;
+    rollback_mappings();
     return result;
   }
   result.export_status = hle::RegisterVideoOutExports(hle_exports_, video_out_);
   if (result.export_status != hle::ExportRegistryStatus::kOk) {
     result.status = TitleHleSetupStatus::kVideoOutExportsFailed;
+    rollback_mappings();
     return result;
   }
 
   for (const auto* image_metadata : metadata) {
     if (image_metadata == nullptr) {
       result.status = TitleHleSetupStatus::kImportTableBuildFailed;
+      rollback_mappings();
       return result;
     }
     result.stub_status = hle::RegisterUnresolvedImportStubs(
         *image_metadata, hle_exports_, hle_data_, unresolved_import_stubs_);
     if (!result.stub_status) {
       result.status = TitleHleSetupStatus::kImportTableBuildFailed;
+      rollback_mappings();
       return result;
     }
   }
@@ -172,6 +226,7 @@ TitleHleSetupResult TitleSession::PrepareHleBatch(
   result.imports = hle_functions_->BuildBatch(metadata, stack_argument_count);
   if (!result.imports) {
     result.status = TitleHleSetupStatus::kImportTableBuildFailed;
+    rollback_mappings();
   }
   return result;
 }
@@ -548,6 +603,8 @@ std::string_view TitleHleSetupStatusName(TitleHleSetupStatus status) noexcept {
       return "already-attempted";
     case TitleHleSetupStatus::kDataSetupFailed:
       return "data-setup-failed";
+    case TitleHleSetupStatus::kPthreadArenaSetupFailed:
+      return "pthread-arena-setup-failed";
     case TitleHleSetupStatus::kKernelExportsFailed:
       return "kernel-exports-failed";
     case TitleHleSetupStatus::kLibcExportsFailed:

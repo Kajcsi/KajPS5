@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "hle/data_symbols.h"
+#include "kernel/pthread.h"
 #include "loader/layered_import_resolver.h"
 
 namespace kajps5::runtime {
@@ -172,6 +173,7 @@ TitleLoadResult PrepareTitleImageWithModules(
   }
   if (!Add(memory_size, hle::kHleDataPageSize - 1, memory_size) ||
       !Add(memory_size, hle::kHleDataPageSize, memory_size) ||
+      !Add(memory_size, kernel::kPthreadMutexArenaSize, memory_size) ||
       !Add(memory_size, kTitleRuntimeReserveSize, memory_size) ||
       memory_size > std::numeric_limits<std::size_t>::max()) {
     result.status = TitleLoadStatus::kMemorySizeOverflow;
@@ -247,10 +249,15 @@ TitleLoadResult PrepareTitleImageWithModules(
   const auto next_load_address = result.modules.next_load_address;
 
   std::uint64_t data_page_address = 0;
+  std::uint64_t pthread_mutex_arena_address = 0;
   if (!AlignUp(next_load_address, hle::kHleDataPageSize, data_page_address) ||
       !Add(data_page_address, hle::kHleDataPageSize,
+           pthread_mutex_arena_address) ||
+      !Add(pthread_mutex_arena_address, kernel::kPthreadMutexArenaSize,
            result.stack_search_start) ||
       !session->memory().Contains(data_page_address, hle::kHleDataPageSize) ||
+      !session->memory().Contains(pthread_mutex_arena_address,
+                                  kernel::kPthreadMutexArenaSize) ||
       !session->memory().Contains(result.stack_search_start,
                                   kTitleRuntimeReserveSize)) {
     result.status = TitleLoadStatus::kMemorySizeOverflow;

@@ -427,7 +427,7 @@ HleContextStatus PthreadMutexInit(HleCallContext& context,
     SetSignedResult(context, MemoryFault(posix_errors));
     return HleContextStatus::kOk;
   }
-  const auto created = pthreads.CreateMutex(attribute_handle);
+  const auto created = pthreads.CreateGuestMutex(attribute_handle);
   if (!created) {
     SetSignedResult(context, PthreadStatusResult(created.status, posix_errors));
     return HleContextStatus::kOk;
@@ -458,13 +458,19 @@ HleContextStatus PthreadMutexDestroy(HleCallContext& context,
   if (!ReadOpaqueHandle(context, address, posix_errors, handle)) {
     return HleContextStatus::kOk;
   }
-  const auto status = pthreads.DestroyMutex(handle);
-  if (status != kernel::KernelStatus::kOk) {
-    SetSignedResult(context, PthreadStatusResult(status, posix_errors));
+  const auto destroyable = pthreads.CanDestroyMutex(handle);
+  if (destroyable != kernel::KernelStatus::kOk) {
+    SetSignedResult(context, PthreadStatusResult(destroyable, posix_errors));
     return HleContextStatus::kOk;
   }
   if (context.WriteUInt64(address, 0) != HleContextStatus::kOk) {
     SetSignedResult(context, MemoryFault(posix_errors));
+    return HleContextStatus::kOk;
+  }
+  const auto status = pthreads.DestroyMutex(handle);
+  if (status != kernel::KernelStatus::kOk) {
+    (void)context.WriteUInt64(address, handle);
+    SetSignedResult(context, PthreadStatusResult(status, posix_errors));
     return HleContextStatus::kOk;
   }
   context.SetReturn(0);
@@ -490,7 +496,7 @@ bool ResolveMutex(HleCallContext& context, kernel::PthreadService& pthreads,
   const auto static_type =
       handle == 1 ? kernel::kPthreadMutexAdaptive
                   : kernel::kPthreadMutexErrorCheck;
-  const auto created = pthreads.CreateMutex(0, static_type);
+  const auto created = pthreads.CreateGuestMutex(0, static_type);
   if (!created) {
     SetSignedResult(context, PthreadStatusResult(created.status, posix_errors));
     return false;

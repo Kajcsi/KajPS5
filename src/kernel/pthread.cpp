@@ -8,6 +8,8 @@
 #include <limits>
 #include <vector>
 
+#include "core/memory/guest_memory.h"
+
 namespace kajps5::kernel {
 
 PthreadService::PthreadService(GuestScheduler& scheduler,
@@ -225,15 +227,110 @@ std::optional<PthreadMutexAttribute> PthreadService::GetMutexAttribute(
 PthreadMutexCreateResult PthreadService::CreateMutex(
     std::uint64_t attribute_handle, int static_type) {
   std::lock_guard lock(mutex_);
+  return CreateMutexLocked(attribute_handle, static_type, std::nullopt);
+}
+
+bool PthreadService::ConfigureGuestMutexArena(memory::GuestMemory& memory,
+                                              std::uint64_t address) {
+  std::lock_guard lock(mutex_);
+  const auto has_guest_mutex = std::any_of(
+      mutexes_.begin(), mutexes_.end(), [](const auto& entry) {
+        return entry.second.guest_object_slot.has_value();
+      });
+  if (guest_mutex_memory_ != nullptr || has_guest_mutex || address == 0 ||
+      address > std::numeric_limits<std::uint64_t>::max() -
+                    kPthreadMutexArenaSize ||
+      !memory.CanAccess(
+          address, kPthreadMutexArenaSize,
+          memory::GuestMemoryProtection::kWrite) ||
+      !memory.Fill(address, kPthreadMutexArenaSize, std::byte{0})) {
+    return false;
+  }
+  guest_mutex_memory_ = &memory;
+  guest_mutex_arena_address_ = address;
+  guest_mutex_slots_.fill(false);
+  return true;
+}
+
+bool PthreadService::ReleaseGuestMutexArena() {
+  std::lock_guard lock(mutex_);
+  const auto has_guest_mutex = std::any_of(
+      mutexes_.begin(), mutexes_.end(), [](const auto& entry) {
+        return entry.second.guest_object_slot.has_value();
+      });
+  if (guest_mutex_memory_ == nullptr || has_guest_mutex) {
+    return false;
+  }
+  guest_mutex_memory_ = nullptr;
+  guest_mutex_arena_address_ = 0;
+  guest_mutex_slots_.fill(false);
+  return true;
+}
+
+PthreadMutexCreateResult PthreadService::CreateGuestMutex(
+    std::uint64_t attribute_handle, int static_type) {
+  std::lock_guard lock(mutex_);
+  if (guest_mutex_memory_ == nullptr) {
+    return {KernelStatus::kNoResources, 0};
+  }
   if (static_type != 0 && !IsMutexTypeValid(static_type)) {
     return {KernelStatus::kInvalidArgument, 0};
   }
-  if (next_mutex_id_ == 0 ||
-      next_mutex_id_ > std::numeric_limits<std::uint64_t>::max() -
-                           kSyntheticMutexHandleBase) {
-    return {KernelStatus::kNoResources, 0};
+  for (std::size_t slot = 0; slot < guest_mutex_slots_.size(); ++slot) {
+    if (guest_mutex_slots_[slot]) {
+      continue;
+    }
+    const auto slot_offset = slot * kPthreadMutexObjectSize;
+    if (guest_mutex_arena_address_ >
+        std::numeric_limits<std::uint64_t>::max() - slot_offset) {
+      return {KernelStatus::kNoResources, 0};
+    }
+    const auto object_address = guest_mutex_arena_address_ + slot_offset;
+    if (mutexes_.find(object_address) != mutexes_.end()) {
+      continue;
+    }
+    if (!guest_mutex_memory_->Fill(object_address, kPthreadMutexObjectSize,
+                                   std::byte{0})) {
+      return {KernelStatus::kNoResources, 0};
+    }
+    const auto created =
+        CreateMutexLocked(attribute_handle, static_type, slot);
+    if (!created) {
+      (void)guest_mutex_memory_->Fill(object_address,
+                                      kPthreadMutexObjectSize, std::byte{0});
+      return created;
+    }
+    const auto state = mutexes_.find(created.handle);
+    if (state == mutexes_.end()) {
+      (void)guest_mutex_memory_->Fill(object_address,
+                                      kPthreadMutexObjectSize, std::byte{0});
+      return {KernelStatus::kNoResources, 0};
+    }
+    const auto type = static_cast<std::uint32_t>(state->second.type);
+    const auto protocol = static_cast<std::uint32_t>(state->second.protocol);
+    if (!guest_mutex_memory_->Write(
+            object_address + kPthreadMutexObjectTypeOffset,
+            std::as_bytes(std::span(&type, std::size_t{1}))) ||
+        !guest_mutex_memory_->Write(
+            object_address + kPthreadMutexObjectProtocolOffset,
+            std::as_bytes(std::span(&protocol, std::size_t{1})))) {
+      mutexes_.erase(created.handle);
+      (void)guest_mutex_memory_->Fill(object_address,
+                                      kPthreadMutexObjectSize, std::byte{0});
+      return {KernelStatus::kNoResources, 0};
+    }
+    guest_mutex_slots_[slot] = true;
+    return {KernelStatus::kOk, object_address};
   }
+  return {KernelStatus::kNoResources, 0};
+}
 
+PthreadMutexCreateResult PthreadService::CreateMutexLocked(
+    std::uint64_t attribute_handle, int static_type,
+    std::optional<std::size_t> guest_object_slot) {
+  if (static_type != 0 && !IsMutexTypeValid(static_type)) {
+    return {KernelStatus::kInvalidArgument, 0};
+  }
   PthreadMutexAttribute attributes;
   const auto supplied = mutex_attributes_.find(attribute_handle);
   if (supplied != mutex_attributes_.end()) {
@@ -243,12 +340,68 @@ PthreadMutexCreateResult PthreadService::CreateMutex(
     attributes.type = static_type;
   }
 
-  const auto handle = kSyntheticMutexHandleBase + next_mutex_id_++;
   MutexState mutex;
   mutex.type = attributes.type;
   mutex.protocol = attributes.protocol;
-  mutexes_.emplace(handle, std::move(mutex));
-  return {KernelStatus::kOk, handle};
+  mutex.guest_object_slot = guest_object_slot;
+  if (guest_object_slot) {
+    const auto slot = *guest_object_slot;
+    const auto slot_offset = slot * kPthreadMutexObjectSize;
+    if (slot >= guest_mutex_slots_.size() ||
+        guest_mutex_arena_address_ >
+            std::numeric_limits<std::uint64_t>::max() - slot_offset) {
+      return {KernelStatus::kNoResources, 0};
+    }
+    const auto handle = guest_mutex_arena_address_ + slot_offset;
+    const auto [entry, inserted] = mutexes_.emplace(handle, std::move(mutex));
+    (void)entry;
+    return inserted ? PthreadMutexCreateResult{KernelStatus::kOk, handle}
+                    : PthreadMutexCreateResult{KernelStatus::kNoResources, 0};
+  }
+
+  const auto maximum_id = std::numeric_limits<std::uint64_t>::max() -
+                          kSyntheticMutexHandleBase;
+  if (next_mutex_id_ == 0 || next_mutex_id_ > maximum_id) {
+    return {KernelStatus::kNoResources, 0};
+  }
+  auto candidate_id = next_mutex_id_;
+  const auto maximum_probes = mutexes_.size();
+  for (std::size_t probes = 0;;) {
+    const auto handle = kSyntheticMutexHandleBase + candidate_id;
+    if (mutexes_.find(handle) == mutexes_.end()) {
+      const auto [entry, inserted] = mutexes_.emplace(handle, std::move(mutex));
+      (void)entry;
+      if (!inserted) {
+        return {KernelStatus::kNoResources, 0};
+      }
+      next_mutex_id_ = candidate_id == maximum_id ? 0 : candidate_id + 1;
+      return {KernelStatus::kOk, handle};
+    }
+    if (candidate_id == maximum_id || probes == maximum_probes) {
+      break;
+    }
+    ++candidate_id;
+    ++probes;
+  }
+  return {KernelStatus::kNoResources, 0};
+}
+
+KernelStatus PthreadService::CanDestroyMutex(std::uint64_t handle) const {
+  if (handle == 0) {
+    return KernelStatus::kInvalidArgument;
+  }
+  std::lock_guard lock(mutex_);
+  const auto found = mutexes_.find(handle);
+  if (found == mutexes_.end()) {
+    return KernelStatus::kNotFound;
+  }
+  if (found->second.owner != kInvalidKernelHandle ||
+      !found->second.waiters.empty() ||
+      !found->second.granted_waiters.empty() ||
+      found->second.condition_waiter_count != 0) {
+    return KernelStatus::kBusy;
+  }
+  return KernelStatus::kOk;
 }
 
 KernelStatus PthreadService::DestroyMutex(std::uint64_t handle) {
@@ -265,6 +418,23 @@ KernelStatus PthreadService::DestroyMutex(std::uint64_t handle) {
       !found->second.granted_waiters.empty() ||
       found->second.condition_waiter_count != 0) {
     return KernelStatus::kBusy;
+  }
+  if (found->second.guest_object_slot) {
+    const auto slot = *found->second.guest_object_slot;
+    if (slot >= guest_mutex_slots_.size() ||
+        guest_mutex_arena_address_ >
+            std::numeric_limits<std::uint64_t>::max() -
+                slot * kPthreadMutexObjectSize) {
+      return KernelStatus::kNoResources;
+    }
+    const auto object_address =
+        guest_mutex_arena_address_ + slot * kPthreadMutexObjectSize;
+    if (guest_mutex_memory_ == nullptr ||
+        !guest_mutex_memory_->Fill(object_address, kPthreadMutexObjectSize,
+                                   std::byte{0})) {
+      return KernelStatus::kNoResources;
+    }
+    guest_mutex_slots_[slot] = false;
   }
   mutexes_.erase(found);
   return KernelStatus::kOk;

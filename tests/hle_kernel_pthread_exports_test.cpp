@@ -74,7 +74,9 @@ int main() {
             registry.size() == 120,
         "pthread exports did not register atomically");
 
-  GuestMemory memory(0x1000, 0x4000);
+  GuestMemory memory(0x1000, 0x500000);
+  Check(runtime.pthreads().ConfigureGuestMutexArena(memory, 0x10000),
+        "pthread runtime did not configure its guest mutex arena");
   HleCallContext attr_init(memory);
   Check(attr_init.SetRegister(HleRegister::kRdi, 0x1100) &&
             Dispatch(registry, kajps5::hle::kPosixPthreadAttrInitNid,
@@ -358,6 +360,8 @@ int main() {
         "pthread_join returned the wrong stale-thread error");
 
   KernelRuntime mutex_runtime;
+  Check(mutex_runtime.pthreads().ConfigureGuestMutexArena(memory, 0x110000),
+        "mutex runtime did not configure its guest mutex arena");
   ExportRegistry mutex_registry;
   Check(kajps5::hle::RegisterKernelPthreadExports(
             mutex_registry, mutex_runtime.pthreads(),
@@ -406,10 +410,43 @@ int main() {
       mutex_init.ReadUInt64(0x1310, mutex_handle) == HleContextStatus::kOk;
   const auto initialized_mutex =
       mutex_runtime.pthreads().GetMutex(mutex_handle);
-  Check(mutex_handle_read && mutex_handle != 0 && initialized_mutex &&
+  std::uint32_t mutex_type = 0;
+  std::uint32_t mutex_protocol = 0;
+  std::uint32_t mutex_prefix = 1;
+  std::uint32_t mutex_suffix = 1;
+  Check(mutex_handle_read && mutex_handle >= 0x110000 &&
+            mutex_handle < 0x110000 +
+                               kajps5::kernel::kPthreadMutexArenaSize &&
+            mutex_handle != 0x0000600600000001 && initialized_mutex &&
             initialized_mutex->type ==
-                kajps5::kernel::kPthreadMutexRecursive,
-        "pthread mutex did not use its guest attribute");
+                kajps5::kernel::kPthreadMutexRecursive &&
+            mutex_init.ReadUInt32(
+                mutex_handle + kajps5::kernel::kPthreadMutexObjectTypeOffset,
+                mutex_type) == HleContextStatus::kOk &&
+            mutex_init.ReadUInt32(
+                mutex_handle +
+                    kajps5::kernel::kPthreadMutexObjectProtocolOffset,
+                mutex_protocol) == HleContextStatus::kOk &&
+            mutex_init.ReadUInt32(mutex_handle, mutex_prefix) ==
+                HleContextStatus::kOk &&
+            mutex_init.ReadUInt32(
+                mutex_handle + kajps5::kernel::kPthreadMutexObjectSize -
+                    sizeof(mutex_suffix),
+                mutex_suffix) == HleContextStatus::kOk &&
+            mutex_type == kajps5::kernel::kPthreadMutexRecursive &&
+            mutex_protocol == 0 && mutex_prefix == 0 && mutex_suffix == 0,
+        "pthread mutex did not expose its configured guest object");
+  Check(mutex_init.WriteUInt32(
+            mutex_handle + kajps5::kernel::kPthreadMutexObjectTypeOffset,
+            mutex_type | 0x100U) == HleContextStatus::kOk &&
+            mutex_init.ReadUInt32(
+                mutex_handle + kajps5::kernel::kPthreadMutexObjectTypeOffset,
+                mutex_type) == HleContextStatus::kOk &&
+            mutex_type ==
+                (static_cast<std::uint32_t>(
+                     kajps5::kernel::kPthreadMutexRecursive) |
+                 0x100U),
+        "libc-style pthread mutex object RMW at +0x20 failed");
 
   HleCallContext mutex_lock(memory);
   Check(mutex_lock.SetRegister(HleRegister::kRdi, 0x1310) &&
@@ -449,6 +486,10 @@ int main() {
                 HleContextStatus::kOk &&
             mutex_handle == 0,
         "pthread mutex destruction did not clear its guest handle");
+  Check(mutex_destroy.ReadUInt32(
+            0x110000 + kajps5::kernel::kPthreadMutexObjectTypeOffset,
+            mutex_type) == HleContextStatus::kOk && mutex_type == 0,
+        "pthread mutex destruction did not release and clear its guest object");
 
   HleCallContext static_setup(memory);
   Check(static_setup.WriteUInt64(0x1320, 0) == HleContextStatus::kOk,
@@ -462,6 +503,10 @@ int main() {
                 HleContextStatus::kOk &&
             mutex_handle != 0,
         "static pthread mutex was not initialized on first use");
+  Check(mutex_handle >= 0x110000 &&
+            mutex_handle < 0x110000 +
+                               kajps5::kernel::kPthreadMutexArenaSize,
+        "static pthread mutex did not receive a guest object pointer");
   HleCallContext static_relock(memory);
   Check(static_relock.SetRegister(HleRegister::kRdi, 0x1320) &&
             Dispatch(mutex_registry,
@@ -530,6 +575,8 @@ int main() {
         "adaptive pthread mutex needed more than one matching unlock");
 
   KernelRuntime condition_runtime;
+  Check(condition_runtime.pthreads().ConfigureGuestMutexArena(memory, 0x220000),
+        "condition runtime did not configure its guest mutex arena");
   ExportRegistry condition_registry;
   Check(kajps5::hle::RegisterKernelPthreadExports(
             condition_registry, condition_runtime.pthreads(),
@@ -661,6 +708,8 @@ int main() {
   timed_source_view->realtime_nanoseconds = 100'000'000'000;
   timed_source_view->monotonic_nanoseconds = 1'000'000;
   KernelRuntime timed_runtime(std::move(timed_source));
+  Check(timed_runtime.pthreads().ConfigureGuestMutexArena(memory, 0x330000),
+        "timed runtime did not configure its guest mutex arena");
   ExportRegistry timed_registry;
   Check(kajps5::hle::RegisterKernelPthreadExports(
             timed_registry, timed_runtime.pthreads(),

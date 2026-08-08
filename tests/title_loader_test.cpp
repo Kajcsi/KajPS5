@@ -145,6 +145,16 @@ int main(int argc, char** argv) {
   Check(prepared.session->kernel_runtime().process_parameters_address() ==
                 prepared.load_bias + kProcessParametersAddress,
         "title loader did not configure the process-parameter guest address");
+  const auto pthread_arena = prepared.hle.data.page_address +
+                             kajps5::hle::kHleDataPageSize;
+  Check(prepared.session->memory().CanAccess(
+            pthread_arena, kajps5::kernel::kPthreadMutexArenaSize,
+            kajps5::memory::GuestMemoryProtection::kWrite) &&
+            prepared.stack_search_start ==
+                pthread_arena + kajps5::kernel::kPthreadMutexArenaSize &&
+            !prepared.session->memory().IsMapped(
+                prepared.stack_search_start, 1),
+        "title loader overlapped the pthread arena with stack search space");
   kajps5::hle::HleCallContext hle_data_context(prepared.session->memory());
   std::uint64_t malloc_replace_size = 0;
   std::uint64_t new_replace_size = 0;
